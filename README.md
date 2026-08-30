@@ -5,7 +5,7 @@
   <img src=".github/assets/wordmark-light.png" width="440" alt="Hyper-V VM Studio">
 </picture>
 
-<p><b>Design a Hyper-V lab in the browser. Build it with PowerShell.</b></p>
+<p><b>Design Hyper-V VMs in the browser. Deploy them with PowerShell.</b></p>
 
 <p>
 <img src="https://img.shields.io/badge/PowerShell-5.1%20%7C%207-7aa2f7?style=flat-square" alt="PowerShell 5.1 or 7">
