@@ -1,0 +1,5 @@
+# Keep the folder, never the contents — ISOs are multi-GB and must not end up in git.
+*
+!.gitignore
+!.gitkeep
+!README.md

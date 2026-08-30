@@ -1,0 +1,50 @@
+name: Bug report
+description: Something did not work on your Hyper-V host
+labels: ["bug"]
+body:
+  - type: dropdown
+    id: component
+    attributes:
+      label: Which part
+      options:
+        - New-Vhdx.ps1 (gold images)
+        - The studio (hyperv-vm-studio.html)
+        - Build-Vms.ps1 (provisioning)
+        - Azure Arc onboarding
+        - toolbox (Migrate / Convert / Remove)
+        - Something else
+    validations:
+      required: true
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: What you expected, and what you got instead.
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: How to reproduce
+      description: The command you ran, and the choices you made in the menu or the studio.
+      placeholder: |
+        .\Build-Vms.ps1 -BuildAll
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Log excerpt
+      description: >
+        From logs\ — the decisive lines, not the whole file. Remove passwords, Arc secrets,
+        tenant and subscription IDs before pasting.
+      render: text
+  - type: textarea
+    id: host
+    attributes:
+      label: Host
+      description: Windows version, PowerShell version, gold image edition.
+      placeholder: |
+        Windows Server 2025 Datacenter, PowerShell 7.4, gold = hyperv-windows-server-2025-datacenter-desktop
+    validations:
+      required: true
