@@ -14,8 +14,6 @@
 
 </div>
 
-<div align="justify">
-
 ## <picture><source media="(prefers-color-scheme: dark)" srcset=".github/assets/icons/vm-dark.png"><img src=".github/assets/icons/vm-light.png" width="22" alt=""></picture> Quick start
 
 Elevated PowerShell on a Hyper-V host, a Windows ISO in the `isos\` folder:
@@ -706,5 +704,3 @@ Guest: `C:\ProgramData\VmDeployLogs\GuestProvision.log`, same format.
 Get-ChildItem .\vhdx -Filter 'hv-*.vhdx' | Select-Object Name, Length, LastWriteTime
 Get-VMSwitch | Format-Table Name, SwitchType
 ```
-
-</div>
