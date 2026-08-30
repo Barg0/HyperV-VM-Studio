@@ -1,0 +1,31 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1714" height="116" viewBox="0 0 1714 116" font-family="Noto Sans, Segoe UI, sans-serif">
+<rect x="16" y="10" width="262" height="96" rx="8" fill="#1d1f28" stroke="#2b2f3d"/>
+<g transform="translate(31 24) scale(1.3333)"><g fill="#7dcfff"><circle cx="9" cy="9" r="6.4"/></g><g fill="none" stroke="#4f7c9a" stroke-width="1.2" stroke-linejoin="round" stroke-linecap="round"><circle cx="9" cy="9" r="2"/><path d="M1.4 4.6V1.6h3M16.6 13.4v3h-3"/></g></g>
+<text x="31" y="71" font-size="15" font-weight="700" fill="#d7dbec">Windows ISO</text>
+<text x="31" y="90" font-size="11.5" fill="#8b93ad">Server 2016–2025 or Windows 11</text>
+<path d="M285.5 52.5 L292.0 58.0 L285.5 63.5" fill="none" stroke="#3d4356" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+<rect x="300" y="10" width="262" height="96" rx="8" fill="#1d1f28" stroke="#2b2f3d"/>
+<g transform="translate(315 24) scale(1.3333)"><g fill="#7dcfff"><path d="M3 5c0-1.5 2.7-2.7 6-2.7s6 1.2 6 2.7v8c0 1.5-2.7 2.7-6 2.7S3 14.5 3 13z"/></g><g fill="none" stroke="#4f7c9a" stroke-width="1.2" stroke-linejoin="round" stroke-linecap="round"><path d="M3.3 5c0 1.4 2.6 2.5 5.7 2.5S14.7 6.4 14.7 5"/><path d="M9 9.6l1.9 1.9L9 13.4l-1.9-1.9z"/></g></g>
+<text x="315" y="71" font-size="15" font-weight="700" fill="#d7dbec">New-Vhdx.ps1</text>
+<text x="315" y="90" font-size="11.5" fill="#8b93ad">Guided menu builds gold VHDX files</text>
+<path d="M569.5 52.5 L576.0 58.0 L569.5 63.5" fill="none" stroke="#3d4356" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+<rect x="584" y="10" width="262" height="96" rx="8" fill="#1d1f28" stroke="#2b2f3d"/>
+<g transform="translate(599 24) scale(1.3333)"><g fill="#8b93ad"><rect x="1.8" y="1.8" width="6.6" height="6.6" rx="1"/><rect x="9.6" y="1.8" width="6.6" height="6.6" rx="1"/><rect x="1.8" y="9.6" width="6.6" height="6.6" rx="1"/><rect x="9.6" y="9.6" width="6.6" height="6.6" rx="1"/></g></g>
+<text x="599" y="71" font-size="15" font-weight="700" fill="#d7dbec">This studio</text>
+<text x="599" y="90" font-size="11.5" fill="#8b93ad">Design the VMs in the browser</text>
+<path d="M853.5 52.5 L860.0 58.0 L853.5 63.5" fill="none" stroke="#3d4356" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+<rect x="868" y="10" width="262" height="96" rx="8" fill="#1d1f28" stroke="#2b2f3d"/>
+<g transform="translate(883 24) scale(1.3333)"><g fill="#ff9e64"><path d="M3 2.6a1.2 1.2 0 0 1 1.2-1.2h6l4.8 4.4v9.6a1.2 1.2 0 0 1-1.2 1.2H4.2A1.2 1.2 0 0 1 3 15.4z"/></g><g fill="none" stroke="#966145" stroke-width="1.2" stroke-linejoin="round" stroke-linecap="round"><path d="M10 1.6V6h4.6M7.4 9.4L5.8 11.2l1.6 1.8M10.6 9.4l1.6 1.8-1.6 1.8"/></g></g>
+<text x="883" y="71" font-size="15" font-weight="700" fill="#d7dbec">config.json</text>
+<text x="883" y="90" font-size="11.5" fill="#8b93ad">Downloaded next to Build-Vms.ps1</text>
+<path d="M1137.5 52.5 L1144.0 58.0 L1137.5 63.5" fill="none" stroke="#3d4356" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+<rect x="1152" y="10" width="262" height="96" rx="8" fill="#1d1f28" stroke="#2b2f3d"/>
+<g transform="translate(1167 24) scale(1.3333)"><g fill="#ff9e64"><rect x="1.6" y="3.2" width="14.8" height="11.6" rx="1.4"/></g><g fill="none" stroke="#966145" stroke-width="1.2" stroke-linejoin="round" stroke-linecap="round"><path d="M1.6 6.4h14.8M4.8 9.2l2.2 2.1-2.2 2.1M8.8 13.4h4.4"/></g></g>
+<text x="1167" y="71" font-size="15" font-weight="700" fill="#d7dbec">Build-Vms.ps1</text>
+<text x="1167" y="90" font-size="11.5" fill="#8b93ad">Guided menu provisions the VMs</text>
+<path d="M1421.5 52.5 L1428.0 58.0 L1421.5 63.5" fill="none" stroke="#3d4356" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+<rect x="1436" y="10" width="262" height="96" rx="8" fill="#1d1f28" stroke="#2b2f3d"/>
+<g transform="translate(1451 24) scale(1.3333)"><g fill="#9ece6a"><polygon points="9,1.6 16.2,5.6 16.2,12.4 9,16.4 1.8,12.4 1.8,5.6"/></g><g fill="none" stroke="#617c48" stroke-width="1.2" stroke-linejoin="round" stroke-linecap="round"><path d="M1.8 5.6L9 9.6l7.2-4M9 9.6v6.6"/></g></g>
+<text x="1451" y="71" font-size="15" font-weight="700" fill="#d7dbec">Running VMs</text>
+<text x="1451" y="90" font-size="11.5" fill="#8b93ad">Joined, licensed, Arc-connected</text>
+</svg>

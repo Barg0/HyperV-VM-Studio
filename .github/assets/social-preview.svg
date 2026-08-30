@@ -1,0 +1,22 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="640" viewBox="0 0 1280 640">
+  <rect width="1280" height="640" fill="#16171e"/>
+  <rect x="0" y="0" width="1280" height="3" fill="#7aa2f7"/>
+  <rect x="96" y="188" width="152" height="152" rx="10" fill="#1d1f28" stroke="#2b2f3d"/>
+  <g transform="translate(129.7 221.7) scale(4.8)" fill="#7aa2f7">
+    <rect x="1.9" y="1.8" width="11" height="4.2" rx="1.2"/>
+    <rect x="3.5" y="6.9" width="11" height="4.2" rx="1.2"/>
+    <rect x="5.1" y="12" width="11" height="4.2" rx="1.2"/>
+  </g>
+  <text x="304" y="242" font-family="Noto Sans" font-size="64" font-weight="700" fill="#d7dbec">Hyper-V VM Studio</text>
+  <text x="304" y="296" font-family="Noto Sans" font-size="29" fill="#8b93ad">Design a Hyper-V lab in the browser.</text>
+  <text x="304" y="336" font-family="Noto Sans" font-size="29" fill="#8b93ad">Build it with one PowerShell command.</text>
+  <g font-family="Noto Sans" font-size="20" font-weight="600">
+    <rect x="304" y="380" width="176" height="40" rx="6" fill="#22304f" stroke="#3d5488"/>
+    <text x="326" y="406" fill="#7aa2f7">Gold images</text>
+    <rect x="496" y="380" width="150" height="40" rx="6" fill="#22304f" stroke="#3d5488"/>
+    <text x="518" y="406" fill="#7aa2f7">HTML studio</text>
+    <rect x="662" y="380" width="130" height="40" rx="6" fill="#22304f" stroke="#3d5488"/>
+    <text x="684" y="406" fill="#7aa2f7">Azure Arc</text>
+  </g>
+  <text x="304" y="464" font-family="Noto Sans" font-size="21" fill="#626a85">MIT · PowerShell 5.1 | 7 · github.com/Barg0/Hyper-V-VM-Studio</text>
+</svg>

@@ -1,0 +1,27 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="860" height="480" viewBox="0 0 860 480" font-family="Noto Sans, Segoe UI, sans-serif">
+<rect x="14" y="14" width="832" height="74" rx="8" fill="#1d1f28" stroke="#2b2f3d"/>
+<g transform="translate(32 38) scale(1.4444)"><g fill="#8b93ad"><rect x="1.8" y="1.8" width="6.6" height="6.6" rx="1"/><rect x="9.6" y="1.8" width="6.6" height="6.6" rx="1"/><rect x="1.8" y="9.6" width="6.6" height="6.6" rx="1"/><rect x="9.6" y="9.6" width="6.6" height="6.6" rx="1"/></g></g>
+<text x="74" y="46" font-size="14.5" font-weight="700" fill="#d7dbec">hyperv-vm-studio.html</text>
+<text x="74" y="66" font-size="11.5" fill="#8b93ad">Azure Arc blade — define the principal, attach the VMs that should onboard</text>
+<path d="M45 98 L45 130" stroke="#3d4356" stroke-width="2" stroke-linecap="round"/>
+<path d="M40.5 125 L45 130 L49.5 125" fill="none" stroke="#3d4356" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+<text x="63" y="118.0" font-size="11.5" fill="#8b93ad">export a lean config.json</text>
+<rect x="14" y="140" width="832" height="74" rx="8" fill="#1d1f28" stroke="#2b2f3d"/>
+<g transform="translate(32 164) scale(1.4444)"><g fill="#ff9e64"><rect x="1.6" y="3.2" width="14.8" height="11.6" rx="1.4"/></g><g fill="none" stroke="#966145" stroke-width="1.2" stroke-linejoin="round" stroke-linecap="round"><path d="M1.6 6.4h14.8M4.8 9.2l2.2 2.1-2.2 2.1M8.8 13.4h4.4"/></g></g>
+<text x="74" y="172" font-size="14.5" font-weight="700" fill="#d7dbec">Build-Vms.ps1</text>
+<text x="74" y="192" font-size="11.5" fill="#8b93ad">Resolves the principal, writes manifest.json plus a one-time arc-deploy.json into the OS disk</text>
+<path d="M45 224 L45 256" stroke="#3d4356" stroke-width="2" stroke-linecap="round"/>
+<path d="M40.5 251 L45 256 L49.5 251" fill="none" stroke="#3d4356" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+<text x="63" y="244.0" font-size="11.5" fill="#8b93ad">VM boots — Windows Setup runs SetupComplete.cmd</text>
+<rect x="14" y="266" width="832" height="74" rx="8" fill="#1d1f28" stroke="#2b2f3d"/>
+<g transform="translate(32 290) scale(1.4444)"><g fill="#7dcfff"><circle cx="9" cy="9" r="7.2"/></g><g fill="none" stroke="#4f7c9a" stroke-width="1.2" stroke-linejoin="round" stroke-linecap="round"><path d="M9 4.8v4.4l3 1.9"/></g></g>
+<text x="74" y="298" font-size="14.5" font-weight="700" fill="#d7dbec">GuestProvision.ps1</text>
+<text x="74" y="318" font-size="11.5" fill="#8b93ad">In the guest: downloads azcmagent, connects, then deletes arc-deploy.json</text>
+<path d="M45 350 L45 382" stroke="#3d4356" stroke-width="2" stroke-linecap="round"/>
+<path d="M40.5 377 L45 382 L49.5 377" fill="none" stroke="#3d4356" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+<text x="63" y="370.0" font-size="11.5" fill="#8b93ad">azcmagent connect</text>
+<rect x="14" y="392" width="832" height="74" rx="8" fill="#1d1f28" stroke="#2b2f3d"/>
+<g transform="translate(32 416) scale(1.4444)"><g fill="#bb9af7"><rect x="1.4" y="11.4" width="4" height="4.6" rx="1"/><rect x="7" y="11.4" width="4" height="4.6" rx="1"/><rect x="12.6" y="11.4" width="4" height="4.6" rx="1"/></g><g fill="none" stroke="#715f95" stroke-width="1.2" stroke-linejoin="round" stroke-linecap="round"><path d="M2.6 8.4a7.8 7.8 0 0 1 12.8 0"/><path d="M3.4 11.4V9.7M9 11.4V8.4M14.6 11.4V9.7"/></g></g>
+<text x="74" y="424" font-size="14.5" font-weight="700" fill="#d7dbec">Azure Arc — Servers</text>
+<text x="74" y="444" font-size="11.5" fill="#8b93ad">The machine appears in the portal, and the secret is gone from the disk</text>
+</svg>

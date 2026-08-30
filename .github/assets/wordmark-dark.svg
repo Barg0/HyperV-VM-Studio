@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="800" height="120" viewBox="0 0 800 120">
+  <g transform="translate(-8.97 16.1) scale(4.722)" fill="#7aa2f7">
+    <rect x="1.9" y="1.8" width="11" height="4.2" rx="1.2"/>
+    <rect x="3.5" y="6.9" width="11" height="4.2" rx="1.2"/>
+    <rect x="5.1" y="12" width="11" height="4.2" rx="1.2"/>
+  </g>
+  <text x="93.1" y="80" font-family="Noto Sans" font-size="60" font-weight="700" fill="#d7dbec" letter-spacing="-0.5">Hyper-V VM Studio</text>
+</svg>
