@@ -3921,9 +3921,13 @@ if (@($MultiSessionImageIndexes).Count -gt 0) {
     Write-Log "Upgrading to Enterprise multi-session after generalize: index $(@($MultiSessionImageIndexes) -join ', ')" -Tag "Info"
 }
 $selectedNames = foreach ($buildSpec in $buildSpecs) {
-    $match = $availableImages | Where-Object { $_.ImageIndex -eq $buildSpec.ImageIndex } | Select-Object -First 1
-    $name = if ($match) { "$($buildSpec.ImageIndex) $($match.ImageName)" } else { "$($buildSpec.ImageIndex)" }
-    if ($buildSpec.UpgradeToMultiSession) { "$name as multi-session" } else { $name }
+    if ($buildSpec.UpgradeToMultiSession) {
+        "$($buildSpec.ImageIndex) Windows 11 Enterprise multi-session"
+    }
+    else {
+        $match = $availableImages | Where-Object { $_.ImageIndex -eq $buildSpec.ImageIndex } | Select-Object -First 1
+        if ($match) { "$($buildSpec.ImageIndex) $($match.ImageName)" } else { "$($buildSpec.ImageIndex)" }
+    }
 }
 Write-Log "Building $($buildSpecs.Count) gold(s) from $($availableImages.Count) image(s): $($selectedNames -join ' | ')" -Tag "Info"
 
@@ -3975,7 +3979,10 @@ foreach ($buildSpec in $buildSpecs) {
         -ImageLanguage $imageLanguage -UpgradeToMultiSession $upgradeToMultiSession
     $vhdPath = Join-Path -Path $OutputDirectory -ChildPath $vhdxName
 
-    Write-Log "Building '$($imageInfo.ImageName)' -> '$vhdPath'" -Tag "Info"
+    # Named for what the gold IS when it leaves, not the index it came from - a
+    # multi-session build applies Pro but ships Enterprise multi-session.
+    $buildDisplayName = if ($upgradeToMultiSession) { "Windows 11 Enterprise multi-session" } else { $imageInfo.ImageName }
+    Write-Log "Building '$buildDisplayName' -> '$vhdPath'" -Tag "Info"
 
     $ok = Invoke-ImageBuildPipeline -VhdPath $vhdPath -ImageIndex $imageIndex `
         -ImageName $imageInfo.ImageName -WimPath $wimPath -Target $Target `
