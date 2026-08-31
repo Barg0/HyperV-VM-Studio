@@ -4158,9 +4158,10 @@ function applyImageProfile(server, imageId) {
       server.removeBuiltInApps = false;
     }
   }
-  // Client images always need a provisioned local account — see supportsBuiltInAdminOnly.
+  // Client images need a provisioned local account — multi-session excepted, see
+  // supportsBuiltInAdminOnly.
   if (isClient) {
-    server.builtInAdminOnly = false;
+    if (!supportsBuiltInAdminOnly(server)) server.builtInAdminOnly = false;
     if (!String(server.localUserName || "").trim()) {
       server.localUserName = generateLocalUsername(state.usernameTheme);
     }
@@ -4234,9 +4235,13 @@ function isAdDomainController(server) {
 }
 /* Client images (Windows 11 Enterprise/Pro) cannot ship with the built-in Administrator as
    the only account: the client unattend needs a provisioned <LocalAccounts> user or OOBE
-   stalls on account creation and the deployment never finishes. Locked off on every client. */
+   stalls on account creation and the deployment never finishes. Enterprise multi-session is
+   the one client image where the tick is offered anyway - an AVD session host is run like a
+   server, built-in Administrator included. Every other client stays locked off. */
 function supportsBuiltInAdminOnly(server) {
-  return findImage(server && server.imageId).kind !== "client";
+  const img = findImage(server && server.imageId);
+  if (img.kind !== "client") return true;
+  return img.id === "w11-enterprise-ms";
 }
 function isBuiltInAdminOnly(server) {
   if (!supportsBuiltInAdminOnly(server)) return false;
@@ -4255,7 +4260,7 @@ function sanitizeServerFeaturesForImage(server) {
   else server.appCompatFod = !!server.appCompatFod;
   if (img.kind === "client") {
     server.windowsFeatures = [];
-    server.builtInAdminOnly = false;
+    if (!supportsBuiltInAdminOnly(server)) server.builtInAdminOnly = false;
     if (!String(server.localUserName || "").trim()) {
       server.localUserName = generateLocalUsername(state.usernameTheme);
     }
@@ -6721,7 +6726,7 @@ function renderServerCard(s) {
               : adminOnlyLocked
               ? `Locked off — ${esc(displayImageLabel)} is a client image. Its OOBE needs a provisioned <code>&lt;LocalAccounts&gt;</code> user; with only the built-in Administrator setup stalls on the account screen and the deployment breaks.`
               : adminOnly
-              ? "Default for Windows Server. The answer file provisions no <code>&lt;LocalAccounts&gt;</code> — the password below lands on <code>Built-in\\Administrator</code>, which becomes the only way in."
+              ? `${findImage(s.imageId).kind === "client" ? "On — an AVD session host run like a server." : "Default for Windows Server."} The answer file provisions no <code>&lt;LocalAccounts&gt;</code> — the password below lands on <code>Built-in\\Administrator</code>, which becomes the only way in.`
               : "Off — a second local admin is provisioned next to the built-in Administrator, and both end up with the password below.")}
           </div>
           <div class="grid-2" style="margin-top:12px">

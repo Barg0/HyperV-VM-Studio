@@ -17,8 +17,10 @@
     finishes and arms for real at domain join, which pre-empts the policy that is
     supposed to make that call.
 
-    A client index can be upgraded to Windows 11 Enterprise multi-session
-    (-MultiSessionImageIndexes) - applied offline with DISM /Set-Edition AFTER the
+    A Windows 11 Pro index can also be built as an Enterprise multi-session gold
+    (-MultiSessionImageIndexes) - its own build next to any plain golds, so one run
+    can produce both a Pro and a multi-session gold from the same index. The edition
+    change is applied offline with DISM /Set-Edition AFTER the
     image has been generalized, not before. A base edition such as Pro has nothing
     staged and syspreps cleanly; the edition packs are staged on that base edition,
     so the change is offered there and not on an image already raised to a higher
@@ -144,7 +146,7 @@ param (
     [Parameter(HelpMessage = "On client editions, bake PreventDeviceEncryption so Windows does not turn BitLocker on by itself after OOBE. No effect on Server images. Default on: encryption is expected to be armed by policy after deployment, not by the image on its own.")]
     [bool]$PreventDeviceEncryption = $true,
 
-    [Parameter(HelpMessage = "Image indexes to upgrade to Windows 11 Enterprise multi-session offline, after generalize. Pass the index of a Windows 11 Pro image; the build aborts early if the image cannot become multi-session.")]
+    [Parameter(HelpMessage = "Image indexes to build as Windows 11 Enterprise multi-session golds - upgraded offline, after generalize. Each index here is its own build on top of whatever -ImageIndexes lists: the same index in both produces a Pro gold and a multi-session gold. Pass the index of a Windows 11 Pro image; the build aborts early if the image cannot become multi-session.")]
     [ValidateRange(1, 99)]
     [int[]]$MultiSessionImageIndexes
 )
@@ -1306,7 +1308,10 @@ function Show-MultiSelectMenu {
         # When set, a real row the cursor can land on that confirms the selection. A menu
         # whose sane answer is "none of these" needs somewhere to press Enter that reads
         # like continuing, not like giving up.
-        [string]$ContinueLabel = ""
+        [string]$ContinueLabel = "",
+        # Free lines rendered directly under a section header, keyed by section name.
+        # For the sentence that belongs to one group of rows rather than the whole menu.
+        [hashtable]$SectionNotes = @{}
     )
 
     if (-not $Items -or $Items.Count -eq 0) {
@@ -1375,6 +1380,13 @@ function Show-MultiSelectMenu {
             if (-not [string]::IsNullOrWhiteSpace($section) -and $section -ne $lastSection) {
                 if ($null -ne $lastSection) { Write-Host "" }
                 Write-Host "  $section" -ForegroundColor White
+                if ($SectionNotes.ContainsKey($section)) {
+                    Write-Host ""
+                    foreach ($line in @($SectionNotes[$section])) {
+                        if ([string]::IsNullOrWhiteSpace($line)) { Write-Host "" }
+                        else { Write-Host "  $line" -ForegroundColor DarkGray }
+                    }
+                }
                 Write-Host ""
                 $lastSection = $section
             }
@@ -1685,6 +1697,9 @@ function Read-ConsolePath {
         $inputPosition = $null
     }
 
+    # First blank line ends the input row (its Write-Host was -NoNewline); the second
+    # is the same breathing room every menu leaves above its footer divider.
+    Write-Host ""
     Write-Host ""
     Write-Host ("  " + ("-" * 62)) -ForegroundColor DarkGray
     Write-Host "  Type a path, then Enter   (blank keeps default)" -ForegroundColor DarkGray
@@ -2162,6 +2177,18 @@ function Start-InteractiveConfiguration {
     }
 
     $images = @(Get-WindowsImage -ImagePath $wimPath)
+
+    # Plain Pro only. Enterprise, Education, Pro for Workstations and the rest are
+    # virtual editions already staged on top of Pro, and DISM's own rule is to change
+    # the lowest edition in the family and never one that has already been raised -
+    # such an image has no packs left to offer. Pro N is excluded on purpose: only
+    # plain Pro is verified to list a multi-session target, and a media-less N gold
+    # is nothing this lab deploys.
+    $msCandidates = @($images | Where-Object {
+            (Test-IsClientImage -ImageName $_.ImageName) -and
+            ([string]$_.ImageName) -match "(?i)\bpro\s*$"
+        })
+
     $editionItems = @()
     foreach ($image in $images) {
         $editionItems += [PSCustomObject]@{
@@ -2170,65 +2197,60 @@ function Start-InteractiveConfiguration {
             Section = "Editions in this ISO"
         }
     }
+    # Virtual edition rows share the screen with the real indexes because they decide
+    # what a gold IS, same as picking an index. A row is its own build: the same Pro
+    # index can leave once as Pro and once as multi-session, and the gold names
+    # (w11-pro / w11-enterprise-ms) keep the two from colliding on disk.
+    foreach ($image in $msCandidates) {
+        $editionItems += [PSCustomObject]@{
+            Id       = "ms:$($image.ImageIndex)"
+            Label    = "Index $($image.ImageIndex): Windows 11 Enterprise multi-session"
+            Selected = ($CurrentMultiSessionImageIndexes -contains [int]$image.ImageIndex)
+            Section  = "Virtual editions"
+        }
+    }
 
-    $selectedIndexes = Show-MultiSelectMenu -Title "Select edition(s) to build" -Items $editionItems `
+    # The licensing caveat sits under the section header it belongs to, not at the top
+    # of the whole menu. On Azure Local the SKU is where it is licensed to run, so
+    # there is nothing to warn about.
+    $editionSectionNotes = @{}
+    if ($msCandidates.Count -gt 0 -and $targetId -ne "AzureLocal") {
+        $editionSectionNotes["Virtual editions"] = @(
+            "This build targets Hyper-V. Multi-session is licensed for Azure Virtual Desktop,",
+            "so a gold built here is a lab image - not supported in production."
+        )
+    }
+
+    $editionChoice = Show-MultiSelectMenu -Title "Select edition(s) to build" -Items $editionItems `
+        -SectionNotes $editionSectionNotes `
         -StatusLines ([ordered]@{ iso = $isoStatus; target = $targetId })
-    if ($null -eq $selectedIndexes) { return $null }
+    if ($null -eq $editionChoice) { return $null }
 
-    # All editions in one ISO share a product line, but detect per selected
-    # image so a mixed/unusual WIM still gates features correctly.
-    $selectedImageObjects = @($images | Where-Object { $selectedIndexes -contains [string]$_.ImageIndex })
-    $editionsSummary = ($selectedImageObjects | ForEach-Object { "#$($_.ImageIndex) $($_.ImageName)" }) -join "; "
+    $selectedIndexes = @($editionChoice | Where-Object { $_ -notlike "ms:*" })
+    $multiSessionIndexes = @($editionChoice | Where-Object { $_ -like "ms:*" } | ForEach-Object { [int]($_ -replace "^ms:", "") })
+
+    # All editions in one ISO share a product line, but detect per selected image so a
+    # mixed/unusual WIM still gates features correctly. Multi-session builds count too:
+    # their source index is a client image even when no plain row is ticked.
+    $chosenIndexUnion = @(@($selectedIndexes | ForEach-Object { [int]$_ }) + $multiSessionIndexes | Sort-Object -Unique)
+    $selectedImageObjects = @($images | Where-Object { $chosenIndexUnion -contains [int]$_.ImageIndex })
+    $summaryParts = @(foreach ($image in $images) {
+            if ($selectedIndexes -contains [string]$image.ImageIndex) { "#$($image.ImageIndex) $($image.ImageName)" }
+            if ($multiSessionIndexes -contains [int]$image.ImageIndex) { "#$($image.ImageIndex) Windows 11 Enterprise multi-session" }
+        })
+    $editionsSummary = $summaryParts -join "; "
     $buildHasServer = (@($selectedImageObjects | Where-Object { -not (Test-IsClientImage -ImageName $_.ImageName) })).Count -gt 0
     $buildHasClient = (@($selectedImageObjects | Where-Object { Test-IsClientImage -ImageName $_.ImageName })).Count -gt 0
 
-    # Asked here rather than with the feature ticks, because this is not a feature of
-    # the gold - it decides what the gold IS. A Pro index that takes this leaves as
-    # w11-enterprise-ms and Build-Vms resolves it as multi-session.
-    # Pro only. Enterprise, Education and the rest are virtual editions already staged
-    # on top of Pro, and DISM's own rule is to change the lowest edition in the family
-    # and never one that has already been raised - such an image has no packs left to
-    # offer. A build with no Pro index is never asked the question.
-    $msCandidates = @($selectedImageObjects | Where-Object {
-            (Test-IsClientImage -ImageName $_.ImageName) -and
-            ([string]$_.ImageName) -match "(?i)\bpro(\s+n)?\s*$"
-        })
-    $multiSessionIndexes = @()
-    if ($msCandidates.Count -gt 0) {
-        $msItems = @()
-        foreach ($image in $msCandidates) {
-            $msItems += [PSCustomObject]@{
-                Id       = [string]$image.ImageIndex
-                Label    = "Index $($image.ImageIndex): $($image.ImageName) -> Enterprise multi-session"
-                Selected = ($CurrentMultiSessionImageIndexes -contains [int]$image.ImageIndex)
-                Section  = "Upgrade candidates"
-            }
-        }
-        $msHeadline = "Optional"
-        $msNote = @(
-            "By selecting it, the prepared Windows 11 Pro image will become Windows 11",
-            "Enterprise multi-session."
-        )
-        if ($targetId -ne "AzureLocal") {
-            $msNote += @(
-                "",
-                "This build targets Hyper-V. Multi-session is licensed for Azure Virtual Desktop,",
-                "so a gold built here is a lab image - not supported in production."
-            )
-        }
-        $msChoice = Show-MultiSelectMenu -Title "Upgrade to Enterprise multi-session" -Items $msItems -AllowEmpty `
-            -Subtitle "Offline edition change, after generalize" -NoteHeadline $msHeadline -Note $msNote `
-            -ContinueLabel "Continue" `
-            -StatusLines ([ordered]@{ iso = $isoStatus; target = $targetId; images = ($selectedIndexes -join ", ") })
-        if ($null -eq $msChoice) { return $null }
-        $multiSessionIndexes = @($msChoice | ForEach-Object { [int]$_ })
-    }
+    # Status-line value for every later screen: plain indexes as-is, multi-session
+    # builds marked so "5, 5 ms" reads as two golds from one index.
+    $imagesStatus = (@($selectedIndexes) + @($multiSessionIndexes | ForEach-Object { "$_ ms" })) -join ", "
 
     Show-MenuHeader -Title "Output location" -Subtitle "Enter keeps the default" `
         -StatusLines ([ordered]@{
             iso    = $isoStatus
             target = $targetId
-            images = ($selectedIndexes -join ", ")
+            images = $imagesStatus
         })
 
     $defaultOutput = $CurrentOutputDirectory
@@ -2242,15 +2264,14 @@ function Start-InteractiveConfiguration {
     $localeItems = @()
     foreach ($tag in $localeTags) {
         $entry = Get-LocaleCatalogEntry -Locale $tag
-        $suffix = if ($tag -eq "de-DE") { " (default)" } else { "" }
-        $localeItems += [PSCustomObject]@{ Id = $tag; Label = "$tag - $($entry.sCountry)$suffix" }
+        $localeItems += [PSCustomObject]@{ Id = $tag; Label = "$tag - $($entry.sCountry)" }
     }
     $localeDefaultIndex = [array]::IndexOf($localeTags, $CurrentLocale)
     if ($localeDefaultIndex -lt 0) { $localeDefaultIndex = 0 }
     $localeChoice = Show-Menu -Title "Select locale / keyboard" -Items $localeItems -SelectedIndex $localeDefaultIndex `
         -Heading "Regional format and keyboard layout" `
         -HeadingHint "NOT the display language - the image keeps whatever UI language the ISO shipped with." `
-        -StatusLines ([ordered]@{ iso = $isoStatus; target = $targetId; images = ($selectedIndexes -join ", ") })
+        -StatusLines ([ordered]@{ iso = $isoStatus; target = $targetId; images = $imagesStatus })
     if ($null -eq $localeChoice) { return $null }
     $locale = $localeChoice
     $keyboard = $localeChoice
@@ -2324,11 +2345,11 @@ function Start-InteractiveConfiguration {
         Write-FastfetchInfoRow -Label "iso"      -Value $isoStatus -LabelWidth 24 -IndentWidth 2
         Write-FastfetchInfoRow -Label "target"   -Value $targetId -LabelWidth 24 -IndentWidth 2
         Write-FastfetchInfoRow -Label "editions" -Value $editionsSummary -LabelWidth 24 -IndentWidth 2
-        # Shown only where the question was actually asked - a build with no Pro index
-        # was never offered the upgrade, and a row reading "No" implies it was.
+        # Shown only where the rows were actually offered - an ISO with no Pro index
+        # never had virtual edition rows, and a row reading "No" implies it did.
         if ($msCandidates.Count -gt 0) {
             Write-FastfetchInfoRow -Label "multi-session" -Value $(if ($multiSessionIndexes.Count -gt 0) {
-                "index " + ($multiSessionIndexes -join ", ") + " upgraded after generalize"
+                "index " + ($multiSessionIndexes -join ", ") + " built as own gold, upgraded after generalize"
             } else { "No" }) -LabelWidth 24 -IndentWidth 2
         }
         Write-FastfetchInfoRow -Label "output"   -Value $outputDirectory -LabelWidth 24 -IndentWidth 2
@@ -2544,15 +2565,17 @@ function Get-MultiSessionTargetEdition {
     # there, and the caller decides what to do about it.
     param([string]$OsRoot)
 
-    Write-Log "Asking DISM which editions '$OsRoot' can become" -Tag "Get"
+    Write-Log "Checking via DISM which editions the image can become" -Tag "Get"
     $result = Invoke-DismRaw -Arguments @("/Image:$OsRoot", "/Get-TargetEditions")
     if ($result.ExitCode -ne 0) {
         throw "dism.exe /Get-TargetEditions failed (exit $($result.ExitCode)): $($result.Output)"
     }
 
+    # No log line for the hit itself - every caller reports the answer with its own
+    # context (index, or the reason a build stopped), and two lines saying the same
+    # thing four seconds apart read like a stutter.
     foreach ($line in $result.Output) {
         if ("$line" -match "(ServerRdsh|EnterpriseMultiSession)") {
-            Write-Log "Image can become '$($Matches[1])'" -Tag "Get"
             return $Matches[1]
         }
     }
@@ -3213,8 +3236,6 @@ function New-WindowsVhdxImage {
         [bool]$RequireMultiSession = $false
     )
 
-    Write-Log "Starting build for '$VhdPath' (index $ImageIndex, target $Target)" -Tag "Info"
-
     $previousErrorAction = $ErrorActionPreference
     $ErrorActionPreference = "Stop"
     $buildSucceeded = $false
@@ -3746,7 +3767,8 @@ if ([string]::IsNullOrWhiteSpace($OutputDirectory)) {
 $hasImageSelection = (
     ($ImageIndexes -and $ImageIndexes.Count -gt 0) -or
     ($CoreImageIndex -ge 1) -or
-    ($GuiImageIndex -ge 1)
+    ($GuiImageIndex -ge 1) -or
+    (@($MultiSessionImageIndexes).Count -gt 0)
 )
 
 $needsInteractive = (
@@ -3831,19 +3853,42 @@ if ($availableImages.Count -eq 0) {
 }
 Write-Log "$($availableImages.Count) image(s) in '$wimPath'" -Tag "Get"
 
-try {
-    $selectedIndexes = Resolve-SelectedImageIndexes -ImageIndexes $ImageIndexes -Build $Build `
-        -CoreImageIndex $CoreImageIndex -GuiImageIndex $GuiImageIndex
-}
-catch {
-    Write-Log $_.Exception.Message -Tag "Error"
-    Complete-Script -ExitCode 1
+# A run may carry only multi-session builds. Resolve-SelectedImageIndexes falls back
+# to -Build/-CoreImageIndex/-GuiImageIndex when -ImageIndexes is empty and would
+# demand them, so it is only consulted when a plain selection was actually given.
+$selectedIndexes = @()
+$hasPlainSelection = (
+    ($ImageIndexes -and $ImageIndexes.Count -gt 0) -or
+    ($CoreImageIndex -ge 1) -or
+    ($GuiImageIndex -ge 1)
+)
+if ($hasPlainSelection) {
+    try {
+        $selectedIndexes = Resolve-SelectedImageIndexes -ImageIndexes $ImageIndexes -Build $Build `
+            -CoreImageIndex $CoreImageIndex -GuiImageIndex $GuiImageIndex
+    }
+    catch {
+        Write-Log $_.Exception.Message -Tag "Error"
+        Complete-Script -ExitCode 1
+    }
 }
 
-if ($selectedIndexes.Count -eq 0) {
+if ($selectedIndexes.Count -eq 0 -and @($MultiSessionImageIndexes).Count -eq 0) {
     Write-Log "No image indexes selected to build" -Tag "Error"
     Complete-Script -ExitCode 1
 }
+
+# One entry per gold that leaves this run. A plain index and a multi-session upgrade
+# of the same index are two entries on purpose: the gold names differ
+# (w11-pro / w11-enterprise-ms), so one run can produce both from one index.
+$buildSpecs = @()
+foreach ($imageIndex in $selectedIndexes) {
+    $buildSpecs += [PSCustomObject]@{ ImageIndex = [int]$imageIndex; UpgradeToMultiSession = $false }
+}
+foreach ($imageIndex in @(@($MultiSessionImageIndexes) | Sort-Object -Unique)) {
+    $buildSpecs += [PSCustomObject]@{ ImageIndex = [int]$imageIndex; UpgradeToMultiSession = $true }
+}
+$buildIndexes = @($buildSpecs | ForEach-Object { $_.ImageIndex } | Sort-Object -Unique)
 
 Write-Log "Target: $Target | Locale: $Locale | Keyboard: $KeyboardLayout" -Tag "Info"
 Write-Log "Time zone: $TimeZone | VHD: $VhdSizeGB GB $VhdType" -Tag "Info"
@@ -3854,7 +3899,7 @@ Write-Log "RDP: $EnableRdp | Ping: $EnablePing" -Tag "Info"
 # encrypt itself.
 $runHasClient = $false
 $runHasServer = $false
-foreach ($index in $selectedIndexes) {
+foreach ($index in $buildIndexes) {
     $match = $availableImages | Where-Object { $_.ImageIndex -eq $index } | Select-Object -First 1
     if ($null -eq $match) { continue }
     if (Test-IsClientImage -ImageName $match.ImageName) { $runHasClient = $true } else { $runHasServer = $true }
@@ -3875,23 +3920,24 @@ if ($runHasClient) {
 if (@($MultiSessionImageIndexes).Count -gt 0) {
     Write-Log "Upgrading to Enterprise multi-session after generalize: index $(@($MultiSessionImageIndexes) -join ', ')" -Tag "Info"
 }
-$selectedNames = foreach ($index in $selectedIndexes) {
-    $match = $availableImages | Where-Object { $_.ImageIndex -eq $index } | Select-Object -First 1
-    if ($match) { "$index $($match.ImageName)" } else { "$index" }
+$selectedNames = foreach ($buildSpec in $buildSpecs) {
+    $match = $availableImages | Where-Object { $_.ImageIndex -eq $buildSpec.ImageIndex } | Select-Object -First 1
+    $name = if ($match) { "$($buildSpec.ImageIndex) $($match.ImageName)" } else { "$($buildSpec.ImageIndex)" }
+    if ($buildSpec.UpgradeToMultiSession) { "$name as multi-session" } else { $name }
 }
-Write-Log "Building $($selectedIndexes.Count) of $($availableImages.Count): $($selectedNames -join ' | ')" -Tag "Info"
+Write-Log "Building $($buildSpecs.Count) gold(s) from $($availableImages.Count) image(s): $($selectedNames -join ' | ')" -Tag "Info"
 
 # One DISM call per selected index, reused by the Azure Local guidance check and
 # by the per-build log line below.
 $imageLanguages = @{}
-foreach ($imageIndex in $selectedIndexes) {
+foreach ($imageIndex in $buildIndexes) {
     $imageLanguages[$imageIndex] = Get-ImageLanguageTag -WimPath $wimPath -ImageIndex $imageIndex
 }
 
 # Named rather than left as "unchanged": the display language is whatever the selected
 # image ships, and the run should say which that is instead of only that nothing touched
 # it. More than one language here means the ISO carries indexes that disagree.
-$uiLanguages = @($selectedIndexes |
+$uiLanguages = @($buildIndexes |
         ForEach-Object { [string]$imageLanguages[$_] } |
         Where-Object { -not [string]::IsNullOrWhiteSpace($_) } |
         Sort-Object -Unique)
@@ -3899,7 +3945,7 @@ $uiLanguageText = if ($uiLanguages.Count -gt 0) { $uiLanguages -join ", " } else
 Write-Log "UI language: $uiLanguageText (image default)" -Tag "Info"
 
 if ($Target -eq "AzureLocal") {
-    foreach ($imageIndex in $selectedIndexes) {
+    foreach ($imageIndex in $buildIndexes) {
         $imageLanguage = [string]$imageLanguages[$imageIndex]
         if ([string]::IsNullOrWhiteSpace($imageLanguage)) {
             Write-Log "Index $imageIndex has no language metadata - en-US check skipped" -Tag "Warn"
@@ -3913,7 +3959,9 @@ if ($Target -eq "AzureLocal") {
 $generalize = -not $SkipSysprep.IsPresent
 $allSucceeded = $true
 
-foreach ($imageIndex in $selectedIndexes) {
+foreach ($buildSpec in $buildSpecs) {
+    $imageIndex = $buildSpec.ImageIndex
+    $upgradeToMultiSession = $buildSpec.UpgradeToMultiSession
     $imageInfo = $availableImages | Where-Object { $_.ImageIndex -eq $imageIndex } | Select-Object -First 1
     if ($null -eq $imageInfo) {
         Write-Log "Image index $imageIndex was not found in '$wimPath'" -Tag "Error"
@@ -3923,13 +3971,11 @@ foreach ($imageIndex in $selectedIndexes) {
 
     $imageLanguage = [string]$imageLanguages[$imageIndex]
     $resolvedUi = Resolve-UiLanguage -UiLanguage $UiLanguage -ImageLanguage $imageLanguage
-    $upgradeToMultiSession = (@($MultiSessionImageIndexes) -contains [int]$imageIndex)
     $vhdxName = Get-VhdxFileName -ImageName $imageInfo.ImageName -ImageIndex $imageIndex -Target $Target `
         -ImageLanguage $imageLanguage -UpgradeToMultiSession $upgradeToMultiSession
     $vhdPath = Join-Path -Path $OutputDirectory -ChildPath $vhdxName
 
-    $languageNote = if ([string]::IsNullOrWhiteSpace($imageLanguage)) { "unknown" } else { $imageLanguage }
-    Write-Log "Building '$($imageInfo.ImageName)' -> '$vhdPath' (image language $languageNote)" -Tag "Info"
+    Write-Log "Building '$($imageInfo.ImageName)' -> '$vhdPath'" -Tag "Info"
 
     $ok = Invoke-ImageBuildPipeline -VhdPath $vhdPath -ImageIndex $imageIndex `
         -ImageName $imageInfo.ImageName -WimPath $wimPath -Target $Target `
@@ -3957,7 +4003,7 @@ foreach ($imageIndex in $selectedIndexes) {
 }
 
 if ($allSucceeded) {
-    Write-Log "$($selectedIndexes.Count) image(s) built" -Tag "Ok"
+    Write-Log "$($buildSpecs.Count) gold(s) built" -Tag "Ok"
     Complete-Script -ExitCode 0
 }
 

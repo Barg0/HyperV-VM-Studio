@@ -96,8 +96,9 @@ at a drive that is already mounted.
 **Editions** — a multi-select over every index the ISO carries. Build the ones you will
 actually deploy.
 
-**Enterprise multi-session** — appears when a Windows 11 Pro index is selected. Tick it and
-the finished gold comes out as Windows 11 Enterprise multi-session.
+**Enterprise multi-session** — when the ISO carries a Windows 11 Pro index, the edition
+list grows a virtual-edition row for it. Each tick is its own build — tick both the Pro row
+and its multi-session row and one run produces both golds from the same index.
 
 > <picture><source media="(prefers-color-scheme: dark)" srcset=".github/assets/icons/help-dark.png"><img src=".github/assets/icons/help-light.png" width="16" alt=""></picture> Only buildable from Pro. Licensed for AVD — activates on Azure Local, not on plain Hyper-V.
 
@@ -176,8 +177,8 @@ Everything the menu asks can be passed instead — useful once a build is routin
 # Server 2025, both editions, German locale
 .\New-Vhdx.ps1 -IsoPath .\isos\server2025.iso -Target HyperV -ImageIndexes 3,4 -Locale de-DE
 
-# An AVD session host gold for Azure Local: Pro index upgraded to multi-session
-.\New-Vhdx.ps1 -IsoPath .\isos\win11.iso -Target AzureLocal -ImageIndexes 5 -MultiSessionImageIndexes 5
+# An AVD session host gold for Azure Local: multi-session built from the Pro index
+.\New-Vhdx.ps1 -IsoPath .\isos\win11.iso -Target AzureLocal -MultiSessionImageIndexes 5
 
 # Windows default BitLocker behavior instead of the opt-out
 .\New-Vhdx.ps1 -IsoPath .\isos\win11.iso -ImageIndexes 5 -PreventDeviceEncryption $false
@@ -358,7 +359,7 @@ summary line, so twelve machines still fit on a screen.
   > <picture><source media="(prefers-color-scheme: dark)" srcset=".github/assets/icons/help-dark.png"><img src=".github/assets/icons/help-light.png" width="16" alt=""></picture> The picker lists what *can* be built, not what *is* built — the gold itself
   > has to exist, made with `New-Vhdx.ps1` up front. Preflight catches a missing one before
   > anything is created.
-- <picture><source media="(prefers-color-scheme: dark)" srcset=".github/assets/icons/users-dark.svg"><img src=".github/assets/icons/users-light.svg" width="16" alt=""></picture> **Local admin** — takes a name and password, typed or generated. Client images can run as the built-in Administrator only.
+- <picture><source media="(prefers-color-scheme: dark)" srcset=".github/assets/icons/users-dark.svg"><img src=".github/assets/icons/users-light.svg" width="16" alt=""></picture> **Local admin** — takes a name and password, typed or generated. Server images can run as the built-in Administrator only; among clients, only Enterprise multi-session offers that tick.
 - <picture><source media="(prefers-color-scheme: dark)" srcset=".github/assets/icons/cpu-dark.svg"><img src=".github/assets/icons/cpu-light.svg" width="16" alt=""></picture> **CPU / RAM** — sets memory and vCPUs; nested virtualization and processor compatibility hide under *Additional processor options*.
 - <picture><source media="(prefers-color-scheme: dark)" srcset=".github/assets/icons/vnet-dark.svg"><img src=".github/assets/icons/vnet-light.svg" width="16" alt=""></picture> **Network** — binds the primary adapter to a network and adds more if you want them. Device naming is on, so the guest sees the adapter names you typed.
 - <picture><source media="(prefers-color-scheme: dark)" srcset=".github/assets/icons/disk-dark.svg"><img src=".github/assets/icons/disk-light.svg" width="16" alt=""></picture> **Disks** — the OS disk sits fixed at C:, its size and format decided when the gold was built. *Create and attach* adds data disks at D:, E:, … in order; each gets a size, Fixed or Dynamic, a filesystem and a volume label. At first boot the guest initializes the disk GPT, partitions it, formats it and mounts it on its letter with that label — *Leave raw* skips all of that and hands you a blank offline disk. File names follow the VM name (`disk-<server>-d.vhdx`) until the pencil pins one by hand. ReFS needs an Enterprise-class client image or a Server.
