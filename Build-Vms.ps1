@@ -517,6 +517,18 @@ function Get-ImageIdMatchRules {
         }
     }
 
+    # Its own SKU next to Standard and Datacenter, built by New-Vhdx.ps1 as a
+    # post-generalize edition upgrade from a 2025 Standard index. Server 2025 only:
+    # older media has no conversion path to it.
+    $server["ws2025-datacenter-az-desktop"] = @{
+        Experience = "DesktopExperience"
+        Label      = "Windows Server 2025 Datacenter: Azure Edition Desktop Experience"
+    }
+    $server["ws2025-datacenter-az-core"] = @{
+        Experience = "Core"
+        Label      = "Windows Server 2025 Datacenter: Azure Edition Core"
+    }
+
     $client = [ordered]@{
         "w11-enterprise"    = @{ Experience = "DesktopExperience"; Label = "Windows 11 Enterprise" }
         "w11-enterprise-n"  = @{ Experience = "DesktopExperience"; Label = "Windows 11 Enterprise N" }

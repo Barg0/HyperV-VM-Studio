@@ -2236,6 +2236,28 @@ const IMAGE_CATALOG = [
     defaults: { useDifferencingDisk: false, enableSecureBoot: true, enableVtpm: false, startAfterCreate: true, memoryGB: 4, cpuCount: 2 }
   },
   {
+    /* Its own SKU next to Standard and Datacenter, built by New-Vhdx.ps1 as a
+       post-generalize edition upgrade from a 2025 Standard index. Server 2025 only:
+       older media has no conversion path to it. Supported on Azure and Azure Local;
+       on plain Hyper-V it is a lab image. */
+    id: "ws2025-datacenter-az-desktop",
+    label: "Windows Server 2025 Datacenter: Azure Edition Desktop",
+    icon: "os-server-panes.svg",
+    kind: "desktop",
+    edition: "Datacenter: Azure Edition",
+    experience: "DesktopExperience",
+    defaults: { useDifferencingDisk: false, enableSecureBoot: true, enableVtpm: false, startAfterCreate: true, memoryGB: 4, cpuCount: 4 }
+  },
+  {
+    id: "ws2025-datacenter-az-core",
+    label: "Windows Server 2025 Datacenter: Azure Edition Core",
+    icon: "os-server-panes.svg",
+    kind: "core",
+    edition: "Datacenter: Azure Edition",
+    experience: "Core",
+    defaults: { useDifferencingDisk: false, enableSecureBoot: true, enableVtpm: false, startAfterCreate: true, memoryGB: 4, cpuCount: 2 }
+  },
+  {
     id: "w11-enterprise",
     label: "Windows 11 Enterprise",
     icon: "os-client-panes.svg",
