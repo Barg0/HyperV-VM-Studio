@@ -44,8 +44,11 @@
     Azure verification activates it and hotpatch is on by default; on plain
     Hyper-V the VM deactivates itself once it notices where it runs.
 
-    14 locales are
-    supported (-Locale/-KeyboardLayout); -UiLanguage is always Auto - there is
+    The locale catalog (-Locale/-KeyboardLayout) comes from data\locales.json
+    when present - the generated all-locales catalog written by
+    toolbox\New-LocaleCatalog.ps1, whose top-level "default" names the preselected
+    locale - and falls back to the hand-verified 14-locale in-script catalog when
+    the file is missing or invalid. -UiLanguage is always Auto - there is
     no language-pack source to satisfy anything else. A Hyper-V gold carries no
     boot-time scripts at all; an Azure Local gold carries the first-boot locale
     payload described below, which deletes itself once it has run.
@@ -113,13 +116,11 @@ param (
     [ValidateSet("Auto")]
     [string]$UiLanguage = "Auto",
 
-    [Parameter(HelpMessage = "Regional format (UserLocale / SystemLocale).")]
-    [ValidateSet("de-DE", "en-US", "cs-CZ", "da-DK", "en-GB", "es-ES", "fi-FI", "fr-FR", "it-IT", "nb-NO", "nl-NL", "pl-PL", "pt-PT", "sv-SE")]
-    [string]$Locale = "de-DE",
+    [Parameter(HelpMessage = "Regional format (UserLocale / SystemLocale). Validated at runtime against the loaded locale catalog - locales.json next to this script when present, the in-script catalog otherwise. Empty takes the catalog's default.")]
+    [string]$Locale = "",
 
-    [Parameter(HelpMessage = "Keyboard input layout.")]
-    [ValidateSet("de-DE", "en-US", "cs-CZ", "da-DK", "en-GB", "es-ES", "fi-FI", "fr-FR", "it-IT", "nb-NO", "nl-NL", "pl-PL", "pt-PT", "sv-SE")]
-    [string]$KeyboardLayout = "de-DE",
+    [Parameter(HelpMessage = "Keyboard input layout, as a locale tag from the same catalog as -Locale. Empty takes the catalog's default.")]
+    [string]$KeyboardLayout = "",
 
     [Parameter(HelpMessage = "Time zone (DISM / tzutil ID) baked into the image.")]
     [ValidateNotNullOrEmpty()]
@@ -530,14 +531,87 @@ $script:LocaleCatalog = [ordered]@{
     }
 }
 
+# What the picker preselects and unknown locales fall back to. locales.json can
+# override it; the in-script catalog's own default is de-DE either way.
+$script:DefaultLocale = "de-DE"
+
+function Import-LocaleCatalogFile {
+    # data\locales.json: the generated all-locales catalog
+    # (toolbox\New-LocaleCatalog.ps1), with the default locale named at its top.
+    # Absent, unreadable or structurally wrong, the hand-verified in-script
+    # catalog above stays in charge - it is the fallback, not a peer, and a bad
+    # file must never take the build down with it.
+    $path = Join-Path -Path $PSScriptRoot -ChildPath "data\locales.json"
+    if (-not (Test-Path -LiteralPath $path)) {
+        Write-Log "No data\locales.json - using the in-script locale catalog ($($script:LocaleCatalog.Count) locales)" -Tag "Info"
+        return
+    }
+
+    $data = $null
+    try {
+        $data = Get-Content -LiteralPath $path -Raw | ConvertFrom-Json
+    }
+    catch {
+        Write-Log "locales.json is not valid JSON ($($_.Exception.Message)) - using the in-script locale catalog" -Tag "Warn"
+        return
+    }
+
+    if ([string]::IsNullOrWhiteSpace([string]$data.default) -or $null -eq $data.locales) {
+        Write-Log "locales.json is missing 'default' or 'locales' - using the in-script locale catalog" -Tag "Warn"
+        return
+    }
+
+    # Every field the offline registry bake and the picker read. An entry missing
+    # one is dropped alone; the file only loses to the fallback when nothing valid
+    # is left or its own default is among the casualties.
+    $requiredFields = @(
+        "LangId", "Keyboard", "Lcid", "GeoNation", "GeoName", "Currency",
+        "sCountry", "sLanguage", "sShortDate", "sLongDate", "sShortTime",
+        "sTimeFormat", "iMeasure", "iFirstDayOfWeek", "iFirstWeekOfYear",
+        "iNegCurr", "iTime", "iDate", "sDecimal", "sThousand", "sList",
+        "sMonDecimalSep", "sMonThousandSep"
+    )
+
+    $catalog = [ordered]@{}
+    $dropped = 0
+    foreach ($property in ($data.locales.PSObject.Properties | Sort-Object Name)) {
+        $entry = $property.Value
+        $missing = @($requiredFields | Where-Object { $null -eq $entry.PSObject.Properties[$_] })
+        if ($missing.Count -gt 0) {
+            $dropped++
+            Write-Log "locales.json entry '$($property.Name)' is missing $($missing -join ', ') - dropped" -Tag "Debug"
+            continue
+        }
+        $values = @{}
+        foreach ($field in $entry.PSObject.Properties) {
+            $values[$field.Name] = [string]$field.Value
+        }
+        $catalog[$property.Name] = $values
+    }
+
+    if ($catalog.Count -eq 0) {
+        Write-Log "locales.json carries no usable entries - using the in-script locale catalog" -Tag "Warn"
+        return
+    }
+    if (-not $catalog.Contains([string]$data.default)) {
+        Write-Log "locales.json default '$($data.default)' is not among its own entries - using the in-script locale catalog" -Tag "Warn"
+        return
+    }
+
+    $script:LocaleCatalog = $catalog
+    $script:DefaultLocale = [string]$data.default
+    $droppedText = if ($dropped -gt 0) { ", $dropped dropped" } else { "" }
+    Write-Log "Loaded locales.json: $($catalog.Count) locales$droppedText, default $($script:DefaultLocale)" -Tag "Info"
+}
+
 function Get-LocaleCatalogEntry {
     param([string]$Locale)
 
     if ($script:LocaleCatalog.Contains($Locale)) {
         return $script:LocaleCatalog[$Locale]
     }
-    Write-Log "Unknown locale '$Locale' - falling back to de-DE" -Tag "Info"
-    return $script:LocaleCatalog["de-DE"]
+    Write-Log "Unknown locale '$Locale' - falling back to $($script:DefaultLocale)" -Tag "Info"
+    return $script:LocaleCatalog[$script:DefaultLocale]
 }
 
 function Get-InputLocaleId {
@@ -2143,8 +2217,15 @@ function Mount-WindowsIsoFile {
 }
 
 function Get-OrderedLocaleTags {
-    # de-DE default/top, en-US next, then the rest alphabetically.
-    return @("de-DE", "en-US", "cs-CZ", "da-DK", "en-GB", "es-ES", "fi-FI", "fr-FR", "it-IT", "nb-NO", "nl-NL", "pl-PL", "pt-PT", "sv-SE")
+    # Catalog default on top, en-US next, then the rest alphabetically - same
+    # shape whether the catalog is the in-script 14 or a loaded locales.json.
+    $tags = @($script:LocaleCatalog.Keys)
+    $head = @($script:DefaultLocale)
+    if ($script:DefaultLocale -ne "en-US" -and $tags -contains "en-US") {
+        $head += "en-US"
+    }
+    $rest = @($tags | Where-Object { $_ -notin $head } | Sort-Object)
+    return @($head + $rest)
 }
 
 function Get-OrderedTimeZoneCatalog {
@@ -3903,6 +3984,19 @@ function Invoke-ImageBuildPipeline {
 Write-Log "==================== Start ====================" -Tag "Start"
 Write-Log "$env:COMPUTERNAME | $env:USERNAME | $scriptName" -Tag "Info"
 Write-Log "Log file: $logFile" -Tag "Info"
+
+# The locale catalog decides what -Locale/-KeyboardLayout may say, so it loads
+# before either is looked at. Empty means "the catalog's default" - the parameter
+# cannot name it earlier because the default itself comes from locales.json.
+Import-LocaleCatalogFile
+if ([string]::IsNullOrWhiteSpace($Locale)) { $Locale = $script:DefaultLocale }
+if ([string]::IsNullOrWhiteSpace($KeyboardLayout)) { $KeyboardLayout = $script:DefaultLocale }
+foreach ($localeArgument in @(@{ Name = "-Locale"; Value = $Locale }, @{ Name = "-KeyboardLayout"; Value = $KeyboardLayout })) {
+    if (-not $script:LocaleCatalog.Contains($localeArgument.Value)) {
+        Write-Log "$($localeArgument.Name) '$($localeArgument.Value)' is not in the locale catalog ($($script:LocaleCatalog.Count) locales loaded, default $($script:DefaultLocale))" -Tag "Error"
+        Complete-Script -ExitCode 1
+    }
+}
 
 $availableImages = @()
 $wimPath = ""
