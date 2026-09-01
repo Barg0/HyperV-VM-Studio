@@ -108,7 +108,7 @@ the base row and its virtual-edition row and one run produces both golds from th
 
 > <picture><source media="(prefers-color-scheme: dark)" srcset=".github/assets/icons/help-dark.png"><img src=".github/assets/icons/help-light.png" width="16" alt=""></picture> Multi-session is only buildable from Pro. Licensed for AVD — activates on Azure Local, not on plain Hyper-V.
 
-> <picture><source media="(prefers-color-scheme: dark)" srcset=".github/assets/icons/help-dark.png"><img src=".github/assets/icons/help-light.png" width="16" alt=""></picture> Azure Edition is supported on Azure and Azure Local only; on plain Hyper-V it boots as a lab image. Hotpatch needs Arc enrollment outside Azure, and no AVMA key exists for the SKU — the gold leaves keyless.
+> <picture><source media="(prefers-color-scheme: dark)" srcset=".github/assets/icons/help-dark.png"><img src=".github/assets/icons/help-light.png" width="16" alt=""></picture> Azure Edition is supported on Azure and Azure Local only — there Azure verification activates it and hotpatch is on by default, at no cost. On plain Hyper-V the VM deactivates itself once it notices where it runs.
 
 **Locale, keyboard, time zone** — baked into the image, with fourteen locales to pick from.
 The UI language stays whatever the ISO shipped.
@@ -135,8 +135,10 @@ Secure Boot on, vTPM for client images, and deliberately no network adapter, so 
 itself mid-sysprep. Your settings are baked into the finished disk afterwards. A Server 2025
 gold takes a few minutes; budget up to 45 for sysprep on slower storage.
 
-A few things ride along without being asked. Server **Datacenter** golds get the AVMA client
-key baked in, so guests activate against a licensed host on their own. Every Hyper-V gold gets
+A few things ride along without being asked. Server golds get the AVMA client key matching
+their version and edition baked in — **Datacenter** and **Standard** for 2016–2025, plus
+**Azure Edition** — so guests activate against a licensed host on their own and OOBE never
+stops at the product key screen. Every Hyper-V gold gets
 a <picture><source media="(prefers-color-scheme: dark)" srcset=".github/assets/icons/answer-file-dark.svg"><img src=".github/assets/icons/answer-file-light.svg" width="16" alt=""></picture> `.vhdx.json` sidecar recording the baked locale, keyboard, time zone
 and image language — the studio's "Default" locale reads it back later. On the **Azure Local**
 target the locale settings travel inside the image instead, applied once at the deployed VM's
