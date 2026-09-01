@@ -165,6 +165,9 @@ foreach ($ci in ($cultures | Sort-Object Name)) {
 
     $geoName = $ri.TwoLetterISORegionName
     $entries[$ci.Name] = [ordered]@{
+        # Display-only, not an intl.cpl field: "German (Germany)", "Welsh (United
+        # Kingdom)" - the picker needs the language, the tag alone does not say it.
+        languageName    = $ci.EnglishName
         LangId          = ("{0:x4}" -f $ci.LCID)
         Keyboard        = (Resolve-KeyboardId -Culture $ci)
         Lcid            = ("{0:x8}" -f $ci.LCID)

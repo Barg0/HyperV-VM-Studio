@@ -614,6 +614,20 @@ function Get-LocaleCatalogEntry {
     return $script:LocaleCatalog[$script:DefaultLocale]
 }
 
+function Get-LocaleDisplayName {
+    # "German (Germany)" when the catalog carries the language name (generated
+    # locales.json does), the bare country otherwise (the in-script fallback
+    # predates the field). The tag alone never says the language - de-DE next to
+    # dsb-DE both read "Germany" without this.
+    param([string]$Locale)
+
+    $entry = Get-LocaleCatalogEntry -Locale $Locale
+    if (-not [string]::IsNullOrWhiteSpace([string]$entry.languageName)) {
+        return [string]$entry.languageName
+    }
+    return [string]$entry.sCountry
+}
+
 function Get-InputLocaleId {
     param([string]$KeyboardLayout)
 
@@ -2448,8 +2462,7 @@ function Start-InteractiveConfiguration {
     $localeTags = Get-OrderedLocaleTags
     $localeItems = @()
     foreach ($tag in $localeTags) {
-        $entry = Get-LocaleCatalogEntry -Locale $tag
-        $localeItems += [PSCustomObject]@{ Id = $tag; Label = "$tag - $($entry.sCountry)" }
+        $localeItems += [PSCustomObject]@{ Id = $tag; Label = "$tag - $(Get-LocaleDisplayName -Locale $tag)" }
     }
     $localeDefaultIndex = [array]::IndexOf($localeTags, $CurrentLocale)
     if ($localeDefaultIndex -lt 0) { $localeDefaultIndex = 0 }
@@ -2460,7 +2473,7 @@ function Start-InteractiveConfiguration {
     if ($null -eq $localeChoice) { return $null }
     $locale = $localeChoice
     $keyboard = $localeChoice
-    $localeSummary = "$locale - $((Get-LocaleCatalogEntry -Locale $locale).sCountry)"
+    $localeSummary = "$locale - $(Get-LocaleDisplayName -Locale $locale)"
 
     # Time zone picker - same style as the locale picker above, backed by the
     # live Windows time zone database instead of a hardcoded list.
