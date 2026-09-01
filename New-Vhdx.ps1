@@ -39,9 +39,10 @@
     target as ServerTurbine (Desktop) / ServerTurbineCor (Core) - the SKU's
     internal name - and only Server 2025 media carries it, so the rows are
     offered for 2025 Datacenter indexes and nowhere else. The gold leaves as
-    hv-<language>-ws2025-datacenter-az-<core|desktop>.vhdx. Azure Edition is
-    licensed for Azure and Azure Local; features such as hotpatch need Arc
-    enrollment outside Azure, which is the deployment's business, not the image's.
+    hv-<language>-ws2025-datacenter-az-<core|desktop>.vhdx with the SKU's own
+    AVMA key baked. Azure Edition is licensed for Azure and Azure Local, where
+    Azure verification activates it and hotpatch is on by default; on plain
+    Hyper-V the VM deactivates itself once it notices where it runs.
 
     14 locales are
     supported (-Locale/-KeyboardLayout); -UiLanguage is always Auto - there is
@@ -338,9 +339,34 @@ function Complete-Script {
 }
 
 # ---------------------------[ Locale Helpers ]---------------------------
-function Get-AvmaDatacenterKey {
-    # Windows Server 2025 Datacenter AVMA key (published by Microsoft)
-    return "YQB4H-NKHHJ-Q6K4R-4VMY6-VCH67"
+function Get-AvmaKey {
+    # AVMA client keys published by Microsoft, per guest version and edition:
+    # https://learn.microsoft.com/en-us/windows-server/get-started/automatic-vm-activation
+    # Generic keys - they activate against a licensed Datacenter host (a 2025 host
+    # activates every version here) or an Azure Local instance with a Windows Server
+    # subscription, and baking one also keeps OOBE from stopping at the product key
+    # screen. The key must match the guest's own version: /Set-ProductKey refuses
+    # one from the wrong version's pkeyconfig, so an unknown pairing returns ""
+    # and the gold leaves keyless rather than failing the build.
+    param(
+        [string]$Year,
+        [string]$Edition
+    )
+
+    $keys = @{
+        "2025-Datacenter"   = "YQB4H-NKHHJ-Q6K4R-4VMY6-VCH67"
+        "2025-AzureEdition" = "6NMQ9-T38WF-6MFGM-QYGYM-88J4F"
+        "2025-Standard"     = "WWVGQ-PNHV9-B89P4-8GGM9-9HPQ4"
+        "2022-Datacenter"   = "W3GNR-8DDXR-2TFRP-H8P33-DV9BG"
+        "2022-Standard"     = "YDFWN-MJ9JR-3DYRK-FXXRW-78VHK"
+        "2019-Datacenter"   = "H3RNG-8C32Q-Q8FRX-6TDXV-WMBMW"
+        "2019-Standard"     = "TNK62-RXVTB-4P47B-2D623-4GF74"
+        "2016-Datacenter"   = "TMJ3Y-NTRTM-FJYXT-T22BY-CWG3J"
+        "2016-Standard"     = "C3RCX-M6NRP-6CXC9-TW2F2-4RHYD"
+    }
+    $key = $keys["$Year-$Edition"]
+    if ($null -eq $key) { return "" }
+    return $key
 }
 
 # Full locale catalog: de-DE (default) / en-US, then the rest alphabetically.
@@ -2289,8 +2315,8 @@ function Start-InteractiveConfiguration {
             $noteLines += "so a gold built here is a lab image - not supported in production."
         }
         if ($azCandidates.Count -gt 0) {
-            $noteLines += "Azure Edition is supported on Azure and Azure Local only; on plain Hyper-V it"
-            $noteLines += "boots but is a lab image, and hotpatch needs Arc enrollment either way."
+            $noteLines += "Azure Edition is supported on Azure and Azure Local only - on plain Hyper-V"
+            $noteLines += "the VM deactivates itself once it notices where it runs."
         }
         if ($noteLines.Count -gt 0) {
             $editionSectionNotes["Virtual editions"] = $noteLines
@@ -3778,21 +3804,43 @@ function Invoke-ImageBuildPipeline {
     $avmaKey = ""
     $productKey = ""
 
+    $serverYear = ""
+    if (([string]$ImageName) -match "(?i)windows\s+server\s+(\d{4})") {
+        $serverYear = $Matches[1]
+    }
+
     if ($EditionUpgrade -eq "AzureEdition") {
-        # Microsoft publishes no AVMA key for Datacenter: Azure Edition, and the
-        # Datacenter key belongs to a SKU this gold will not carry once /Set-Edition
-        # has run. The gold leaves keyless; activation is the deployment's business.
-        Write-Log "Azure Edition build - no AVMA key applies to that SKU" -Tag "Info"
+        # Keyed for the SKU the gold ships as, not the index it was applied from -
+        # the key is baked by Set-OfflineImageCustomization, which runs after the
+        # edition change, so it lands on an image that already is Azure Edition.
+        $avmaKey = Get-AvmaKey -Year "2025" -Edition "AzureEdition"
+        Write-Log "Azure Edition build; its AVMA key will be applied offline" -Tag "Info"
     }
     elseif ($isDatacenter) {
-        $avmaKey = Get-AvmaDatacenterKey
-        if ($Target -eq "HyperV") {
-            $productKey = $avmaKey
+        $avmaKey = Get-AvmaKey -Year $serverYear -Edition "Datacenter"
+        if ($avmaKey -ne "") {
+            if ($Target -eq "HyperV") {
+                $productKey = $avmaKey
+            }
+            Write-Log "Server $serverYear Datacenter detected; AVMA key will be applied offline" -Tag "Info"
         }
-        Write-Log "Server Datacenter detected; AVMA key will be applied offline" -Tag "Info"
+        else {
+            Write-Log "Server Datacenter without a published AVMA key ('$ImageName') - none applied" -Tag "Info"
+        }
+    }
+    elseif (-not $isClient -and ([string]$ImageName) -match "(?i)\bstandard\b") {
+        $avmaKey = Get-AvmaKey -Year $serverYear -Edition "Standard"
+        if ($avmaKey -ne "") {
+            Write-Log "Server $serverYear Standard detected; AVMA key will be applied offline" -Tag "Info"
+        }
+        else {
+            Write-Log "Server Standard without a published AVMA key ('$ImageName') - none applied" -Tag "Info"
+        }
     }
     elseif (-not $isClient) {
-        Write-Log "Server image is not Datacenter - no AVMA key to apply" -Tag "Info"
+        # Covers Azure Local media and anything else server-shaped that is neither
+        # Standard nor Datacenter - those activate through their own channels.
+        Write-Log "Server image without a matching AVMA key - none applied" -Tag "Info"
     }
     else {
         # AVMA is a Windows Server Datacenter mechanism. Saying a client image "skipped"
