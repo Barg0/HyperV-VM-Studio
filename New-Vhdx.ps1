@@ -33,12 +33,12 @@
     temporary VM costs twenty minutes, and the gold is named for what it ends up as
     (hv-enus-w11-enterprise-ms.vhdx) with the source index recorded in the sidecar.
 
-    A Windows Server 2025 Standard index can be built as a Datacenter: Azure
+    A Windows Server 2025 Datacenter index can be built as a Datacenter: Azure
     Edition gold the same way (-AzureEditionImageIndexes): its own build next to
     any plain golds, edition changed offline after generalize. DISM lists that
-    target as ServerTurbine - the SKU's internal name - and only Server 2025
-    media carries it, so the rows are offered for 2025 Standard indexes and
-    nowhere else. The gold leaves as
+    target as ServerTurbine (Desktop) / ServerTurbineCor (Core) - the SKU's
+    internal name - and only Server 2025 media carries it, so the rows are
+    offered for 2025 Datacenter indexes and nowhere else. The gold leaves as
     hv-<language>-ws2025-datacenter-az-<core|desktop>.vhdx. Azure Edition is
     licensed for Azure and Azure Local; features such as hotpatch need Arc
     enrollment outside Azure, which is the deployment's business, not the image's.
@@ -160,7 +160,7 @@ param (
     [ValidateRange(1, 99)]
     [int[]]$MultiSessionImageIndexes,
 
-    [Parameter(HelpMessage = "Image indexes to build as Windows Server 2025 Datacenter: Azure Edition golds - upgraded offline, after generalize, same mechanism as -MultiSessionImageIndexes. Pass the index of a Windows Server 2025 Standard image; only Server 2025 media lists the Azure Edition target (DISM calls it ServerTurbine), and the build aborts early if the image cannot become it.")]
+    [Parameter(HelpMessage = "Image indexes to build as Windows Server 2025 Datacenter: Azure Edition golds - upgraded offline, after generalize, same mechanism as -MultiSessionImageIndexes. Pass the index of a Windows Server 2025 Datacenter image; only Server 2025 media lists the Azure Edition target (DISM calls it ServerTurbine / ServerTurbineCor), and the build aborts early if the image cannot become it.")]
     [ValidateRange(1, 99)]
     [int[]]$AzureEditionImageIndexes
 )
@@ -197,10 +197,13 @@ $script:VirtualEditionCatalog = @{
         SourceHint    = "Use a Windows 11 Pro index: the edition packs are staged on the base edition, and an image already changed to a higher edition has none left to offer."
     }
     AzureEdition = @{
-        TargetPattern = "(ServerTurbine|ServerAzure[A-Za-z]*)"
+        # Greedy suffix on purpose: the Core SKU is ServerTurbineCor, and a pattern
+        # that stops at ServerTurbine would hand /Set-Edition a Desktop SKU for a
+        # Core image. Match the whole token DISM printed.
+        TargetPattern = "(ServerTurbine[A-Za-z]*|ServerAzure[A-Za-z]*)"
         DisplayName   = "Windows Server 2025 Datacenter: Azure Edition"
         ManifestValue = "DatacenterAzureEdition"
-        SourceHint    = "Use a Windows Server 2025 Standard index: only Server 2025 media lists the Azure Edition target, and only on the base Standard edition."
+        SourceHint    = "Use a Windows Server 2025 Datacenter index: only Server 2025 media lists the Azure Edition target, and Standard Core does not list it directly."
     }
 }
 
@@ -2231,12 +2234,16 @@ function Start-InteractiveConfiguration {
             ([string]$_.ImageName) -match "(?i)\bpro\s*$"
         })
 
-    # Server 2025 Standard only, for the same DISM reason Pro is the multi-session
-    # source: the edition change is offered on the base edition of the family. Only
-    # Server 2025 media lists the Azure Edition target at all - 2022 ships it as a
-    # separate image with no conversion path - so older Server ISOs get no rows.
+    # Server 2025 Datacenter only. Probed on retail 26100 media: Datacenter Core
+    # lists ServerTurbineCor and Datacenter Desktop lists ServerTurbine directly,
+    # while Standard Core lists only ServerDatacenterCor - no direct Azure Edition
+    # hop. Standard Desktop does list ServerTurbine, but it would build the same
+    # gold as the Datacenter row and collide with it on disk, so one source edition
+    # carries the rows. Only Server 2025 media lists the target at all - 2022 ships
+    # Azure Edition as a separate image with no conversion path - so older Server
+    # ISOs get no rows.
     $azCandidates = @($images | Where-Object {
-            ([string]$_.ImageName) -match "(?i)windows\s+server\s+2025\s+standard"
+            ([string]$_.ImageName) -match "(?i)windows\s+server\s+2025\s+datacenter"
         })
 
     $editionItems = @()
