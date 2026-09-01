@@ -102,7 +102,7 @@ edition list grows a virtual-edition row for it. Each tick is its own build — 
 the base row and its virtual-edition row and one run produces both golds from the same index.
 
 - **Enterprise multi-session** — offered on a Windows 11 Pro index.
-- **Datacenter: Azure Edition** — offered on a Windows Server 2025 Standard index (Core
+- **Datacenter: Azure Edition** — offered on a Windows Server 2025 Datacenter index (Core
   and Desktop Experience each get their own row). Server 2025 only — older media has no
   conversion path to this SKU.
 
@@ -188,8 +188,8 @@ Everything the menu asks can be passed instead — useful once a build is routin
 # An AVD session host gold for Azure Local: multi-session built from the Pro index
 .\New-Vhdx.ps1 -IsoPath .\isos\win11.iso -Target AzureLocal -MultiSessionImageIndexes 5
 
-# Datacenter: Azure Edition built from the Server 2025 Standard Core index
-.\New-Vhdx.ps1 -IsoPath .\isos\server2025.iso -Target AzureLocal -AzureEditionImageIndexes 1
+# Datacenter: Azure Edition built from the Server 2025 Datacenter Core index
+.\New-Vhdx.ps1 -IsoPath .\isos\server2025.iso -Target AzureLocal -AzureEditionImageIndexes 3
 
 # Windows default BitLocker behavior instead of the opt-out
 .\New-Vhdx.ps1 -IsoPath .\isos\win11.iso -ImageIndexes 5 -PreventDeviceEncryption $false

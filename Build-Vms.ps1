@@ -518,7 +518,7 @@ function Get-ImageIdMatchRules {
     }
 
     # Its own SKU next to Standard and Datacenter, built by New-Vhdx.ps1 as a
-    # post-generalize edition upgrade from a 2025 Standard index. Server 2025 only:
+    # post-generalize edition upgrade from a 2025 Datacenter index. Server 2025 only:
     # older media has no conversion path to it.
     $server["ws2025-datacenter-az-desktop"] = @{
         Experience = "DesktopExperience"
