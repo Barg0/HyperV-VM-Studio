@@ -33,6 +33,16 @@
     temporary VM costs twenty minutes, and the gold is named for what it ends up as
     (hv-enus-w11-enterprise-ms.vhdx) with the source index recorded in the sidecar.
 
+    A Windows Server 2025 Standard index can be built as a Datacenter: Azure
+    Edition gold the same way (-AzureEditionImageIndexes): its own build next to
+    any plain golds, edition changed offline after generalize. DISM lists that
+    target as ServerTurbine - the SKU's internal name - and only Server 2025
+    media carries it, so the rows are offered for 2025 Standard indexes and
+    nowhere else. The gold leaves as
+    hv-<language>-ws2025-datacenter-az-<core|desktop>.vhdx. Azure Edition is
+    licensed for Azure and Azure Local; features such as hotpatch need Arc
+    enrollment outside Azure, which is the deployment's business, not the image's.
+
     14 locales are
     supported (-Locale/-KeyboardLayout); -UiLanguage is always Auto - there is
     no language-pack source to satisfy anything else. A Hyper-V gold carries no
@@ -148,7 +158,11 @@ param (
 
     [Parameter(HelpMessage = "Image indexes to build as Windows 11 Enterprise multi-session golds - upgraded offline, after generalize. Each index here is its own build on top of whatever -ImageIndexes lists: the same index in both produces a Pro gold and a multi-session gold. Pass the index of a Windows 11 Pro image; the build aborts early if the image cannot become multi-session.")]
     [ValidateRange(1, 99)]
-    [int[]]$MultiSessionImageIndexes
+    [int[]]$MultiSessionImageIndexes,
+
+    [Parameter(HelpMessage = "Image indexes to build as Windows Server 2025 Datacenter: Azure Edition golds - upgraded offline, after generalize, same mechanism as -MultiSessionImageIndexes. Pass the index of a Windows Server 2025 Standard image; only Server 2025 media lists the Azure Edition target (DISM calls it ServerTurbine), and the build aborts early if the image cannot become it.")]
+    [ValidateRange(1, 99)]
+    [int[]]$AzureEditionImageIndexes
 )
 
 # ---------------------------[ Script Start Timestamp ]---------------------------
@@ -168,11 +182,32 @@ $enableLogFile = $true
 $logFileDirectory = Join-Path -Path $PSScriptRoot -ChildPath "logs\new-vhdx"
 $logFile          = Join-Path -Path $logFileDirectory -ChildPath $logFileName
 
-# ---------------------------[ Multi-Session Edition ]---------------------------
+# ---------------------------[ Virtual Edition Upgrades ]---------------------------
+# The virtual editions a gold can be upgraded to after generalize. Keyed by the
+# EditionUpgrade value a build spec carries ("" means a plain build). TargetPattern
+# matches DISM /Get-TargetEditions output - every SKU here goes by more than one
+# name depending on where you read it, so match the family and hand /Set-Edition
+# the exact string DISM printed. ManifestValue is what the sidecar records;
+# SourceHint explains which index to pick when a build aborts early.
+$script:VirtualEditionCatalog = @{
+    MultiSession = @{
+        TargetPattern = "(ServerRdsh|EnterpriseMultiSession)"
+        DisplayName   = "Windows 11 Enterprise multi-session"
+        ManifestValue = "EnterpriseMultiSession"
+        SourceHint    = "Use a Windows 11 Pro index: the edition packs are staged on the base edition, and an image already changed to a higher edition has none left to offer."
+    }
+    AzureEdition = @{
+        TargetPattern = "(ServerTurbine|ServerAzure[A-Za-z]*)"
+        DisplayName   = "Windows Server 2025 Datacenter: Azure Edition"
+        ManifestValue = "DatacenterAzureEdition"
+        SourceHint    = "Use a Windows Server 2025 Standard index: only Server 2025 media lists the Azure Edition target, and only on the base Standard edition."
+    }
+}
+
 # What DISM said this image can become, asked once during the apply phase and read
 # again after generalize. It is per-image state: the build loop does one image at a
 # time, and the apply phase overwrites this before anything downstream reads it.
-$script:MultiSessionTargetEdition = ""
+$script:EditionUpgradeTarget = ""
 
 if ($enableLogFile -and -not (Test-Path -Path $logFileDirectory)) {
     New-Item -ItemType Directory -Path $logFileDirectory -Force | Out-Null
@@ -653,7 +688,7 @@ function Get-VhdxFileName {
         [int]$ImageIndex,
         [string]$Target,
         [string]$ImageLanguage,
-        [bool]$UpgradeToMultiSession = $false
+        [string]$EditionUpgrade = ""
     )
 
     $methodPrefix = "azl"
@@ -662,11 +697,17 @@ function Get-VhdxFileName {
     }
 
     $slug = Get-ImageNameSlug -ImageName $ImageName -ImageIndex $ImageIndex
-    if ($UpgradeToMultiSession) {
-        # The gold is named for what it is when a VM boots it, not for the index it was
-        # applied from. A Pro image that leaves here as multi-session is w11-enterprise-ms
-        # to everything downstream; the sidecar keeps the source index honest.
+    # The gold is named for what it is when a VM boots it, not for the index it was
+    # applied from. A Pro image that leaves here as multi-session is w11-enterprise-ms
+    # to everything downstream, a Standard image that leaves as Azure Edition is
+    # ws2025-datacenter-az-*; the sidecar keeps the source index honest.
+    if ($EditionUpgrade -eq "MultiSession") {
         $slug = $slug -replace "^(w\d+)-.*$", '$1-enterprise-ms'
+    }
+    elseif ($EditionUpgrade -eq "AzureEdition") {
+        # Keeps the -core / -desktop tail: /Set-Edition changes the SKU, not the
+        # install type, so a Desktop Experience source stays Desktop Experience.
+        $slug = $slug -replace "^(ws\d+)-(standard|datacenter)", '$1-datacenter-az'
     }
     $language = Get-LanguageSlug -ImageLanguage $ImageLanguage
     return ("{0}-{1}-{2}.vhdx" -f $methodPrefix, $language, $slug).ToLowerInvariant()
@@ -693,7 +734,7 @@ function Write-GoldImageManifest {
         [string]$KeyboardLayout,
         [string]$TimeZone,
         [string]$ImageLanguage,
-        [bool]$UpgradedToMultiSession = $false
+        [string]$EditionUpgrade = ""
     )
 
     if ($Target -eq "AzureLocal") {
@@ -715,12 +756,12 @@ function Write-GoldImageManifest {
         createdUtc     = [DateTime]::UtcNow.ToString("yyyy-MM-ddTHH:mm:ssZ")
     }
 
-    if ($UpgradedToMultiSession) {
-        # imageName and imageIndex above describe the index that was applied - Pro. The
+    if (-not [string]::IsNullOrWhiteSpace($EditionUpgrade)) {
+        # imageName and imageIndex above describe the index that was applied. The
         # gold's file name describes what it became. Both are true and neither implies
         # the other, so the sidecar says so out loud.
         $manifest["sourceEdition"] = $ImageName
-        $manifest["editionUpgrade"] = "EnterpriseMultiSession"
+        $manifest["editionUpgrade"] = $script:VirtualEditionCatalog[$EditionUpgrade].ManifestValue
     }
 
     try {
@@ -2113,7 +2154,8 @@ function Start-InteractiveConfiguration {
         [bool]$CurrentSuppressFirstSignInAnimation = $false,
         [bool]$CurrentBlockSignInInputMethods = $false,
         [bool]$CurrentPreventDeviceEncryption = $true,
-        [int[]]$CurrentMultiSessionImageIndexes = @()
+        [int[]]$CurrentMultiSessionImageIndexes = @(),
+        [int[]]$CurrentAzureEditionImageIndexes = @()
     )
 
     $isoCandidates = @(Get-MountedIsoDriveCandidates)
@@ -2189,6 +2231,14 @@ function Start-InteractiveConfiguration {
             ([string]$_.ImageName) -match "(?i)\bpro\s*$"
         })
 
+    # Server 2025 Standard only, for the same DISM reason Pro is the multi-session
+    # source: the edition change is offered on the base edition of the family. Only
+    # Server 2025 media lists the Azure Edition target at all - 2022 ships it as a
+    # separate image with no conversion path - so older Server ISOs get no rows.
+    $azCandidates = @($images | Where-Object {
+            ([string]$_.ImageName) -match "(?i)windows\s+server\s+2025\s+standard"
+        })
+
     $editionItems = @()
     foreach ($image in $images) {
         $editionItems += [PSCustomObject]@{
@@ -2209,16 +2259,35 @@ function Start-InteractiveConfiguration {
             Section  = "Virtual editions"
         }
     }
+    foreach ($image in $azCandidates) {
+        # Core and Desktop Experience are separate rows from separate indexes, so the
+        # label carries the install type the source has - the edition change keeps it.
+        $installType = if (([string]$image.ImageName) -match "(?i)desktop") { " (Desktop Experience)" } else { "" }
+        $editionItems += [PSCustomObject]@{
+            Id       = "az:$($image.ImageIndex)"
+            Label    = "Index $($image.ImageIndex): Windows Server 2025 Datacenter: Azure Edition$installType"
+            Selected = ($CurrentAzureEditionImageIndexes -contains [int]$image.ImageIndex)
+            Section  = "Virtual editions"
+        }
+    }
 
     # The licensing caveat sits under the section header it belongs to, not at the top
     # of the whole menu. On Azure Local the SKU is where it is licensed to run, so
     # there is nothing to warn about.
     $editionSectionNotes = @{}
-    if ($msCandidates.Count -gt 0 -and $targetId -ne "AzureLocal") {
-        $editionSectionNotes["Virtual editions"] = @(
-            "This build targets Hyper-V. Multi-session is licensed for Azure Virtual Desktop,",
-            "so a gold built here is a lab image - not supported in production."
-        )
+    if ($targetId -ne "AzureLocal") {
+        $noteLines = @()
+        if ($msCandidates.Count -gt 0) {
+            $noteLines += "This build targets Hyper-V. Multi-session is licensed for Azure Virtual Desktop,"
+            $noteLines += "so a gold built here is a lab image - not supported in production."
+        }
+        if ($azCandidates.Count -gt 0) {
+            $noteLines += "Azure Edition is supported on Azure and Azure Local only; on plain Hyper-V it"
+            $noteLines += "boots but is a lab image, and hotpatch needs Arc enrollment either way."
+        }
+        if ($noteLines.Count -gt 0) {
+            $editionSectionNotes["Virtual editions"] = $noteLines
+        }
     }
 
     $editionChoice = Show-MultiSelectMenu -Title "Select edition(s) to build" -Items $editionItems `
@@ -2226,25 +2295,27 @@ function Start-InteractiveConfiguration {
         -StatusLines ([ordered]@{ iso = $isoStatus; target = $targetId })
     if ($null -eq $editionChoice) { return $null }
 
-    $selectedIndexes = @($editionChoice | Where-Object { $_ -notlike "ms:*" })
+    $selectedIndexes = @($editionChoice | Where-Object { $_ -notlike "ms:*" -and $_ -notlike "az:*" })
     $multiSessionIndexes = @($editionChoice | Where-Object { $_ -like "ms:*" } | ForEach-Object { [int]($_ -replace "^ms:", "") })
+    $azureEditionIndexes = @($editionChoice | Where-Object { $_ -like "az:*" } | ForEach-Object { [int]($_ -replace "^az:", "") })
 
     # All editions in one ISO share a product line, but detect per selected image so a
-    # mixed/unusual WIM still gates features correctly. Multi-session builds count too:
-    # their source index is a client image even when no plain row is ticked.
-    $chosenIndexUnion = @(@($selectedIndexes | ForEach-Object { [int]$_ }) + $multiSessionIndexes | Sort-Object -Unique)
+    # mixed/unusual WIM still gates features correctly. Virtual edition builds count
+    # too: their source index gates the same even when no plain row is ticked.
+    $chosenIndexUnion = @(@($selectedIndexes | ForEach-Object { [int]$_ }) + $multiSessionIndexes + $azureEditionIndexes | Sort-Object -Unique)
     $selectedImageObjects = @($images | Where-Object { $chosenIndexUnion -contains [int]$_.ImageIndex })
     $summaryParts = @(foreach ($image in $images) {
             if ($selectedIndexes -contains [string]$image.ImageIndex) { "#$($image.ImageIndex) $($image.ImageName)" }
             if ($multiSessionIndexes -contains [int]$image.ImageIndex) { "#$($image.ImageIndex) Windows 11 Enterprise multi-session" }
+            if ($azureEditionIndexes -contains [int]$image.ImageIndex) { "#$($image.ImageIndex) Windows Server 2025 Datacenter: Azure Edition" }
         })
     $editionsSummary = $summaryParts -join "; "
     $buildHasServer = (@($selectedImageObjects | Where-Object { -not (Test-IsClientImage -ImageName $_.ImageName) })).Count -gt 0
     $buildHasClient = (@($selectedImageObjects | Where-Object { Test-IsClientImage -ImageName $_.ImageName })).Count -gt 0
 
-    # Status-line value for every later screen: plain indexes as-is, multi-session
-    # builds marked so "5, 5 ms" reads as two golds from one index.
-    $imagesStatus = (@($selectedIndexes) + @($multiSessionIndexes | ForEach-Object { "$_ ms" })) -join ", "
+    # Status-line value for every later screen: plain indexes as-is, virtual edition
+    # builds marked so "5, 5 ms, 2 az" reads as separate golds from their indexes.
+    $imagesStatus = (@($selectedIndexes) + @($multiSessionIndexes | ForEach-Object { "$_ ms" }) + @($azureEditionIndexes | ForEach-Object { "$_ az" })) -join ", "
 
     Show-MenuHeader -Title "Output location" -Subtitle "Enter keeps the default" `
         -StatusLines ([ordered]@{
@@ -2352,6 +2423,11 @@ function Start-InteractiveConfiguration {
                 "index " + ($multiSessionIndexes -join ", ") + " built as own gold, upgraded after generalize"
             } else { "No" }) -LabelWidth 24 -IndentWidth 2
         }
+        if ($azCandidates.Count -gt 0) {
+            Write-FastfetchInfoRow -Label "azure edition" -Value $(if ($azureEditionIndexes.Count -gt 0) {
+                "index " + ($azureEditionIndexes -join ", ") + " built as own gold, upgraded after generalize"
+            } else { "No" }) -LabelWidth 24 -IndentWidth 2
+        }
         Write-FastfetchInfoRow -Label "output"   -Value $outputDirectory -LabelWidth 24 -IndentWidth 2
         Write-Host ""
         Write-Host "  Region" -ForegroundColor White
@@ -2412,6 +2488,7 @@ function Start-InteractiveConfiguration {
         BlockSignInInputMethods      = $blockSignIn
         PreventDeviceEncryption      = $preventDeviceEncryption
         MultiSessionImageIndexes     = @($multiSessionIndexes)
+        AzureEditionImageIndexes     = @($azureEditionIndexes)
     }
 }
 
@@ -2554,16 +2631,20 @@ function Dismount-ImageHive {
     & reg.exe unload $HiveRoot | Out-Null
 }
 
-function Get-MultiSessionTargetEdition {
-    # What DISM would let this image become, filtered down to the one edition we care
-    # about. Two names exist for it - the registry calls it ServerRdsh, DISM's own
-    # output says EnterpriseMultiSession - so match either and hand back the string
-    # DISM printed, because that is what /Set-Edition has to be given.
+function Get-VirtualEditionTarget {
+    # What DISM would let this image become, filtered down to the one edition the
+    # build spec asks for. Every SKU here goes by more than one name - the registry
+    # calls multi-session ServerRdsh where DISM says EnterpriseMultiSession, and
+    # Azure Edition surfaces as ServerTurbine - so match the family and hand back
+    # the string DISM printed, because that is what /Set-Edition has to be given.
     #
-    # Returns $null when the image cannot become multi-session. That is an answer, not
+    # Returns $null when the image cannot become the target. That is an answer, not
     # a failure: an image whose edition packs were never staged simply has no path
     # there, and the caller decides what to do about it.
-    param([string]$OsRoot)
+    param(
+        [string]$OsRoot,
+        [string]$EditionUpgrade
+    )
 
     Write-Log "Checking via DISM which editions the image can become" -Tag "Get"
     $result = Invoke-DismRaw -Arguments @("/Image:$OsRoot", "/Get-TargetEditions")
@@ -2571,11 +2652,12 @@ function Get-MultiSessionTargetEdition {
         throw "dism.exe /Get-TargetEditions failed (exit $($result.ExitCode)): $($result.Output)"
     }
 
+    $pattern = [string]$script:VirtualEditionCatalog[$EditionUpgrade].TargetPattern
     # No log line for the hit itself - every caller reports the answer with its own
     # context (index, or the reason a build stopped), and two lines saying the same
     # thing four seconds apart read like a stutter.
     foreach ($line in $result.Output) {
-        if ("$line" -match "(ServerRdsh|EnterpriseMultiSession)") {
+        if ("$line" -match $pattern) {
             return $Matches[1]
         }
     }
@@ -2599,7 +2681,7 @@ function Get-TargetEditionSummary {
     return ($editions -join ", ")
 }
 
-function Convert-ToMultiSessionEdition {
+function Convert-ToVirtualEdition {
     # Runs AFTER generalize, on purpose. Applying the edition before sysprep is what
     # left the image owing Windows a restart that sysprep refuses to work around; a
     # base edition generalizes cleanly and takes the edition change afterwards, and
@@ -2609,7 +2691,10 @@ function Convert-ToMultiSessionEdition {
     # No product key: offline edition changes don't take one, and on Azure Local the
     # VM activates from the host's verification token rather than from anything baked
     # in here.
-    param([string]$VhdPath)
+    param(
+        [string]$VhdPath,
+        [string]$EditionUpgrade
+    )
 
     $converted = $false
     $mounted = $false
@@ -2621,13 +2706,13 @@ function Convert-ToMultiSessionEdition {
         # the answer. Asking again would be the same question about the same disk -
         # sysprep does not stage or unstage edition packs. If /Set-Edition disagrees it
         # says so itself, and that error lands in the catch below.
-        $targetEdition = [string]$script:MultiSessionTargetEdition
+        $targetEdition = [string]$script:EditionUpgradeTarget
         if ([string]::IsNullOrWhiteSpace($targetEdition)) {
             # Only reachable if this is called outside the build pipeline.
-            $targetEdition = Get-MultiSessionTargetEdition -OsRoot $mountRoot
+            $targetEdition = Get-VirtualEditionTarget -OsRoot $mountRoot -EditionUpgrade $EditionUpgrade
         }
         if ([string]::IsNullOrWhiteSpace($targetEdition)) {
-            throw "No multi-session target edition for this image (can become: $(Get-TargetEditionSummary -OsRoot $mountRoot))"
+            throw "No $($script:VirtualEditionCatalog[$EditionUpgrade].DisplayName) target edition for this image (can become: $(Get-TargetEditionSummary -OsRoot $mountRoot))"
         }
 
         Write-Log "Changing offline edition to '$targetEdition'" -Tag "Run"
@@ -3233,7 +3318,7 @@ function New-WindowsVhdxImage {
         [string]$VhdType,
         [string]$ProductKey,
         [string]$TempBootUnattendContent,
-        [bool]$RequireMultiSession = $false
+        [string]$EditionUpgrade = ""
     )
 
     $previousErrorAction = $ErrorActionPreference
@@ -3245,15 +3330,16 @@ function New-WindowsVhdxImage {
         Initialize-VhdxLayout -VhdPath $VhdPath
         Install-WindowsImageToVhdx -WimPath $WimPath -ImageIndex $ImageIndex
 
-        if ($RequireMultiSession) {
+        if (-not [string]::IsNullOrWhiteSpace($EditionUpgrade)) {
             # Asked here, while the image is already mounted and before the temporary VM
-            # has cost twenty minutes. An image that cannot become multi-session will not
-            # become one after a sysprep either, so there is nothing to gain by finding
-            # out later.
-            $script:MultiSessionTargetEdition = Get-MultiSessionTargetEdition -OsRoot "W:\"
-            $targetEdition = $script:MultiSessionTargetEdition
+            # has cost twenty minutes. An image that cannot become the target edition
+            # will not become it after a sysprep either, so there is nothing to gain by
+            # finding out later.
+            $editionInfo = $script:VirtualEditionCatalog[$EditionUpgrade]
+            $script:EditionUpgradeTarget = Get-VirtualEditionTarget -OsRoot "W:\" -EditionUpgrade $EditionUpgrade
+            $targetEdition = $script:EditionUpgradeTarget
             if ([string]::IsNullOrWhiteSpace($targetEdition)) {
-                throw "Index $ImageIndex cannot be upgraded to Enterprise multi-session - DISM lists no ServerRdsh/EnterpriseMultiSession target for it (can become: $(Get-TargetEditionSummary -OsRoot 'W:\')). Use a Windows 11 Pro index: the edition packs are staged on the base edition, and an image already changed to a higher edition has none left to offer."
+                throw "Index $ImageIndex cannot be upgraded to $($editionInfo.DisplayName) - DISM lists no matching target for it (can become: $(Get-TargetEditionSummary -OsRoot 'W:\')). $($editionInfo.SourceHint)"
             }
             Write-Log "Index $ImageIndex can become '$targetEdition' - continuing" -Tag "Ok"
         }
@@ -3677,7 +3763,7 @@ function Invoke-ImageBuildPipeline {
         [bool]$SuppressFirstSignInAnimation = $false,
         [bool]$BlockSignInInputMethods = $false,
         [bool]$PreventDeviceEncryption = $false,
-        [bool]$UpgradeToMultiSession = $false
+        [string]$EditionUpgrade = ""
     )
 
     $isDatacenter = Test-IsServerDatacenterImage -ImageName $ImageName
@@ -3685,7 +3771,13 @@ function Invoke-ImageBuildPipeline {
     $avmaKey = ""
     $productKey = ""
 
-    if ($isDatacenter) {
+    if ($EditionUpgrade -eq "AzureEdition") {
+        # Microsoft publishes no AVMA key for Datacenter: Azure Edition, and the
+        # Datacenter key belongs to a SKU this gold will not carry once /Set-Edition
+        # has run. The gold leaves keyless; activation is the deployment's business.
+        Write-Log "Azure Edition build - no AVMA key applies to that SKU" -Tag "Info"
+    }
+    elseif ($isDatacenter) {
         $avmaKey = Get-AvmaDatacenterKey
         if ($Target -eq "HyperV") {
             $productKey = $avmaKey
@@ -3706,7 +3798,7 @@ function Invoke-ImageBuildPipeline {
     $built = New-WindowsVhdxImage -VhdPath $VhdPath -ImageIndex $ImageIndex -WimPath $WimPath `
         -Target $Target -Locale $Locale -KeyboardLayout $KeyboardLayout -UiLanguage $UiLanguage `
         -TimeZone $TimeZone -VhdSizeGB $VhdSizeGB -VhdType $VhdType -ProductKey $productKey `
-        -TempBootUnattendContent $tempBootUnattend -RequireMultiSession $UpgradeToMultiSession
+        -TempBootUnattendContent $tempBootUnattend -EditionUpgrade $EditionUpgrade
 
     if (-not $built) {
         return $false
@@ -3721,9 +3813,9 @@ function Invoke-ImageBuildPipeline {
         Write-Log "Skipping generalize for '$VhdPath' (SkipSysprep set)" -Tag "Info"
     }
 
-    if ($UpgradeToMultiSession) {
-        if (-not (Convert-ToMultiSessionEdition -VhdPath $VhdPath)) {
-            # The disk carries a multi-session name and is not multi-session. Leaving it
+    if (-not [string]::IsNullOrWhiteSpace($EditionUpgrade)) {
+        if (-not (Convert-ToVirtualEdition -VhdPath $VhdPath -EditionUpgrade $EditionUpgrade)) {
+            # The disk carries the upgraded edition's name and does not carry the edition. Leaving it
             # on disk would hand Build-Vms or Azure Local a gold that lies about itself,
             # so it goes.
             Write-Log "Deleting '$VhdPath' - a gold named for an edition it does not carry is worse than no gold" -Tag "Warn"
@@ -3768,7 +3860,8 @@ $hasImageSelection = (
     ($ImageIndexes -and $ImageIndexes.Count -gt 0) -or
     ($CoreImageIndex -ge 1) -or
     ($GuiImageIndex -ge 1) -or
-    (@($MultiSessionImageIndexes).Count -gt 0)
+    (@($MultiSessionImageIndexes).Count -gt 0) -or
+    (@($AzureEditionImageIndexes).Count -gt 0)
 )
 
 $needsInteractive = (
@@ -3787,7 +3880,8 @@ if ($needsInteractive) {
         -CurrentSuppressFirstSignInAnimation $SuppressFirstSignInAnimation `
         -CurrentBlockSignInInputMethods $BlockSignInInputMethods `
         -CurrentPreventDeviceEncryption $PreventDeviceEncryption `
-        -CurrentMultiSessionImageIndexes @($MultiSessionImageIndexes)
+        -CurrentMultiSessionImageIndexes @($MultiSessionImageIndexes) `
+        -CurrentAzureEditionImageIndexes @($AzureEditionImageIndexes)
 
     if ($null -eq $config) {
         Write-Log "Cancelled at the configuration menu - nothing was built" -Tag "Info"
@@ -3817,6 +3911,7 @@ if ($needsInteractive) {
     $BlockSignInInputMethods = $config.BlockSignInInputMethods
     $PreventDeviceEncryption = $config.PreventDeviceEncryption
     $MultiSessionImageIndexes = @($config.MultiSessionImageIndexes)
+    $AzureEditionImageIndexes = @($config.AzureEditionImageIndexes)
 }
 
 if ([string]::IsNullOrWhiteSpace($IsoDrive) -and -not [string]::IsNullOrWhiteSpace($IsoPath)) {
@@ -3853,7 +3948,7 @@ if ($availableImages.Count -eq 0) {
 }
 Write-Log "$($availableImages.Count) image(s) in '$wimPath'" -Tag "Get"
 
-# A run may carry only multi-session builds. Resolve-SelectedImageIndexes falls back
+# A run may carry only virtual edition builds. Resolve-SelectedImageIndexes falls back
 # to -Build/-CoreImageIndex/-GuiImageIndex when -ImageIndexes is empty and would
 # demand them, so it is only consulted when a plain selection was actually given.
 $selectedIndexes = @()
@@ -3873,20 +3968,24 @@ if ($hasPlainSelection) {
     }
 }
 
-if ($selectedIndexes.Count -eq 0 -and @($MultiSessionImageIndexes).Count -eq 0) {
+if ($selectedIndexes.Count -eq 0 -and @($MultiSessionImageIndexes).Count -eq 0 -and @($AzureEditionImageIndexes).Count -eq 0) {
     Write-Log "No image indexes selected to build" -Tag "Error"
     Complete-Script -ExitCode 1
 }
 
-# One entry per gold that leaves this run. A plain index and a multi-session upgrade
-# of the same index are two entries on purpose: the gold names differ
-# (w11-pro / w11-enterprise-ms), so one run can produce both from one index.
+# One entry per gold that leaves this run. A plain index and a virtual edition
+# upgrade of the same index are two entries on purpose: the gold names differ
+# (w11-pro / w11-enterprise-ms, ws2025-standard-core / ws2025-datacenter-az-core),
+# so one run can produce both from one index.
 $buildSpecs = @()
 foreach ($imageIndex in $selectedIndexes) {
-    $buildSpecs += [PSCustomObject]@{ ImageIndex = [int]$imageIndex; UpgradeToMultiSession = $false }
+    $buildSpecs += [PSCustomObject]@{ ImageIndex = [int]$imageIndex; EditionUpgrade = "" }
 }
 foreach ($imageIndex in @(@($MultiSessionImageIndexes) | Sort-Object -Unique)) {
-    $buildSpecs += [PSCustomObject]@{ ImageIndex = [int]$imageIndex; UpgradeToMultiSession = $true }
+    $buildSpecs += [PSCustomObject]@{ ImageIndex = [int]$imageIndex; EditionUpgrade = "MultiSession" }
+}
+foreach ($imageIndex in @(@($AzureEditionImageIndexes) | Sort-Object -Unique)) {
+    $buildSpecs += [PSCustomObject]@{ ImageIndex = [int]$imageIndex; EditionUpgrade = "AzureEdition" }
 }
 $buildIndexes = @($buildSpecs | ForEach-Object { $_.ImageIndex } | Sort-Object -Unique)
 
@@ -3920,9 +4019,12 @@ if ($runHasClient) {
 if (@($MultiSessionImageIndexes).Count -gt 0) {
     Write-Log "Upgrading to Enterprise multi-session after generalize: index $(@($MultiSessionImageIndexes) -join ', ')" -Tag "Info"
 }
+if (@($AzureEditionImageIndexes).Count -gt 0) {
+    Write-Log "Upgrading to Datacenter: Azure Edition after generalize: index $(@($AzureEditionImageIndexes) -join ', ')" -Tag "Info"
+}
 $selectedNames = foreach ($buildSpec in $buildSpecs) {
-    if ($buildSpec.UpgradeToMultiSession) {
-        "$($buildSpec.ImageIndex) Windows 11 Enterprise multi-session"
+    if (-not [string]::IsNullOrWhiteSpace($buildSpec.EditionUpgrade)) {
+        "$($buildSpec.ImageIndex) $($script:VirtualEditionCatalog[$buildSpec.EditionUpgrade].DisplayName)"
     }
     else {
         $match = $availableImages | Where-Object { $_.ImageIndex -eq $buildSpec.ImageIndex } | Select-Object -First 1
@@ -3965,7 +4067,7 @@ $allSucceeded = $true
 
 foreach ($buildSpec in $buildSpecs) {
     $imageIndex = $buildSpec.ImageIndex
-    $upgradeToMultiSession = $buildSpec.UpgradeToMultiSession
+    $editionUpgrade = [string]$buildSpec.EditionUpgrade
     $imageInfo = $availableImages | Where-Object { $_.ImageIndex -eq $imageIndex } | Select-Object -First 1
     if ($null -eq $imageInfo) {
         Write-Log "Image index $imageIndex was not found in '$wimPath'" -Tag "Error"
@@ -3976,12 +4078,12 @@ foreach ($buildSpec in $buildSpecs) {
     $imageLanguage = [string]$imageLanguages[$imageIndex]
     $resolvedUi = Resolve-UiLanguage -UiLanguage $UiLanguage -ImageLanguage $imageLanguage
     $vhdxName = Get-VhdxFileName -ImageName $imageInfo.ImageName -ImageIndex $imageIndex -Target $Target `
-        -ImageLanguage $imageLanguage -UpgradeToMultiSession $upgradeToMultiSession
+        -ImageLanguage $imageLanguage -EditionUpgrade $editionUpgrade
     $vhdPath = Join-Path -Path $OutputDirectory -ChildPath $vhdxName
 
     # Named for what the gold IS when it leaves, not the index it came from - a
-    # multi-session build applies Pro but ships Enterprise multi-session.
-    $buildDisplayName = if ($upgradeToMultiSession) { "Windows 11 Enterprise multi-session" } else { $imageInfo.ImageName }
+    # virtual edition build applies the base edition but ships the upgraded SKU.
+    $buildDisplayName = if ($editionUpgrade) { [string]$script:VirtualEditionCatalog[$editionUpgrade].DisplayName } else { $imageInfo.ImageName }
     Write-Log "Building '$buildDisplayName' -> '$vhdPath'" -Tag "Info"
 
     $ok = Invoke-ImageBuildPipeline -VhdPath $vhdPath -ImageIndex $imageIndex `
@@ -3994,7 +4096,7 @@ foreach ($buildSpec in $buildSpecs) {
         -SuppressFirstSignInAnimation $SuppressFirstSignInAnimation `
         -BlockSignInInputMethods $BlockSignInInputMethods `
         -PreventDeviceEncryption $PreventDeviceEncryption `
-        -UpgradeToMultiSession $upgradeToMultiSession
+        -EditionUpgrade $editionUpgrade
 
     if (-not $ok) {
         $allSucceeded = $false
@@ -4003,7 +4105,7 @@ foreach ($buildSpec in $buildSpecs) {
 
     $manifestOk = Write-GoldImageManifest -VhdPath $vhdPath -ImageName $imageInfo.ImageName `
         -ImageIndex $imageIndex -Target $Target -Locale $Locale -KeyboardLayout $KeyboardLayout `
-        -TimeZone $TimeZone -ImageLanguage $imageLanguage -UpgradedToMultiSession $upgradeToMultiSession
+        -TimeZone $TimeZone -ImageLanguage $imageLanguage -EditionUpgrade $editionUpgrade
     if (-not $manifestOk) {
         $allSucceeded = $false
     }

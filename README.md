@@ -41,7 +41,7 @@ Three parts, used in that order:
 
 | | |
 |---|---|
-| <picture><source media="(prefers-color-scheme: dark)" srcset=".github/assets/icons/gold-image-dark.png"><img src=".github/assets/icons/gold-image-light.png" width="16" alt=""></picture> **`New-Vhdx.ps1`** | Turns a Windows ISO into a generalized Gen2 gold image. Server 2016–2025, Windows 11 — including Enterprise multi-session. |
+| <picture><source media="(prefers-color-scheme: dark)" srcset=".github/assets/icons/gold-image-dark.png"><img src=".github/assets/icons/gold-image-light.png" width="16" alt=""></picture> **`New-Vhdx.ps1`** | Turns a Windows ISO into a generalized Gen2 gold image. Server 2016–2025, Windows 11 — including Enterprise multi-session and Server 2025 Datacenter: Azure Edition. |
 | <picture><source media="(prefers-color-scheme: dark)" srcset=".github/assets/icons/monitor-dark.png"><img src=".github/assets/icons/monitor-light.png" width="16" alt=""></picture> **The studio** | A single HTML file. Click the lab together — machines, disks, networks, domain join, Windows roles — and download `config.json`. |
 | <picture><source media="(prefers-color-scheme: dark)" srcset=".github/assets/icons/powershell-dark.png"><img src=".github/assets/icons/powershell-light.png" width="16" alt=""></picture> **`Build-Vms.ps1`** | Reads that file on the host. Differencing disks, answer files, VMs created and started. |
 
@@ -96,11 +96,19 @@ at a drive that is already mounted.
 **Editions** — a multi-select over every index the ISO carries. Build the ones you will
 actually deploy.
 
-**Enterprise multi-session** — when the ISO carries a Windows 11 Pro index, the edition
-list grows a virtual-edition row for it. Each tick is its own build — tick both the Pro row
-and its multi-session row and one run produces both golds from the same index.
+**Virtual editions** — some SKUs never ship on ISO media and are reached by an offline
+edition change after generalize instead. When the ISO carries a matching base index, the
+edition list grows a virtual-edition row for it. Each tick is its own build — tick both
+the base row and its virtual-edition row and one run produces both golds from the same index.
 
-> <picture><source media="(prefers-color-scheme: dark)" srcset=".github/assets/icons/help-dark.png"><img src=".github/assets/icons/help-light.png" width="16" alt=""></picture> Only buildable from Pro. Licensed for AVD — activates on Azure Local, not on plain Hyper-V.
+- **Enterprise multi-session** — offered on a Windows 11 Pro index.
+- **Datacenter: Azure Edition** — offered on a Windows Server 2025 Standard index (Core
+  and Desktop Experience each get their own row). Server 2025 only — older media has no
+  conversion path to this SKU.
+
+> <picture><source media="(prefers-color-scheme: dark)" srcset=".github/assets/icons/help-dark.png"><img src=".github/assets/icons/help-light.png" width="16" alt=""></picture> Multi-session is only buildable from Pro. Licensed for AVD — activates on Azure Local, not on plain Hyper-V.
+
+> <picture><source media="(prefers-color-scheme: dark)" srcset=".github/assets/icons/help-dark.png"><img src=".github/assets/icons/help-light.png" width="16" alt=""></picture> Azure Edition is supported on Azure and Azure Local only; on plain Hyper-V it boots as a lab image. Hotpatch needs Arc enrollment outside Azure, and no AVMA key exists for the SKU — the gold leaves keyless.
 
 **Locale, keyboard, time zone** — baked into the image, with fourteen locales to pick from.
 The UI language stays whatever the ISO shipped.
@@ -179,6 +187,9 @@ Everything the menu asks can be passed instead — useful once a build is routin
 
 # An AVD session host gold for Azure Local: multi-session built from the Pro index
 .\New-Vhdx.ps1 -IsoPath .\isos\win11.iso -Target AzureLocal -MultiSessionImageIndexes 5
+
+# Datacenter: Azure Edition built from the Server 2025 Standard Core index
+.\New-Vhdx.ps1 -IsoPath .\isos\server2025.iso -Target AzureLocal -AzureEditionImageIndexes 1
 
 # Windows default BitLocker behavior instead of the opt-out
 .\New-Vhdx.ps1 -IsoPath .\isos\win11.iso -ImageIndexes 5 -PreventDeviceEncryption $false
