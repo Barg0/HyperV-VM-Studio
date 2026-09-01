@@ -447,6 +447,11 @@
   .role-check svg { width: 10px; height: 10px; opacity: 0; }
   .role-row.on .role-check svg,
   .role-child.on .role-check svg { opacity: 1; }
+  .app-cat-head {
+    font-size: 11px; font-weight: 600; color: var(--fg-muted);
+    text-transform: uppercase; letter-spacing: .3px; margin: 12px 2px 2px;
+  }
+  .toggle-label img.app-glyph { width: 16px; height: 16px; vertical-align: -3px; margin-right: 4px; }
   .role-children {
     background: var(--bg-subtle);
     border-top: 1px solid var(--divider);
@@ -1684,6 +1689,55 @@ ICON_TEMPLATES["os-server-panes.svg"] = { band: "work", markup: OS_RACK };
    inside the panel only crowded it at 12px. The band still carries the colour. */
 ICON_TEMPLATES["os-client-panes.svg"] = { band: "host", markup:
   '<g fill="@H"><rect x="1.4" y="1.8" width="15.2" height="10.4" rx="1.4"/><rect x="7.7" y="12.9" width="2.6" height="1.9" rx=".5"/><rect x="4.2" y="14.9" width="9.6" height="1.7" rx=".85"/></g>' };
+
+/* ---- one glyph per removable built-in app: [note, markup] ----
+   Registered host blue, but rendered with the band of the app's category (see
+   APP_CAT_BANDS) - the same readability exception the role catalog makes: forty
+   rows in one hue on one card is a wall, and the colour restates the grouping the
+   headers already give. Drawn from what each app does, never from a vendor logo.
+   A product family shares one drawing (all seven Xbox packages are the
+   controller) - the label tells them apart, the glyph names the family. */
+const APPGLYPHS = {
+  "app-xbox.svg": ["A game controller for the whole Xbox family", '<g fill="@H"><path d="M3.4 5.4h11.2a2.9 2.9 0 0 1 2.9 2.9l-.5 4.1a2.3 2.3 0 0 1-4 1.2l-1.4-1.6H6.4L5 13.6a2.3 2.3 0 0 1-4-1.2l-.5-4.1a2.9 2.9 0 0 1 2.9-2.9z"/></g>' + S + '<path d="M5.5 8v2.6M4.2 9.3h2.6"/><path d="M12 8.6h.01M13.8 10.2h.01" stroke-width="1.7"/></g>'],
+  "app-solitaire.svg": ["A playing card, diamond up", '<g fill="@H"><rect x="4.6" y="1.6" width="8.8" height="14.8" rx="1.5"/></g>' + S + '<path d="M9 6l2.3 3L9 12 6.7 9z"/></g>'],
+  "app-teams.svg": ["Two chat bubbles, one conversation", '<g fill="@H"><path d="M1.4 4.4a1.8 1.8 0 0 1 1.8-1.8h7a1.8 1.8 0 0 1 1.8 1.8v4a1.8 1.8 0 0 1-1.8 1.8H6.4l-2.8 2.2v-2.2h-.4a1.8 1.8 0 0 1-1.8-1.8z"/><path d="M13.2 6h1.6a1.8 1.8 0 0 1 1.8 1.8v3.6a1.8 1.8 0 0 1-1.8 1.8h-.6v2.2l-2.7-2.2H9.2a1.8 1.8 0 0 1-1.6-1h3.2a2.4 2.4 0 0 0 2.4-2.4z"/></g>' + S + '<path d="M4.2 5.6h5M4.2 7.4h3.4"/></g>'],
+  "app-call.svg": ["A phone handset - voice calls", '<g fill="@H"><path d="M3.2 1.8l3.1.7.8 3.4-1.8 1.5a10.2 10.2 0 0 0 5.3 5.3l1.5-1.8 3.4.8.7 3.1a1.4 1.4 0 0 1-1.4 1.4C7.6 16.2 1.8 10.4 1.8 3.2a1.4 1.4 0 0 1 1.4-1.4z"/></g>'],
+  "app-phone-link.svg": ["The phone itself, linked to the PC", '<g fill="@H"><rect x="5.2" y="1.4" width="7.6" height="15.2" rx="1.8"/></g>' + S + '<path d="M7.8 3.6h2.4M8 14.4h2"/></g>'],
+  "app-mail.svg": ["A closed envelope", '<g fill="@H"><rect x="1.6" y="3.4" width="14.8" height="11.2" rx="1.5"/></g>' + S + '<path d="M2.6 5L9 9.8 15.4 5"/></g>'],
+  "app-outlook.svg": ["An opened envelope with its letter", '<g fill="@H"><path d="M9 1.8l7.2 4.6v8.2a1.4 1.4 0 0 1-1.4 1.4H3.2a1.4 1.4 0 0 1-1.4-1.4V6.4z"/></g>' + S + '<path d="M1.8 6.8L9 11.4l7.2-4.6M5.8 5.2V3.4h6.4v1.8"/></g>'],
+  "app-copilot.svg": ["The assistant spark", '<g fill="@H"><path d="M8.4 1.8l1.6 4.9 4.9 1.6-4.9 1.6-1.6 4.9-1.6-4.9-4.9-1.6 4.9-1.6z"/></g>' + S + '<path d="M14 11.6l.7 2 2 .7-2 .7-.7 2-.7-2-2-.7 2-.7z"/></g>'],
+  "app-cortana.svg": ["The listening ring", '<g fill="@H"><path d="M9 1.6A7.4 7.4 0 1 1 1.6 9 7.4 7.4 0 0 1 9 1.6zm0 3.2A4.2 4.2 0 1 0 13.2 9 4.2 4.2 0 0 0 9 4.8z"/></g>'],
+  "app-news.svg": ["A folded newspaper", '<g fill="@H"><path d="M1.6 3.4h11.8v10.2a1.6 1.6 0 0 0 1.6 1.6H3.4a1.8 1.8 0 0 1-1.8-1.8z"/><path d="M14.4 6h2v7.6a1.6 1.6 0 0 1-1.6 1.6h-.4z"/></g>' + S + '<path d="M3.8 6h3v3h-3zM8.8 6.4h2.4M8.8 8.8h2.4M3.8 11.6h7.4"/></g>'],
+  "app-weather.svg": ["Sun behind a cloud", '<g fill="@H"><circle cx="6" cy="5.8" r="3.1"/><path d="M5 15.6a3.1 3.1 0 0 1-.3-6.2 4.3 4.3 0 0 1 8.2-.9 3.3 3.3 0 0 1 .5 6.5z"/></g>' + S + '<path d="M6 1v1M1.2 5.8h1M2.4 2.2l.7.7"/></g>'],
+  "app-movies.svg": ["A film strip playing", '<g fill="@H"><rect x="1.6" y="3" width="14.8" height="12" rx="1.4"/></g>' + S + '<path d="M4.4 3.2v11.6M13.6 3.2v11.6M1.8 6h2.4M1.8 9h2.4M1.8 12h2.4M13.8 6h2.4M13.8 9h2.4M13.8 12h2.4M7.5 7.4l3.2 1.6-3.2 1.6z"/></g>'],
+  "app-music.svg": ["A beamed note", '<g fill="@H"><path d="M6.2 3.4l8.6-1.9v9.7a2.5 2.5 0 1 1-1.6-2.3V4.6L7.8 5.8v7.4a2.5 2.5 0 1 1-1.6-2.3z"/></g>'],
+  "app-camera.svg": ["The camera body and its lens", '<g fill="@H"><path d="M6.2 2.8h5.6l1 2h2.4a1.4 1.4 0 0 1 1.4 1.4v7.6a1.4 1.4 0 0 1-1.4 1.4H2.8a1.4 1.4 0 0 1-1.4-1.4V6.2a1.4 1.4 0 0 1 1.4-1.4h2.4z"/></g>' + S + '<circle cx="9" cy="10" r="2.6"/></g>'],
+  "app-clipchamp.svg": ["A clapperboard mid-cut", '<g fill="@H"><path d="M1.6 7h14.8v7.4a1.4 1.4 0 0 1-1.4 1.4H3a1.4 1.4 0 0 1-1.4-1.4z"/><path d="M1.9 6.2l-.3-2.4L15.8 2l.3 2.4z"/></g>' + S + '<path d="M5.2 3.4l1.5 2.2M9.6 2.8l1.5 2.2M4.6 10.4h4.6"/></g>'],
+  "app-recorder.svg": ["A microphone on its stand", '<g fill="@H"><rect x="6.6" y="1.4" width="4.8" height="9" rx="2.4"/></g>' + S + '<path d="M4 8.4a5 5 0 0 0 10 0M9 13.4v3M6.6 16.4h4.8"/></g>'],
+  "app-paint.svg": ["A palette with its wells", '<g fill="@H"><path d="M9 1.6a7.4 7.4 0 0 0 0 14.8c1.4 0 1.9-.9 1.4-1.9-.6-1.2 0-2.5 1.5-2.5h1.9A2.6 2.6 0 0 0 16.4 9 7.4 7.4 0 0 0 9 1.6z"/></g>' + S + '<path d="M5.2 6.2h.01M9 4.6h.01M12.6 6.4h.01M4.6 10h.01" stroke-width="1.8"/></g>'],
+  "app-vr.svg": ["A headset with room for a nose", '<g fill="@H"><path d="M2.8 4.6h12.4a1.4 1.4 0 0 1 1.4 1.4v5a1.4 1.4 0 0 1-1.4 1.4h-3.1L10.6 11a2.1 2.1 0 0 0-3.2 0l-1.5 1.4H2.8a1.4 1.4 0 0 1-1.4-1.4V6a1.4 1.4 0 0 1 1.4-1.4z"/></g>' + S + '<circle cx="5.8" cy="8.4" r="1"/><circle cx="12.2" cy="8.4" r="1"/></g>'],
+  "app-office.svg": ["The work briefcase", '<g fill="@H"><rect x="1.6" y="5.4" width="14.8" height="9.8" rx="1.4"/><path d="M6.4 5V3.4A1.4 1.4 0 0 1 7.8 2h2.4a1.4 1.4 0 0 1 1.4 1.4V5h-1.7V3.7H8.1V5z"/></g>' + S + '<path d="M1.8 9.2h14.4M9 8.2v2"/></g>'],
+  "app-onenote.svg": ["A ruled notebook with its spine", '<g fill="@H"><rect x="3.4" y="1.6" width="11.2" height="14.8" rx="1.4"/></g>' + S + '<path d="M6.4 1.8v14.4M8.8 5h3.4M8.8 7.8h3.4M8.8 10.6h2.2"/></g>'],
+  "app-sticky.svg": ["The folded corner", '<g fill="@H"><path d="M2.4 2.4h13.2v8.4l-4.8 4.8H2.4z"/></g>' + S + '<path d="M10.8 15.2v-4.4h4.4M4.8 6h6M4.8 8.8h4"/></g>'],
+  "app-journal.svg": ["A bound book, pen resting on it", '<g fill="@H"><path d="M3 2.8a1.2 1.2 0 0 1 1.2-1.2h9.6A1.2 1.2 0 0 1 15 2.8v12.4a1.2 1.2 0 0 1-1.2 1.2H4.2A1.2 1.2 0 0 1 3 15.2z"/></g>' + S + '<path d="M3.2 4.8h11.6M6.4 8.4h3M11.2 12.8l2.6-2.6"/></g>'],
+  "app-whiteboard.svg": ["A board on its legs, ink flowing", '<g fill="@H"><rect x="1.6" y="2.2" width="14.8" height="9.8" rx="1.4"/></g>' + S + '<path d="M5.2 12.4l-1.4 3.4M12.8 12.4l1.4 3.4M4.6 7.6c1.5-2.3 3-2.3 4.4 0s2.9 2.3 4.4 0"/></g>'],
+  "app-automate.svg": ["A flow moving right", '<g fill="@H"><path d="M1.8 2.8h8.4l5.8 6.2-5.8 6.2H1.8l5.8-6.2z"/></g>'],
+  "app-alarms.svg": ["An alarm clock with its bells", '<g fill="@H"><circle cx="9" cy="9.8" r="6.8"/><path d="M2.4 3.9L4.9 1.6l1.3 1.5L3.7 5.4zM15.6 3.9L13.1 1.6l-1.3 1.5 2.5 2.3z"/></g>' + S + '<path d="M9 6.4v3.6l2.6 1.6"/></g>'],
+  "app-feedback.svg": ["A megaphone saying something back", '<g fill="@H"><path d="M2 7.2l9.6-4.7a1 1 0 0 1 1.4.9v11.2a1 1 0 0 1-1.4.9L2 10.8a1 1 0 0 1-.6-.9V8.1a1 1 0 0 1 .6-.9z"/><path d="M14.2 6.2a3.2 3.2 0 0 1 0 5.6z"/><path d="M4.4 11.6l1 3.5a1.1 1.1 0 0 0 1.1.8h.9a.9.9 0 0 0 .9-1.2l-.9-2.5z"/></g>'],
+  "app-gethelp.svg": ["A life ring", '<g fill="@H"><path d="M9 1.6A7.4 7.4 0 1 1 1.6 9 7.4 7.4 0 0 1 9 1.6zm0 4.6A2.8 2.8 0 1 0 11.8 9 2.8 2.8 0 0 0 9 6.2z"/></g>' + S + '<path d="M7 7L4.2 4.2M11 7l2.8-2.8M7 11l-2.8 2.8M11 11l2.8 2.8"/></g>'],
+  "app-tips.svg": ["A lit bulb", '<g fill="@H"><path d="M9 1.6a5.6 5.6 0 0 1 3.2 10.2c-.6.5-1 1-1 1.7H6.8c0-.7-.4-1.2-1-1.7A5.6 5.6 0 0 1 9 1.6z"/><rect x="6.8" y="14.4" width="4.4" height="2.2" rx="1"/></g>' + S + '<path d="M9 7.2v3.2"/></g>'],
+  "app-family.svg": ["The safety shield holding two people", '<g fill="@H"><path d="M9 1.4l6.4 2.4v5.4c0 3.6-2.8 6.2-6.4 7.4-3.6-1.2-6.4-3.8-6.4-7.4V3.8z"/></g>' + S + '<circle cx="6.9" cy="7" r="1.4"/><circle cx="11.2" cy="7.4" r="1.1"/><path d="M4.8 11.8c0-1.4 1-2.3 2.1-2.3s2.1.9 2.1 2.3M9.9 11.4c.2-1 .7-1.5 1.4-1.5.8 0 1.4.6 1.5 1.7"/></g>']
+};
+Object.keys(APPGLYPHS).forEach(n => {
+  ICON_TEMPLATES[n] = { band: "host", note: APPGLYPHS[n][0], markup: APPGLYPHS[n][1] };
+});
+/* Concepts the studio already draws are not drawn twice - the app borrows the glyph
+   and only the band moves to the client card's blue. */
+[["app-3d.svg", "vm.svg"], ["app-people.svg", "users.svg"], ["app-search.svg", "search.svg"],
+ ["app-maps.svg", "static-ip.svg"], ["app-todo.svg", "validate.svg"], ["app-devhome.svg", "code.svg"],
+ ["app-quickassist.svg", "rds.svg"]].forEach(([app, src]) => {
+  ICON_TEMPLATES[app] = { band: "host", markup: ICON_TEMPLATES[src].markup };
+});
 
 /* mix() lives in the theme section below — same signature, one implementation. */
 
@@ -4244,8 +4298,9 @@ function applyVmTemplate(server, templateId) {
     });
   }
   // Both of these are image-conditional; sanitize clears them where the image cannot honour
-  // them (App Compat is Core-only, app removal is w11-enterprise/pro only).
+  // them (App Compat is Core-only, app removal is Windows 11 client images only).
   server.removeBuiltInApps = !!t.removeBuiltInApps;
+  server.removeApps = Array.isArray(t.removeApps) ? [...t.removeApps] : null;
   if (t.includeManagementTools != null) server.includeManagementTools = !!t.includeManagementTools;
   sanitizeServerFeaturesForImage(server);
   return true;
@@ -4287,9 +4342,23 @@ function sanitizeServerFeaturesForImage(server) {
       server.localUserName = generateLocalUsername(state.usernameTheme);
     }
     server.rsatCapabilities = Array.isArray(server.rsatCapabilities) ? server.rsatCapabilities.filter(Boolean) : [];
-    // Built-in app removal is only offered for w11-enterprise/w11-pro specifically, not every client image.
+    // Built-in app removal covers every Windows 11 client image - N and multi-session included.
     if (!supportsAppRemoval(server.imageId)) server.removeBuiltInApps = false;
     else server.removeBuiltInApps = !!server.removeBuiltInApps;
+    // A custom pick keeps only ids the catalog knows; the full set collapses to null
+    // (= all), which exports as the compact removeBuiltInApps: true. A non-empty pick
+    // implies the removal itself - an imported row may carry removeApps alone.
+    if (Array.isArray(server.removeApps)) {
+      const appSel = [...new Set(server.removeApps.filter(id => APP_REMOVAL_IDS.has(id)))];
+      if (appSel.length === 0) {
+        server.removeApps = null;
+      } else {
+        server.removeBuiltInApps = true;
+        server.removeApps = appSel.length === APP_REMOVAL_CATALOG.length ? null : appSel;
+      }
+    } else {
+      server.removeApps = null;
+    }
   } else {
     server.rsatCapabilities = [];
     // Server Core ships a subset of the component store — drop anything it cannot install,
@@ -4348,6 +4417,7 @@ function createServer(name) {
     includeManagementTools: true,
     rsatCapabilities: [],
     removeBuiltInApps: false,
+    removeApps: null,
     azureArc: { enabled: false, principalId: "" },
     integrationServices: defaultIntegrationServices(),
     domainJoin: { enabled: false, accountId: "", ouPath: "" },
@@ -4826,7 +4896,12 @@ function buildConfig() {
     if (imageTakesServerRoles(findImage(s.imageId)) && features.length) row.windowsFeatures = features;
     const rsat = [...new Set((s.rsatCapabilities || []).filter(Boolean))];
     if (findImage(s.imageId).kind === "client" && rsat.length) row.rsatCapabilities = rsat;
-    if (supportsAppRemoval(s.imageId) && s.removeBuiltInApps) row.removeBuiltInApps = true;
+    if (supportsAppRemoval(s.imageId) && s.removeBuiltInApps) {
+      const appSel = appRemovalSelection(s);
+      if (appSel === null) row.removeBuiltInApps = true;
+      else if (appSel.length) row.removeApps = [...appSel];
+      // An empty custom pick exports nothing - removal that removes no apps is off.
+    }
     if (supportsAppCompatFod(s) && s.appCompatFod) row.appCompatFod = true;
     // "Use for every VM" resolves at export time into per-VM rows, exactly like the
     // cluster blade's addAllVms - Build-Vms.ps1 only ever sees per-VM domainJoin/azureArc.
@@ -5311,7 +5386,83 @@ function diskNameCell(opts) {
     </div>`;
 }
 const DIFF_DISK_TIP = "Creates a small child VHDX linked to the gold parent (lab/VDI). Saves space, but the gold image must stay read-only and available — if the parent is moved or lost, every child breaks. Leave off for a full independent copy of the gold disk.";
-const REMOVE_APPS_TIP = "Offline-removes a fixed list of built-in Windows 11 provisioned apps (Xbox, Copilot, Teams consumer, etc. — see old-scripts/Remove-BuiltInApps.ps1) from this VM's own disk before first boot. A short protected list (Store, Terminal, Notepad, Photos, ...) is never touched. Windows 11 Enterprise/Pro only — off by default.";
+const REMOVE_APPS_TIP = "Offline-removes built-in Windows 11 provisioned apps from this VM's own disk before first boot — every app individually tickable below, all ticked by default. A short protected list (Store, Terminal, Notepad, Photos, ...) is never offered and never touched. Windows 11 client images only — off by default.";
+
+/** Mirrors Build-Vms.ps1 Remove-OfflineProvisionedApps' $targetApps, one row per
+    provisioned package. The id here IS the package DisplayName the removal matches on —
+    keep the two lists identical or a ticked app silently survives the bake. Categories
+    only group the card visually; every row toggles alone. */
+const APP_REMOVAL_CATALOG = [
+  { id: "Microsoft.XboxApp",                      label: "Xbox Console Companion",  cat: "Gaming", icon: "app-xbox.svg" },
+  { id: "Microsoft.GamingApp",                    label: "Xbox (Game Pass)",        cat: "Gaming", icon: "app-xbox.svg" },
+  { id: "Microsoft.XboxGamingOverlay",            label: "Xbox Game Bar",           cat: "Gaming", icon: "app-xbox.svg" },
+  { id: "Microsoft.XboxGameOverlay",              label: "Xbox Game Bar Plugin",    cat: "Gaming", icon: "app-xbox.svg" },
+  { id: "Microsoft.XboxIdentityProvider",         label: "Xbox Identity Provider",  cat: "Gaming", icon: "app-xbox.svg" },
+  { id: "Microsoft.XboxSpeechToTextOverlay",      label: "Xbox Speech to Text",     cat: "Gaming", icon: "app-xbox.svg" },
+  { id: "Microsoft.Xbox.TCUI",                    label: "Xbox Live in-game UI",    cat: "Gaming", icon: "app-xbox.svg" },
+  { id: "Microsoft.MicrosoftSolitaireCollection", label: "Solitaire Collection",    cat: "Gaming", icon: "app-solitaire.svg" },
+  { id: "MSTeams",                                label: "Teams (new)",             cat: "Communication", icon: "app-teams.svg" },
+  { id: "MicrosoftTeams",                         label: "Teams (classic)",         cat: "Communication", icon: "app-teams.svg" },
+  { id: "Microsoft.SkypeApp",                     label: "Skype",                   cat: "Communication", icon: "app-call.svg" },
+  { id: "microsoft.windowscommunicationsapps",    label: "Mail and Calendar",       cat: "Communication", icon: "app-mail.svg" },
+  { id: "Microsoft.OutlookForWindows",            label: "Outlook (new)",           cat: "Communication", icon: "app-outlook.svg" },
+  { id: "Microsoft.People",                       label: "People",                  cat: "Communication", icon: "app-people.svg" },
+  { id: "Microsoft.YourPhone",                    label: "Phone Link",              cat: "Communication", icon: "app-phone-link.svg" },
+  { id: "Microsoft.Copilot",                      label: "Copilot",                 cat: "Assistants & Bing", icon: "app-copilot.svg" },
+  { id: "Microsoft.549981C3F5F10",                label: "Cortana",                 cat: "Assistants & Bing", icon: "app-cortana.svg" },
+  { id: "Microsoft.BingSearch",                   label: "Bing Search",             cat: "Assistants & Bing", icon: "app-search.svg" },
+  { id: "Microsoft.BingNews",                     label: "News",                    cat: "Assistants & Bing", icon: "app-news.svg" },
+  { id: "Microsoft.BingWeather",                  label: "Weather",                 cat: "Assistants & Bing", icon: "app-weather.svg" },
+  { id: "Microsoft.ZuneVideo",                    label: "Movies & TV",             cat: "Media & creative", icon: "app-movies.svg" },
+  { id: "Microsoft.ZuneMusic",                    label: "Media Player",            cat: "Media & creative", icon: "app-music.svg" },
+  { id: "Microsoft.WindowsCamera",                label: "Camera",                  cat: "Media & creative", icon: "app-camera.svg" },
+  { id: "Clipchamp.Clipchamp",                    label: "Clipchamp",               cat: "Media & creative", icon: "app-clipchamp.svg" },
+  { id: "Microsoft.WindowsSoundRecorder",         label: "Sound Recorder",          cat: "Media & creative", icon: "app-recorder.svg" },
+  { id: "Microsoft.MSPaint",                      label: "Paint 3D",                cat: "Media & creative", icon: "app-paint.svg" },
+  { id: "Microsoft.Microsoft3DViewer",            label: "3D Viewer",               cat: "Media & creative", icon: "app-3d.svg" },
+  { id: "Microsoft.MixedReality.Portal",          label: "Mixed Reality Portal",    cat: "Media & creative", icon: "app-vr.svg" },
+  { id: "Microsoft.Whiteboard",                   label: "Whiteboard",              cat: "Media & creative", icon: "app-whiteboard.svg" },
+  { id: "Microsoft.MicrosoftOfficeHub",           label: "Microsoft 365 (Office)",  cat: "Productivity", icon: "app-office.svg" },
+  { id: "Microsoft.Office.OneNote",               label: "OneNote",                 cat: "Productivity", icon: "app-onenote.svg" },
+  { id: "Microsoft.Todos",                        label: "To Do",                   cat: "Productivity", icon: "app-todo.svg" },
+  { id: "Microsoft.MicrosoftStickyNotes",         label: "Sticky Notes",            cat: "Productivity", icon: "app-sticky.svg" },
+  { id: "Microsoft.MicrosoftJournal",             label: "Journal",                 cat: "Productivity", icon: "app-journal.svg" },
+  { id: "Microsoft.PowerAutomateDesktop",         label: "Power Automate",          cat: "Productivity", icon: "app-automate.svg" },
+  { id: "Microsoft.WindowsAlarms",                label: "Clock (Alarms)",          cat: "Productivity", icon: "app-alarms.svg" },
+  { id: "Microsoft.WindowsMaps",                  label: "Maps",                    cat: "Productivity", icon: "app-maps.svg" },
+  { id: "Microsoft.WindowsFeedbackHub",           label: "Feedback Hub",            cat: "System & help", icon: "app-feedback.svg" },
+  { id: "Microsoft.GetHelp",                      label: "Get Help",                cat: "System & help", icon: "app-gethelp.svg" },
+  { id: "Microsoft.Getstarted",                   label: "Tips (Get Started)",      cat: "System & help", icon: "app-tips.svg" },
+  { id: "Microsoft.Windows.DevHome",              label: "Dev Home",                cat: "System & help", icon: "app-devhome.svg" },
+  { id: "MicrosoftCorporationII.QuickAssist",     label: "Quick Assist",            cat: "System & help", icon: "app-quickassist.svg" },
+  { id: "MicrosoftCorporationII.MicrosoftFamily", label: "Family Safety",           cat: "System & help", icon: "app-family.svg" }
+];
+const APP_REMOVAL_IDS = new Set(APP_REMOVAL_CATALOG.map(a => a.id));
+
+/* Category -> icon band, chosen so no two adjacent categories share a hue. The glyphs
+   are registered host blue and re-tinted per row at render time via iconSrcBand. */
+const APP_CAT_BANDS = {
+  "Gaming":            "work",
+  "Communication":     "host",
+  "Assistants & Bing": "ident",
+  "Media & creative":  "deploy",
+  "Productivity":      "work",
+  "System & help":     "host"
+};
+
+/** The set of package ids this VM removes. null = the full catalog (the compact
+    removeBuiltInApps: true shape); an array = a custom pick. */
+function appRemovalSelection(s) {
+  return Array.isArray(s.removeApps) ? s.removeApps : null;
+}
+function appRemovalCount(s) {
+  const sel = appRemovalSelection(s);
+  return sel === null ? APP_REMOVAL_CATALOG.length : sel.length;
+}
+function appRemovalHas(s, id) {
+  const sel = appRemovalSelection(s);
+  return sel === null || sel.includes(id);
+}
 function tipHost() {
   let el = document.getElementById("tip-host");
   if (!el) {
@@ -6283,19 +6434,49 @@ function renderServerRolesSection(s) {
 function renderServerArcSection(s) { return ""; }
 
 function renderServerAppsSection(s) {
-  if (s.imageId !== "w11-enterprise" && s.imageId !== "w11-pro") return "";
+  if (!supportsAppRemoval(s.imageId)) return "";
   const open = isNestedOpen(s._id + "-apps", false);
+  const total = APP_REMOVAL_CATALOG.length;
+  // Removal is on exactly when at least one app is picked; the count is 0 when off.
+  const count = s.removeBuiltInApps ? appRemovalCount(s) : 0;
+  const meta = count === 0 ? "off" : (count === total ? `all ${total} apps` : `${count} of ${total} apps`);
+  // The main toggle IS the all-apps switch: on means the whole catalog goes, and a
+  // custom pick below shows it off while the picker's own meta carries the count.
+  const allOn = count === total;
+
+  const pickerOpen = isNestedOpen(s._id + "-applist", false);
+  const cats = [];
+  APP_REMOVAL_CATALOG.forEach(a => { if (!cats.includes(a.cat)) cats.push(a.cat); });
+  const picker = `
+      <div class="section collapsible ${pickerOpen ? "" : "collapsed"}" style="margin-top:12px">
+        <div class="section-head" data-nested="${esc(s._id)}-applist">
+          <span class="section-chevron">${chevron()}</span>
+          <img src="${iconSrc("client-apps.svg")}"> Choose apps
+          <span class="section-meta">${count === 0 ? "none" : (allOn ? "all" : `${count} of ${total}`)}</span>
+        </div>
+        <div class="section-body">
+          ${cats.map(cat => `
+          <div class="app-cat-head">${esc(cat)}</div>
+          ${APP_REMOVAL_CATALOG.filter(a => a.cat === cat).map(a => {
+            const on = !!s.removeBuiltInApps && appRemovalHas(s, a.id);
+            return `<div title="${esc(a.id)}">${toggle(`data-app-toggle="${esc(s._id)}" data-app="${esc(a.id)}"`,
+              `<img class="app-glyph" src="${iconSrcBand(a.icon, APP_CAT_BANDS[a.cat] || "host")}" alt=""> ${esc(a.label)}`, on)}</div>`;
+          }).join("")}`).join("")}
+        </div>
+      </div>`;
+
   return `
     <div class="section collapsible ${open ? "" : "collapsed"}">
       <div class="section-head" data-nested="${esc(s._id)}-apps">
         <span class="section-chevron">${chevron()}</span>
         <img src="${iconSrc("client-apps.svg")}"> Built-in apps
-        <span class="section-meta">${s.removeBuiltInApps ? "removal on" : "off"}</span>
+        <span class="section-meta">${meta}</span>
       </div>
       <div class="section-body">
         <div style="margin-top:12px">
-          ${toggleWithWarn(`data-s="${esc(s._id)}" data-k="removeBuiltInApps"`, "Remove built-in apps (offline, before first boot)", !!s.removeBuiltInApps, REMOVE_APPS_TIP)}
+          ${toggleWithWarn(`data-s="${esc(s._id)}" data-k="removeBuiltInApps"`, "Remove all built-in apps (offline, before first boot)", allOn, REMOVE_APPS_TIP)}
         </div>
+        ${picker}
       </div>
     </div>`;
 }
@@ -8103,7 +8284,9 @@ function reviewServerRows(s) {
       : "Off") +
     kvRow("Management tools", yesNo(s.includeManagementTools !== false)) +
     (supportsAppCompatFod(s) ? kvRow("Server Core App Compat FOD", yesNo(s.appCompatFod)) : "") +
-    (supportsAppRemoval(s.imageId) ? kvRow("Remove built-in apps", yesNo(s.removeBuiltInApps)) : "") +
+    (supportsAppRemoval(s.imageId) ? kvRow("Remove built-in apps", !s.removeBuiltInApps ? "No"
+      : (appRemovalCount(s) === APP_REMOVAL_CATALOG.length ? "Yes — all " + APP_REMOVAL_CATALOG.length
+        : "Yes — " + appRemovalCount(s) + " of " + APP_REMOVAL_CATALOG.length)) : "") +
     kvRow("Data disks", disks.length ? disks.map((disk, i) => {
       const fs = diskFileSystem(disk);
       const volume = fs === "None" ? "raw, not formatted" : `${fs} "${effectiveDataDiskLabel(disk, i)}"`;
@@ -9582,6 +9765,28 @@ document.getElementById("main").addEventListener("change", e => {
     }
     return;
   }
+  const appToggle = e.target.getAttribute("data-app-toggle");
+  if (appToggle) {
+    const s = state.servers.find(x => x._id === appToggle);
+    const appId = e.target.getAttribute("data-app");
+    if (s && appId) {
+      // Effective pick right now: off = nothing, null = the whole catalog.
+      let sel = !s.removeBuiltInApps ? [] : (Array.isArray(s.removeApps) ? s.removeApps : APP_REMOVAL_CATALOG.map(a => a.id));
+      sel = e.target.checked ? [...new Set([...sel, appId])] : sel.filter(x => x !== appId);
+      if (sel.length === 0) {
+        // The last app untoggled turns the removal off entirely.
+        s.removeBuiltInApps = false;
+        s.removeApps = null;
+      } else {
+        s.removeBuiltInApps = true;
+        // The full set collapses to null so the export stays the compact
+        // removeBuiltInApps: true - and the all-apps switch reads it as on.
+        s.removeApps = sel.length === APP_REMOVAL_CATALOG.length ? null : sel;
+      }
+      scheduleRender();
+    }
+    return;
+  }
   const ip = e.target.getAttribute("data-ip");
   if (ip && e.target.type === "checkbox") {
     const k = e.target.getAttribute("data-k");
@@ -9648,7 +9853,12 @@ document.getElementById("main").addEventListener("change", e => {
       if (k === "imageId") { applyImageProfile(s, e.target.value); scheduleRender(); return; }
       if (k === "includeManagementTools") { s.includeManagementTools = e.target.checked; return; }
       if (k === "removeBuiltInApps") {
+        // The all-apps switch: on selects the whole catalog, off clears every pick.
+        // A custom pick below shows this switch off; flipping it on from there
+        // returns to the full set.
         s.removeBuiltInApps = e.target.checked && supportsAppRemoval(s.imageId);
+        s.removeApps = null;
+        scheduleRender();
         return;
       }
       if (k === "builtInAdminOnly") {

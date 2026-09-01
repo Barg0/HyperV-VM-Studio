@@ -7,7 +7,7 @@
     images from vhdx\ by imageId (New-Vhdx naming) or optional imageHint, creates
     OS disks (full copy by default, or differencing), optional data disks and
     VHD Sets, injects offline unattend.xml, optionally installs Windows roles /
-    RSAT offline (and, opt-in per VM on w11-enterprise/w11-pro only, removes a
+    RSAT offline (and, opt-in per VM on Windows 11 client images, removes a
     fixed list of built-in provisioned apps offline - see Remove-OfflineProvisionedApps),
     injects GuestProvision guest payload (Arc / leftover features), optionally
     registers VMs with a failover cluster, then starts them.
@@ -2510,13 +2510,21 @@ function Get-FodMediumInteractive {
 }
 
 function Remove-OfflineProvisionedApps {
-    param([string]$OsRoot)
+    param(
+        [string]$OsRoot,
+        # Custom pick from the studio (config removeApps). Empty means the full catalog -
+        # the compact removeBuiltInApps: true shape. Ids outside the catalog are refused
+        # with a warning rather than removed: this function only ever takes apps the
+        # protected list has been weighed against.
+        [string[]]$RemoveApps = @()
+    )
 
-    # Fixed, non-configurable list mirroring old-scripts/Remove-BuiltInApps.ps1's
-    # $targetApps/$protectedApps. Provisioned-package removal only (Remove-AppxProvisionedPackage
+    # $targetApps mirrors the studio's APP_REMOVAL_CATALOG (and old-scripts/
+    # Remove-BuiltInApps.ps1's list) - keep the two identical or a ticked app silently
+    # survives the bake. Provisioned-package removal only (Remove-AppxProvisionedPackage
     # -Path, against the offline-mounted disk) - there are no per-user AllUsers Appx instances to
-    # clean up yet since no one has ever logged on to this VM's disk. Client (w11-enterprise/
-    # w11-pro) only, opt-in per VM.
+    # clean up yet since no one has ever logged on to this VM's disk. Windows 11 client
+    # images only (N and multi-session included), opt-in per VM.
     $protectedApps = @(
         "Microsoft.NET.Native.Framework.2.2", "Microsoft.VCLibs.140.00", "Microsoft.UI.Xaml.2.8",
         "Microsoft.VCLibs.140.00.UWPDesktop", "Microsoft.WindowsStore", "Microsoft.DesktopAppInstaller",
@@ -2539,6 +2547,15 @@ function Remove-OfflineProvisionedApps {
         "Microsoft.XboxGameOverlay", "Microsoft.XboxIdentityProvider", "Microsoft.XboxSpeechToTextOverlay",
         "Microsoft.Xbox.TCUI", "MSTeams"
     )
+
+    $wanted = @($RemoveApps | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+    if ($wanted.Count -gt 0) {
+        $unknown = @($wanted | Where-Object { $_ -notin $targetApps })
+        foreach ($name in $unknown) {
+            Write-Log "removeApps entry '$name' is not in the removal catalog - skipped" -Tag "Warn"
+        }
+        $targetApps = @($targetApps | Where-Object { $_ -in $wanted })
+    }
 
     Write-Log "Removing $($targetApps.Count) provisioned app(s) offline, $($protectedApps.Count) protected" -Tag "Run"
 
@@ -2814,8 +2831,11 @@ function Set-OfflineUnattendFile {
                 # client edition qualifies, N and multi-session included: they carry the
                 # same provisioned app packages the removal targets.
                 $imageIdForApps = ([string]$Server.imageId).ToLowerInvariant()
-                if ([bool]$Server.removeBuiltInApps -and $imageIdForApps -match "^w1[01]-") {
-                    Remove-OfflineProvisionedApps -OsRoot $osRoot
+                # removeBuiltInApps: true takes the whole catalog; removeApps lists a custom
+                # pick and implies the removal on its own - the studio exports one or the other.
+                $removeAppsList = @($Server.removeApps | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+                if (([bool]$Server.removeBuiltInApps -or $removeAppsList.Count -gt 0) -and $imageIdForApps -match "^w1[01]-") {
+                    Remove-OfflineProvisionedApps -OsRoot $osRoot -RemoveApps $removeAppsList
                 }
             }
             else {
