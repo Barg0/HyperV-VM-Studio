@@ -1147,11 +1147,15 @@
   /* Form field locked the same way a file-name cell is: readonly until the pencil. */
   .edit-field { display: flex; align-items: center; gap: 6px; min-width: 0; }
   .edit-field > input { flex: 1; min-width: 0; }
+  /* Icon buttons match the 32px input beside them - the global 28px looks sunken here. */
+  .edit-field > .btn.icon { width: 32px; height: 32px; }
   .edit-field > input[readonly] {
     background: var(--bg-subtle); border-color: transparent;
     color: var(--fg-muted); cursor: default;
   }
   .edit-field > input[readonly]:hover { border-color: var(--border); }
+  /* Account boxes keep their border while locked - a borderless credential reads as empty space. */
+  .edit-field > input.keep-border[readonly] { border-color: var(--border); }
   .disk-badge {
     /* Fixed width so OS and DATA end at the same x - otherwise the file-name inputs
        above and below each other stop at different points. */
@@ -6951,11 +6955,16 @@ function renderServerCard(s) {
               : "Off — a second local admin is provisioned next to the built-in Administrator, and both end up with the password below.")}
           </div>
           <div class="grid-2" style="margin-top:12px">
-              ${field("Local user", `<div class="edit-field">
-                <input data-s="${esc(s._id)}" data-k="localUserName" class="${inv(`s:${s._id}:localUserName`)}"${invAria(`s:${s._id}:localUserName`)} value="${adminOnly ? "Administrator" : esc(s.localUserName)}" placeholder="augustus"${adminOnly ? " disabled" : ""}>
+              ${field("Local user", (() => {
+                const userUnlocked = !!state.nameEdit[`user:${s._id}`];
+                return `<div class="edit-field">
+                <input data-s="${esc(s._id)}" data-k="localUserName" data-name-input="user:${esc(s._id)}" class="keep-border ${inv(`s:${s._id}:localUserName`)}"${invAria(`s:${s._id}:localUserName`)} value="${adminOnly ? "Administrator" : esc(s.localUserName)}" placeholder="augustus"${adminOnly ? " disabled" : userUnlocked ? "" : " readonly"}>
                 <button class="btn icon" type="button" data-gen-user="${esc(s._id)}"${adminOnly ? " disabled" : ""}
                   title="Generate a new one" aria-label="Generate a new user name">${regenIcon()}</button>
-              </div>
+                <button class="btn icon" type="button" data-name-edit="user:${esc(s._id)}"${adminOnly ? " disabled" : ""}
+                  title="${userUnlocked ? "Done" : "Edit user name"}" aria-label="${userUnlocked ? "Done" : "Edit user name"}">${userUnlocked ? checkIcon() : pencilIcon()}</button>
+              </div>`;
+              })() + `
                 <span class="hint">${adminOnly
                   ? "The built-in account — nothing is provisioned. Your own name is kept and comes back if you switch this off."
                   : "Theme from General Settings · " + esc((USERNAME_THEMES[state.usernameTheme]||{}).label || state.usernameTheme)}</span>`)}
@@ -6966,7 +6975,7 @@ function renderServerCard(s) {
                 const pwUnlocked = !!state.nameEdit[`pw:${s._id}`];
                 const pwShown = pwUnlocked || !!passwordsVisible["card:" + s._id];
                 return `<div class="edit-field">
-                <input type="${pwShown ? "text" : "password"}" data-s="${esc(s._id)}" data-k="localUserPassword" data-name-input="pw:${esc(s._id)}" class="${inv(`s:${s._id}:localUserPassword`)}"${invAria(`s:${s._id}:localUserPassword`)} value="${esc(s.localUserPassword)}" autocomplete="off" spellcheck="false"${pwUnlocked ? "" : " readonly"}>
+                <input type="${pwShown ? "text" : "password"}" data-s="${esc(s._id)}" data-k="localUserPassword" data-name-input="pw:${esc(s._id)}" class="keep-border ${inv(`s:${s._id}:localUserPassword`)}"${invAria(`s:${s._id}:localUserPassword`)} value="${esc(s.localUserPassword)}" autocomplete="off" spellcheck="false"${pwUnlocked ? "" : " readonly"}>
                 <button class="btn icon" type="button" data-pw-toggle="card:${esc(s._id)}"${pwUnlocked ? " disabled" : ""}
                   title="${pwUnlocked ? "Visible while editing" : pwShown ? "Hide" : "Reveal"}" aria-label="${pwShown ? "Hide" : "Reveal"} password">${pwShown ? eyeOffIcon() : eyeIcon()}</button>
                 <button class="btn icon" type="button" data-gen-pwd="${esc(s._id)}"
