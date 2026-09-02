@@ -229,7 +229,6 @@
   /* A body that opens straight onto a control needs the gap its first child would
      otherwise have carried itself. */
   .section.collapsible > .section-body > .toggle:first-child,
-  .section.collapsible > .section-body > .toggle-with-tip:first-child { margin-top: 12px; }
 
   .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
   .grid-3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 12px; }
@@ -376,11 +375,8 @@
   .tip-title { display: block; font-weight: 600; margin-bottom: 4px; }
   .tip-id { display: block; margin-top: 6px; font-family: var(--mono); font-size: 10.5px; color: var(--fg-muted); word-break: break-all; }
   .role-tips { display: inline-flex; align-items: center; justify-content: flex-end; gap: 6px; flex-shrink: 0; }
-  /* Bordered rows carry their own separation now - the tip rides inside the row. */
-  .toggle-with-tip {
-    display: flex; align-items: center; gap: 8px; width: 100%;
-  }
-  .toggle-with-tip .toggle { flex: 1; min-width: 0; }
+  /* A tip inside a toggle's label sits right after the text, inside the bordered row. */
+  .toggle-label > .tip-warn, .toggle-label > .tip-info { margin-left: 9px; }
   .toggle-grid {
     display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
     gap: 8px; margin-top: 4px;
@@ -1207,9 +1203,6 @@
   .svc-check-grid {
     display: grid; grid-template-columns: 1fr 1fr; gap: 8px 16px; margin-top: 12px;
   }
-  .pwd-row { display: flex; gap: 8px; align-items: stretch; }
-  .pwd-row input { flex: 1; min-width: 0; }
-  .pwd-row .btn { flex-shrink: 0; white-space: nowrap; }
   .ip-prefix-row {
     display: grid; grid-template-columns: 1fr 110px; gap: 8px; align-items: start;
   }
@@ -1287,8 +1280,6 @@
   .btn.row .op-name { font-weight: 600; }
   .btn.row .op-meta { margin-left: auto; font-size: 11px; color: var(--fg-muted); }
   .ou-pick-selected { margin-top: 10px; font-size: 12px; color: var(--fg-muted); }
-  .name-gen-row { display: grid; grid-template-columns: 1fr auto; gap: 8px; align-items: stretch; }
-  .name-gen-row input { min-width: 0; }
   .picker { position: relative; width: 100%; }
   .picker-row { display: flex; align-items: center; gap: 8px; }
   .picker-row .picker { flex: 1; min-width: 0; }
@@ -4149,6 +4140,7 @@ const state = {
     sxsSourcePath: "",
     locale: LOCALE_DEFAULT,
     keyboardLayout: LOCALE_DEFAULT,
+    passwordLength: 32,
     imageProfiles: defaultImageProfiles()
   },
   domainJoinAccounts: [],
@@ -4398,7 +4390,7 @@ function createServer(name) {
     nestedVirtualization: false,
     localUserName: generateLocalUsername(state.usernameTheme),
     // Every new VM starts with a strong password so nobody ships a blank one by accident.
-    localUserPassword: generateLocalPassword(32),
+    localUserPassword: generateLocalPassword(passwordLength()),
     // Off by default: a new VM gets its own local admin, and admin-only stays a deliberate
     // tick (AD DS is the one case that forces it — see isBuiltInAdminOnly).
     builtInAdminOnly: false,
@@ -4455,6 +4447,15 @@ function generateLocalPassword(length) {
     [chars[i], chars[j]] = [chars[j], chars[i]];
   }
   return chars.join("");
+}
+
+/* The generator length picked in General Settings. Anything outside the offered set —
+   an old state token, a hand-edited import — heals to 32, the length every password
+   used before the picker existed. */
+const PASSWORD_LENGTHS = [16, 32, 64];
+function passwordLength() {
+  const n = Number(state.defaults.passwordLength);
+  return PASSWORD_LENGTHS.includes(n) ? n : 32;
 }
 
 
@@ -5177,8 +5178,9 @@ function applyConfigDocument(parsed, opts) {
   }
   if (typeof state.defaults.sxsSourcePath !== "string") state.defaults.sxsSourcePath = "";
   state.defaults.naming = namingDefaults();
-  if (state.defaults.locale !== LOCALE_DEFAULT && !LOCALE_CATALOG[state.defaults.locale]) state.defaults.locale = LOCALE_DEFAULT;
+  if (!SHOW_LOCALE_CARD || (state.defaults.locale !== LOCALE_DEFAULT && !LOCALE_CATALOG[state.defaults.locale])) state.defaults.locale = LOCALE_DEFAULT;
   state.defaults.keyboardLayout = state.defaults.locale;
+  state.defaults.passwordLength = passwordLength();
   normalizeStoragePlacement();
   delete state.defaults.uiLanguage;
   return { added, updated };
@@ -5211,13 +5213,15 @@ function decodeState(text) {
     sxsSourcePath: "",
     locale: LOCALE_DEFAULT,
     keyboardLayout: LOCALE_DEFAULT,
+    passwordLength: 32,
     imageProfiles: defaultImageProfiles()
   }, parsed.defaults || {});
   delete state.defaults.azureArc;
   delete state.defaults.uiLanguage;
   state.defaults.naming = namingDefaults();
-  if (state.defaults.locale !== LOCALE_DEFAULT && !LOCALE_CATALOG[state.defaults.locale]) state.defaults.locale = LOCALE_DEFAULT;
+  if (!SHOW_LOCALE_CARD || (state.defaults.locale !== LOCALE_DEFAULT && !LOCALE_CATALOG[state.defaults.locale])) state.defaults.locale = LOCALE_DEFAULT;
   state.defaults.keyboardLayout = state.defaults.locale;
+  state.defaults.passwordLength = passwordLength();
   normalizeStoragePlacement();
   if (!state.defaults.imageProfiles) state.defaults.imageProfiles = defaultImageProfiles();
   IMAGE_CATALOG.forEach(img => {
@@ -5505,11 +5509,15 @@ function showFloatingTip(anchor) {
   bubble.style.left = left + "px";
   bubble.style.top = top + "px";
 }
-function warnIconSvg() {
-  return `<svg viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path fill="currentColor" d="M7.1 2.56a1.05 1.05 0 0 1 1.8 0l5.55 9.72A1.05 1.05 0 0 1 13.55 14H2.45a1.05 1.05 0 0 1-.9-1.72L7.1 2.56ZM8 5.75a.6.6 0 0 0-.6.6v3.1a.6.6 0 1 0 1.2 0v-3.1a.6.6 0 0 0-.6-.6Zm0 6.35a.75.75 0 1 0 0-1.5.75.75 0 0 0 0 1.5Z"/></svg>`;
+/* Stroke-drawn like the pencil / eye / regen glyphs — the filled Fluent triangle stood
+   out as the one solid icon in an otherwise line-drawn set. */
+function warnIconSvg(cls) {
+  return `<svg${cls ? ` class="${cls}"` : ""} viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M6.9 2.9 1.55 12.2a1.27 1.27 0 0 0 1.1 1.9h10.7a1.27 1.27 0 0 0 1.1-1.9L9.1 2.9a1.27 1.27 0 0 0-2.2 0z"/><path d="M8 6.2v3.3"/><path d="M8 11.7h.01"/></svg>`;
 }
+/* Both tips can sit inside a <label> now, so the click must not activate the label's
+   checkbox — hence the preventDefault next to the stopPropagation. */
 function warnTip(text) {
-  return `<span class="tip-warn" tabindex="0" role="img" aria-label="${esc(text)}" data-tip-kind="warn" data-tip-body="${esc(text)}" onclick="event.stopPropagation()"><svg class="tip-warn-icon" viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path fill="currentColor" d="M7.1 2.56a1.05 1.05 0 0 1 1.8 0l5.55 9.72A1.05 1.05 0 0 1 13.55 14H2.45a1.05 1.05 0 0 1-.9-1.72L7.1 2.56ZM8 5.75a.6.6 0 0 0-.6.6v3.1a.6.6 0 1 0 1.2 0v-3.1a.6.6 0 0 0-.6-.6Zm0 6.35a.75.75 0 1 0 0-1.5.75.75 0 0 0 0 1.5Z"/></svg></span>`;
+  return `<span class="tip-warn" tabindex="0" role="img" aria-label="${esc(text)}" data-tip-kind="warn" data-tip-body="${esc(text)}" onclick="event.stopPropagation();event.preventDefault()">${warnIconSvg("tip-warn-icon")}</span>`;
 }
 function warnBanner(text) {
   if (!text) return "";
@@ -5518,7 +5526,7 @@ function warnBanner(text) {
 function infoTip(title, body, featureId) {
   const icon = `<svg class="tip-info-icon" viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path fill="currentColor" d="M8 1.5a6.5 6.5 0 1 0 0 13 6.5 6.5 0 0 0 0-13ZM8 14a6 6 0 1 1 0-12 6 6 0 0 1 0 12Zm-.75-3.25a.75.75 0 0 0 1.5 0v-3.5a.75.75 0 0 0-1.5 0v3.5ZM8 5.5A.75.75 0 1 0 8 4a.75.75 0 0 0 0 1.5Z"/></svg>`;
   const label = title ? `${title}. ${body || ""}` : (body || "");
-  return `<span class="tip-info" tabindex="0" role="img" aria-label="${esc(label)}" data-tip-kind="info" data-tip-title="${esc(title || "About")}" data-tip-body="${esc(body || "")}" data-tip-id="${esc(featureId || "")}" onclick="event.stopPropagation()">${icon}</span>`;
+  return `<span class="tip-info" tabindex="0" role="img" aria-label="${esc(label)}" data-tip-kind="info" data-tip-title="${esc(title || "About")}" data-tip-body="${esc(body || "")}" data-tip-id="${esc(featureId || "")}" onclick="event.stopPropagation();event.preventDefault()">${icon}</span>`;
 }
 function featureWarnText(item) {
   if (!item) return "";
@@ -5536,8 +5544,11 @@ function toggle(attrs, label, checked, disabled, sub) {
   const subHtml = sub ? `<span class="toggle-sub">${sub}</span>` : "";
   return `<label class="toggle${disabled ? " disabled" : ""}"><input type="checkbox" ${attrs}${checked ? " checked" : ""}${dis}><span class="toggle-track"><span class="toggle-thumb"></span></span><span class="toggle-label">${label}${subHtml}</span></label>`;
 }
+/* The tip rides inside the toggle's own label, right after the text — parked outside the
+   bordered row it squeezed the row narrower than its neighbours and the switch looked
+   cropped against the card edge. */
 function toggleWithWarn(attrs, label, checked, tip) {
-  return `<span class="toggle-with-tip">${toggle(attrs, label, checked)}${warnTip(tip)}</span>`;
+  return toggle(attrs, `${label}${warnTip(tip)}`, checked);
 }
 
 /* Every blocking finding may name the field it came from. The keys are collected once per
@@ -5702,9 +5713,9 @@ function renderOverview() {
         ${overviewStep(2, "settings.svg", "Tell the studio about the host", "General Settings", `
           <p>Set once, inherited by every VM. A single VM can still override most of it on its own card.</p>
           <ul>
-            <li><strong>Locale / keyboard</strong> — leave it on <strong>Default</strong> and each VM uses whatever its own gold
-            was built with, read from that gold's <code>.vhdx.json</code>. Only pick an explicit language if you know it matches
-            the gold; this setting cannot change what is already baked in.</li>
+            <li><strong>Locale / keyboard</strong> — nothing to set: each VM uses whatever its own gold was built with, read
+            from that gold's <code>.vhdx.json</code> sidecar at deploy time.</li>
+            <li><strong>Password generator</strong> — how long the generated local passwords are (16, 32 or 64 characters).</li>
             <li><strong>Paths</strong> — the folder holding your gold files, plus the <strong>VM path</strong> and
             <strong>VHD path</strong> new machines are written to. Leave those two blank to use Hyper-V's own defaults. The SxS
             source is only needed if a VM installs .NET Framework 3.5.</li>
@@ -5943,7 +5954,14 @@ function renderGeneral() {
         </select>`)}
       </div>`, "", true)}
 
-    ${gsCard("gs-locale", "language.svg", "Locale / keyboard", d.locale === LOCALE_DEFAULT ? "Default — from gold image" : esc(LOCALE_CATALOG[d.locale] || d.locale || "de-DE"), `
+    ${gsCard("gs-passwords", "secret.svg", `Password generator ${infoTip("Password generator", "Length for every password the Generate buttons produce — on new VMs, on the regenerate arrows, and on the Passwords blade. Always upper/lower/number/special with no ambiguous I/l/1 or O/0. Changing the length immediately regenerates the local password of every VM already on the list.")}`, `${passwordLength()} characters`, `
+      <div class="grid-2">
+        ${field("Length", `<select data-pwlen="1">
+          ${PASSWORD_LENGTHS.map(n => `<option value="${n}" ${passwordLength()===n?"selected":""}>${n} characters</option>`).join("")}
+        </select>`)}
+      </div>`, "", true)}
+
+    ${!SHOW_LOCALE_CARD ? "" : gsCard("gs-locale", "language.svg", "Locale / keyboard", d.locale === LOCALE_DEFAULT ? "Default — from gold image" : esc(LOCALE_CATALOG[d.locale] || d.locale || "de-DE"), `
       <p class="hint" style="margin-bottom:10px">Regional format + keyboard echoed into every VM's answer file at deploy time. <strong>Default</strong> inherits whatever <code>New-Vhdx.ps1</code> actually baked into each VM's gold <code>.vhdx</code> (read from its <code>.vhdx.json</code> sidecar, written beside the gold). An explicit tag has to match what the gold was actually built with. Not a per-VM override, and not a UI language change — the gold's own shipped UI language is always kept as-is.</p>
       <div class="grid-2">
         ${field("Locale", `<select data-d="locale">
@@ -6933,18 +6951,31 @@ function renderServerCard(s) {
               : "Off — a second local admin is provisioned next to the built-in Administrator, and both end up with the password below.")}
           </div>
           <div class="grid-2" style="margin-top:12px">
-              ${field("Local user", `<div class="name-gen-row">
+              ${field("Local user", `<div class="edit-field">
                 <input data-s="${esc(s._id)}" data-k="localUserName" class="${inv(`s:${s._id}:localUserName`)}"${invAria(`s:${s._id}:localUserName`)} value="${adminOnly ? "Administrator" : esc(s.localUserName)}" placeholder="augustus"${adminOnly ? " disabled" : ""}>
-                <button class="btn" type="button" data-gen-user="${esc(s._id)}"${adminOnly ? " disabled" : ""}>Generate</button>
+                <button class="btn icon" type="button" data-gen-user="${esc(s._id)}"${adminOnly ? " disabled" : ""}
+                  title="Generate a new one" aria-label="Generate a new user name">${regenIcon()}</button>
               </div>
                 <span class="hint">${adminOnly
                   ? "The built-in account — nothing is provisioned. Your own name is kept and comes back if you switch this off."
                   : "Theme from General Settings · " + esc((USERNAME_THEMES[state.usernameTheme]||{}).label || state.usernameTheme)}</span>`)}
-              ${field(adminOnly ? "Administrator password" : "Local password", `<div class="pwd-row">
-                <input type="text" data-s="${esc(s._id)}" data-k="localUserPassword" class="${inv(`s:${s._id}:localUserPassword`)}"${invAria(`s:${s._id}:localUserPassword`)} value="${esc(s.localUserPassword)}" autocomplete="off" spellcheck="false">
-                <button class="btn" type="button" data-gen-pwd="${esc(s._id)}">Generate</button>
+              ${field(adminOnly ? "Administrator password" : "Local password", (() => {
+                /* Same reveal map as the Passwords blade, but its own key — revealing here
+                   must not silently unmask the same secret over there. Unlocking the pencil
+                   forces the clear text: nobody edits a row of dots. */
+                const pwUnlocked = !!state.nameEdit[`pw:${s._id}`];
+                const pwShown = pwUnlocked || !!passwordsVisible["card:" + s._id];
+                return `<div class="edit-field">
+                <input type="${pwShown ? "text" : "password"}" data-s="${esc(s._id)}" data-k="localUserPassword" data-name-input="pw:${esc(s._id)}" class="${inv(`s:${s._id}:localUserPassword`)}"${invAria(`s:${s._id}:localUserPassword`)} value="${esc(s.localUserPassword)}" autocomplete="off" spellcheck="false"${pwUnlocked ? "" : " readonly"}>
+                <button class="btn icon" type="button" data-pw-toggle="card:${esc(s._id)}"${pwUnlocked ? " disabled" : ""}
+                  title="${pwUnlocked ? "Visible while editing" : pwShown ? "Hide" : "Reveal"}" aria-label="${pwShown ? "Hide" : "Reveal"} password">${pwShown ? eyeOffIcon() : eyeIcon()}</button>
+                <button class="btn icon" type="button" data-gen-pwd="${esc(s._id)}"
+                  title="Generate a new one" aria-label="Generate a new password">${regenIcon()}</button>
+                <button class="btn icon" type="button" data-name-edit="pw:${esc(s._id)}"
+                  title="${pwUnlocked ? "Done" : "Edit password"}" aria-label="${pwUnlocked ? "Done" : "Edit password"}">${pwUnlocked ? checkIcon() : pencilIcon()}</button>
               </div>
-                <span class="hint">32 chars · upper/lower/number/special · no ambiguous I/l/1/O/0</span>`)}
+                <span class="hint">${passwordLength()} chars · length set in General Settings</span>`;
+              })())}
           </div>
         </div>
       </div>
@@ -6968,12 +6999,9 @@ function renderServerCard(s) {
             </div>
             <div class="section-body">
               <div style="margin-top:12px">
-                <span class="toggle-with-tip">
-                  ${toggle(`data-s="${esc(s._id)}" data-k="nestedVirtualization"`, "Nested virtualization",
-                    !!s.nestedVirtualization, nestedVirtRequired(s),
-                    nestedVirtRequired(s) ? `Required by ${esc(findImage(s.imageId).label)} — it runs its own hypervisor.` : "")}
-                  ${infoTip("Nested virtualization", NESTED_VIRT_INFO)}
-                </span>
+                ${toggle(`data-s="${esc(s._id)}" data-k="nestedVirtualization"`, `Nested virtualization${infoTip("Nested virtualization", NESTED_VIRT_INFO)}`,
+                  !!s.nestedVirtualization, nestedVirtRequired(s),
+                  nestedVirtRequired(s) ? `Required by ${esc(findImage(s.imageId).label)} — it runs its own hypervisor.` : "")}
               </div>
               ${s.nestedVirtualization ? `<div style="margin-top:10px">${warnBanner(NESTED_VIRT_WARN)}</div>` : ""}
             </div>
@@ -7642,6 +7670,11 @@ function patchServerDiskNames(s) {
    in full — profileFor() keeps feeding every new VM its defaults — the card is simply not
    rendered. Flip this to true to bring the UI back. */
 const SHOW_IMAGE_DEFAULTS = false;
+
+/* Locale / keyboard is parked the same way. Every gold's .vhdx.json sidecar resolves the
+   locale per VM at deploy time, so the global selector only offered ways to mismatch it —
+   while hidden, the default is also enforced on load/import. Flip to true to bring it back. */
+const SHOW_LOCALE_CARD = false;
 
 const NO_PATHS_NOTE = `<div class="name-tree"><div class="name-tree-note" style="margin:0">
   No <strong>VM path</strong> or <strong>VHD path</strong> set anywhere. Build-Vms.ps1 reads the host's
@@ -8494,9 +8527,9 @@ function renderPasswords() {
 
     ${rows.length
       ? `<div class="card"><div class="pw-list">${rows.map(renderPasswordRow).join("")}</div></div>
-         <p class="hint" style="margin-top:14px">Generated passwords are 32 characters with upper case, lower case, a number and a
-         special character, and no ambiguous <code>I/l/1</code> or <code>O/0</code>. Editing a name or password is still done on the
-         Virtual machines blade — this page only reads them back.</p>`
+         <p class="hint" style="margin-top:14px">Generated passwords are ${passwordLength()} characters (set in General Settings) with
+         upper case, lower case, a number and a special character, and no ambiguous <code>I/l/1</code> or <code>O/0</code>. Editing a
+         name or password is still done on the Virtual machines blade — this page only reads them back.</p>`
       : `<div class="card"><p class="hint" style="margin:0">No virtual machines yet. Add one and its local account appears here with a generated password.</p></div>`}`;
 }
 
@@ -8661,6 +8694,16 @@ document.addEventListener("focusout", e => {
 document.getElementById("main").addEventListener("scroll", hideFloatingTip);
 window.addEventListener("resize", hideFloatingTip);
 
+/* Pressing the checkmark while its input still has focus used to need two presses: the
+   mousedown blurred the input, the change handler's scheduleRender() rebuilt the DOM
+   before the click event fired, and the click landed on a button that no longer existed.
+   Keeping focus in the input means no blur, no premature rebuild — the click goes through
+   and the toggle's own render() takes over. Values are safe because every input paired
+   with a pencil commits on the input event, not on change. */
+document.getElementById("main").addEventListener("mousedown", e => {
+  if (e.target.closest("[data-name-edit], [data-name-reset]")) e.preventDefault();
+});
+
 document.getElementById("main").addEventListener("click", e => {
   const goto = e.target.closest("[data-goto]");
   if (goto) {
@@ -8712,7 +8755,7 @@ document.getElementById("main").addEventListener("click", e => {
     state.servers.push(s);
     state.expanded[s._id] = true;
     render();
-    toast("VM added · local password generated (32 chars)");
+    toast(`VM added · local password generated (${passwordLength()} chars)`);
     return;
   }
   if (e.target.id === "importServers" || e.target.closest("#importServers")) {
@@ -8725,9 +8768,9 @@ document.getElementById("main").addEventListener("click", e => {
     const sid = genPwd.getAttribute("data-gen-pwd");
     const s = state.servers.find(x => x._id === sid);
     if (s) {
-      s.localUserPassword = generateLocalPassword(32);
+      s.localUserPassword = generateLocalPassword(passwordLength());
       render();
-      toast("Password generated (32 chars)");
+      toast(`Password generated (${passwordLength()} chars)`);
     }
     return;
   }
@@ -9378,6 +9421,10 @@ document.getElementById("main").addEventListener("input", e => {
   const dKey = e.target.getAttribute("data-d");
   if (dKey) { state.defaults[dKey] = e.target.value; return; }
 
+  // Committed live like every other text field — the change handler alone left the name
+  // uncommitted when the checkmark's mousedown is prevented below and blur never fires.
+  if (e.target.getAttribute("data-cl") === "name") { state.defaults.cluster.name = e.target.value; return; }
+
   const spvIdx = e.target.getAttribute("data-spv");
   if (spvIdx !== null) {
     const vol = storagePlacement().volumes[Number(spvIdx)];
@@ -9691,6 +9738,17 @@ document.getElementById("main").addEventListener("change", e => {
   if (e.target.hasAttribute("data-arcall")) {
     state.defaults.azureArcAllVms = e.target.checked;
     scheduleRender();
+    return;
+  }
+  if (e.target.hasAttribute("data-pwlen")) {
+    state.defaults.passwordLength = Number(e.target.value) || 32;
+    // A new length applies to the whole fleet at once — every existing VM's local
+    // password is regenerated on the spot, hand-typed ones included, so no VM is left
+    // quietly carrying the old length.
+    const len = passwordLength();
+    state.servers.forEach(srv => { srv.localUserPassword = generateLocalPassword(len); });
+    scheduleRender();
+    if (state.servers.length) toast(`Local passwords regenerated for ${state.servers.length} VM(s) (${len} chars)`);
     return;
   }
   const sp = e.target.getAttribute("data-sp");
