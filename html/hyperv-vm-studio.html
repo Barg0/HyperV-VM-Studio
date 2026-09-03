@@ -730,8 +730,8 @@
   .hero {
     display: flex; gap: 20px; align-items: flex-start; flex-wrap: wrap;
     padding: 18px 20px; margin-bottom: 16px;
-    border: 1px solid var(--border); border-radius: var(--radius-lg);
-    background: linear-gradient(135deg, var(--accent-soft), transparent 65%), var(--bg-elevated);
+    border: 1px solid var(--border-strong); border-radius: var(--radius-lg);
+    background: var(--bg-hover);
   }
   .hero-icon {
     width: 46px; height: 46px; border-radius: 12px; flex-shrink: 0;
@@ -5655,8 +5655,8 @@ function renderOverview() {
       <div class="hero-icon"><img src="${iconSrc("hyperv.svg")}" alt=""></div>
       <div class="hero-body">
         <h2>Create Hyper-V VMs here</h2>
-        <p>Click your machines together in the blades on the left. The studio writes one <code>config.json</code>; the PowerShell
-        scripts on the Hyper-V host read it and do the work. This page changes nothing by itself.</p>
+        <p>Configure your machines in the blades on the left, then drop the finished <code>config.json</code> into the project
+        root on the Hyper-V host and run the deployment.</p>
       </div>
     </div>
 
