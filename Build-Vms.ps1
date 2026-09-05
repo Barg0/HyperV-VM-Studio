@@ -12,11 +12,14 @@
     injects GuestProvision guest payload (Arc / leftover features), optionally
     registers VMs with a failover cluster, then starts them.
 
-    Naming (defaults.naming in config.json), both off by default:
+    Naming (defaults.naming in config.json), both toggles off by default:
       vmNameIncludeFqdn - Hyper-V object name is computerName.domain
       folderIncludeFqdn - VM/VHD leaf folder is computerName.domain (needs the above)
-    Both only apply to VMs with a resolvable domain join; the guest's own NetBIOS
-    ComputerName is always the short name. See Get-HyperVVmName / Get-ServerFolderName.
+      fqdn              - optional fixed suffix used for every VM, joined or not;
+                          without it the suffix comes from each VM's domain join, so a
+                          VM that builds its own domain would stay on the short name
+    The guest's own NetBIOS ComputerName is always the short name. See
+    Get-ServerNamingSuffix / Get-HyperVVmName / Get-ServerFolderName.
 
     Local accounts:
       servers[].builtInAdminOnly - provision no <LocalAccounts>, leaving
@@ -113,6 +116,7 @@ $script:GoldLanguageByServer  = @{}
 # Overwritten from config defaults.naming by Set-NamingOptionsFromDefaults.
 $script:NamingVmIncludeFqdn     = $false
 $script:NamingFolderIncludeFqdn = $false
+$script:NamingFqdnOverride      = ""
 
 if ($enableLogFile -and -not (Test-Path -Path $logFileDirectory)) {
     New-Item -ItemType Directory -Path $logFileDirectory -Force | Out-Null
@@ -4945,10 +4949,27 @@ function Get-ServerDomainSuffix {
     return ([string]$resolved.domain).Trim().TrimEnd('.').ToLowerInvariant()
 }
 
+function Get-ServerNamingSuffix {
+    <#
+      The suffix Hyper-V object names and folders append. defaults.naming.fqdn wins over
+      the domain join, because the first DC of a fresh forest creates the domain instead
+      of joining one and so has no join account to read a domain from. "" when neither is
+      set. Never throws.
+    #>
+    param([object]$Server)
+
+    if (-not [string]::IsNullOrWhiteSpace($script:NamingFqdnOverride)) {
+        return $script:NamingFqdnOverride
+    }
+
+    return (Get-ServerDomainSuffix -Server $Server)
+}
+
 function Get-HyperVVmName {
     <#
       Hyper-V object name. With defaults.naming.vmNameIncludeFqdn (default off) and a
-      resolvable domain join, use computerName.domain (e.g. paw-01.ad.example.invalid).
+      naming suffix - defaults.naming.fqdn, or the VM's own domain join - use
+      computerName.domain (e.g. paw-01.ad.example.invalid).
       Guest NetBIOS / unattend ComputerName always stays short.
     #>
     param([object]$Server)
@@ -4961,7 +4982,7 @@ function Get-HyperVVmName {
         return $computerName
     }
 
-    $domain = Get-ServerDomainSuffix -Server $Server
+    $domain = Get-ServerNamingSuffix -Server $Server
     if ([string]::IsNullOrWhiteSpace($domain)) {
         return $computerName
     }
@@ -4985,7 +5006,7 @@ function Get-ServerFolderName {
         return $computerName
     }
 
-    $domain = Get-ServerDomainSuffix -Server $Server
+    $domain = Get-ServerNamingSuffix -Server $Server
     if ([string]::IsNullOrWhiteSpace($domain)) {
         return $computerName
     }
@@ -4998,6 +5019,7 @@ function Set-NamingOptionsFromDefaults {
 
     $script:NamingVmIncludeFqdn = $false
     $script:NamingFolderIncludeFqdn = $false
+    $script:NamingFqdnOverride = ""
 
     $naming = $null
     if ($null -ne $Defaults) { $naming = $Defaults.naming }
@@ -5009,8 +5031,12 @@ function Set-NamingOptionsFromDefaults {
     if ($null -ne $naming.folderIncludeFqdn) {
         $script:NamingFolderIncludeFqdn = [bool]$naming.folderIncludeFqdn
     }
+    if ($null -ne $naming.fqdn) {
+        $script:NamingFqdnOverride = ([string]$naming.fqdn).Trim().TrimEnd('.').ToLowerInvariant()
+    }
     if (-not $script:NamingVmIncludeFqdn) {
         $script:NamingFolderIncludeFqdn = $false
+        $script:NamingFqdnOverride = ""
     }
 }
 
@@ -5933,7 +5959,8 @@ try {
 
     Write-Log "VM path: $vmPath" -Tag "Info"
     Write-Log "VHD path: $vhdPath" -Tag "Info"
-    Write-Log "Naming: Hyper-V name FQDN=$($script:NamingVmIncludeFqdn) | folder FQDN=$($script:NamingFolderIncludeFqdn)" -Tag "Info"
+    $namingSuffixSource = if ([string]::IsNullOrWhiteSpace($script:NamingFqdnOverride)) { "per-VM domain join" } else { $script:NamingFqdnOverride }
+    Write-Log "Naming: Hyper-V name FQDN=$($script:NamingVmIncludeFqdn) | folder FQDN=$($script:NamingFolderIncludeFqdn) | suffix=$namingSuffixSource" -Tag "Info"
     $placementVolumes = @(Get-StoragePlacementVolumes -Defaults $defaults)
     if ($placementVolumes.Count -gt 0) {
         Write-Log "Storage placement: automatic across $($placementVolumes.Count) volume(s)" -Tag "Info"
