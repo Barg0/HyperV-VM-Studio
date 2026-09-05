@@ -8188,7 +8188,9 @@ function validate() {
       info(`${label} installs the Server Core App Compatibility FOD — Build-Vms.ps1 asks for the Windows Server Languages and Optional Features ISO, or the guest installs it online at first boot.`, `Virtual machines › ${label}`);
     }
     if ((s.rsatCapabilities || []).length) {
-      warn(`${label} installs ${(s.rsatCapabilities || []).length} RSAT capability(ies) — Build-Vms.ps1 asks for the Windows 11 Languages and Optional Features ISO. Without it each one is a separate Windows Update download at first boot.`, `Virtual machines › ${label}`);
+      // Same standing as the App Compat FOD note above it: the ISO saves the download,
+      // its absence costs time at first boot and nothing else.
+      info(`${label} installs ${(s.rsatCapabilities || []).length} RSAT capability(ies) — Build-Vms.ps1 asks for the Windows 11 Languages and Optional Features ISO. Without it each one is a separate Windows Update download at first boot.`, `Virtual machines › ${label}`);
     }
     if (isAdDomainController(s)) {
       info(`${label} installs AD DS binaries only — promote it in the guest afterwards with Install-ADDSForest.`, `Virtual machines › ${label}`);
