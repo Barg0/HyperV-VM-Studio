@@ -2648,7 +2648,7 @@ const SERVER_RSAT_CATALOG = [
     children: [
       { id: "RDS-Gateway-UI", label: "Remote Desktop Gateway Tools", noCore: true, keywords: "rd gateway console tsgateway policies", info: "Installs RDS-Gateway-UI — the RD Gateway Manager console and its PowerShell provider. Desktop Experience only." },
       { id: "RDS-Licensing-UI", label: "Remote Desktop Licensing Tools", noCore: true, keywords: "rd licensing manager cal client access license activation", info: "Installs RDS-Licensing-UI — RD Licensing Manager, where a license server is activated and CALs are installed. Desktop Experience only." },
-      { id: "RDS-Licensing-Diagnosis-UI", label: "Remote Desktop Licensing Diagnoser Tools", noCore: true, keywords: "licensing diagnoser grace period troubleshooting", info: "Installs RDS-Licensing-Diagnosis-UI — the Licensing Diagnoser, which reports why a session host is not reaching a license server. Desktop Experience only." }
+      { id: "RSAT-RDS-Licensing-Diagnosis-UI", label: "Remote Desktop Licensing Diagnoser Tools", noCore: true, keywords: "licensing diagnoser grace period troubleshooting", info: "Installs RSAT-RDS-Licensing-Diagnosis-UI — the Licensing Diagnoser, which reports why a session host is not reaching a license server. Desktop Experience only." }
     ]
   },
   { id: "RSAT-NPAS", label: "Network Policy and Access Services Tools", icon: "security.svg", noCore: true, keywords: "network policy server nps radius", info: "Installs NPAS Tools (RSAT-NPAS) — the Network Policy Server console and PowerShell module. Desktop Experience only." },
@@ -3170,7 +3170,7 @@ const VM_TEMPLATES = {
     sub: "The once-per-farm half of a split deployment on one box: Connection Broker, Web Access and Licensing with the RDS and licensing consoles. Session hosts go on their own VMs.",
     name: "rds-cb-01",
     imageId: "ws2025-datacenter-desktop",
-    windowsFeatures: ["Remote-Desktop-Services", "RDS-Connection-Broker", "RDS-Web-Access", "RDS-Licensing", "RSAT-RDS-Tools", "RDS-Licensing-UI", "RDS-Licensing-Diagnosis-UI"]
+    windowsFeatures: ["Remote-Desktop-Services", "RDS-Connection-Broker", "RDS-Web-Access", "RDS-Licensing", "RSAT-RDS-Tools", "RDS-Licensing-UI", "RSAT-RDS-Licensing-Diagnosis-UI"]
   },
   "rds-host-2025-desktop": {
     group: "Remote Desktop Services",
@@ -3226,7 +3226,7 @@ const VM_TEMPLATES = {
     imageId: "ws2025-datacenter-desktop",
     cpuCount: 2,
     memoryGB: 4,
-    windowsFeatures: ["Remote-Desktop-Services", "RDS-Licensing", "RSAT-RDS-Tools", "RDS-Licensing-UI", "RDS-Licensing-Diagnosis-UI"]
+    windowsFeatures: ["Remote-Desktop-Services", "RDS-Licensing", "RSAT-RDS-Tools", "RDS-Licensing-UI", "RSAT-RDS-Licensing-Diagnosis-UI"]
   },
   "paw-w11-pro": {
     group: "Privileged workstations",
