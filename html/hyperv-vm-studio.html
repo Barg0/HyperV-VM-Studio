@@ -4140,7 +4140,7 @@ const state = {
     vhdPath: "",
     availableSwitches: [],
     cluster: { enabled: false, name: "", addAfterCreate: true },
-    naming: { vmNameIncludeFqdn: false, folderIncludeFqdn: false },
+    naming: { vmNameIncludeFqdn: false, folderIncludeFqdn: false, fqdnOverrideEnabled: false, fqdn: "" },
     sxsSourcePath: "",
     locale: LOCALE_DEFAULT,
     keyboardLayout: LOCALE_DEFAULT,
@@ -4735,14 +4735,33 @@ function closeThemePopover() {
 function namingDefaults() {
   const n = state.defaults.naming || {};
   const vm = !!n.vmNameIncludeFqdn;   // off unless the config says otherwise
-  return { vmNameIncludeFqdn: vm, folderIncludeFqdn: vm && !!n.folderIncludeFqdn };
+  return {
+    vmNameIncludeFqdn: vm,
+    folderIncludeFqdn: vm && !!n.folderIncludeFqdn,
+    fqdnOverrideEnabled: vm && !!n.fqdnOverrideEnabled,
+    fqdn: String(n.fqdn || "").trim()
+  };
 }
 function namingConfig() {
   const n = namingDefaults();
-  return { vmNameIncludeFqdn: n.vmNameIncludeFqdn, folderIncludeFqdn: n.folderIncludeFqdn };
+  const out = { vmNameIncludeFqdn: n.vmNameIncludeFqdn, folderIncludeFqdn: n.folderIncludeFqdn };
+  // Only written when the toggle is on - Build-Vms.ps1 reads the key's presence as "use this".
+  if (n.fqdnOverrideEnabled) out.fqdn = namingFqdnOverride();
+  return out;
 }
-/* Mirrors Get-ServerDomainSuffix in Build-Vms.ps1 — preview only. */
-function serverDomainSuffix(s) {
+/* The fixed suffix typed in General Settings › Naming, "" while the toggle is off or the
+   box is empty. */
+function namingFqdnOverride() {
+  const n = namingDefaults();
+  if (!n.fqdnOverrideEnabled) return "";
+  return n.fqdn.replace(/\.+$/, "").toLowerCase();
+}
+/* Mirrors Get-ServerNamingSuffix in Build-Vms.ps1 — preview only. The fixed FQDN wins over
+   Domain Join, so the first DC — which builds the domain rather than joining one — still
+   gets the suffix on its Hyper-V object and its folders. */
+function namingSuffixForServer(s) {
+  const fixed = namingFqdnOverride();
+  if (fixed) return fixed;
   return String(resolvedDomainForServer(s || {}) || "").replace(/\.+$/, "").toLowerCase();
 }
 
@@ -5213,7 +5232,7 @@ function decodeState(text) {
     vhdPath: "",
     availableSwitches: [],
     cluster: { enabled: false, name: "", addAfterCreate: true },
-    naming: { vmNameIncludeFqdn: false, folderIncludeFqdn: false },
+    naming: { vmNameIncludeFqdn: false, folderIncludeFqdn: false, fqdnOverrideEnabled: false, fqdn: "" },
     sxsSourcePath: "",
     locale: LOCALE_DEFAULT,
     keyboardLayout: LOCALE_DEFAULT,
@@ -5724,7 +5743,7 @@ function renderOverview() {
             <strong>VHD path</strong> new machines are written to. Leave those two blank to use Hyper-V's own defaults. The SxS
             source is only needed if a VM installs .NET Framework 3.5.</li>
             <li><strong>Local username theme</strong> — what the Generate button on a VM card invents for account names.</li>
-            <li><strong>Naming</strong> — whether the Hyper-V VM name and its folder carry the domain suffix.</li>
+            <li><strong>Naming</strong> — whether the Hyper-V VM name and its folder carry the domain suffix, and one fixed FQDN for VMs that build a domain instead of joining one.</li>
           </ul>
           <div class="row"><button class="btn" type="button" data-goto="general"><img src="${iconSrc("settings.svg")}" alt=""> Open General Settings</button></div>
         `)}
@@ -5910,11 +5929,13 @@ function renderGeneral() {
   const c = d.cluster || {};
   const themeLabel = (USERNAME_THEMES[state.usernameTheme] || {}).label || state.usernameTheme;
   const nm = namingDefaults();
-  // Prefer a real domain-joined VM for the preview, otherwise show a generic one.
-  const nmSample = state.servers.find(s => serverDomainSuffix(s));
+  const namingFqdnUnlocked = !!state.nameEdit["gs:namingFqdn"];
+  // Prefer a real VM with a suffix, then any VM, then a generic one. The fixed FQDN is
+  // the whole config's, so it stands in even while the VM list is still empty.
+  const nmSample = state.servers.find(s => namingSuffixForServer(s)) || state.servers[0];
   const namingExample = (() => {
-    const short = nmSample ? String(nmSample.name || "") : "dc-01";
-    const domain = nmSample ? serverDomainSuffix(nmSample) : "ad.example.invalid";
+    const short = (nmSample && String(nmSample.name || "").trim()) || "dc-01";
+    const domain = namingFqdnOverride() || (nmSample ? namingSuffixForServer(nmSample) : "") || "ad.example.invalid";
     return {
       short, domain,
       vmName: nm.vmNameIncludeFqdn ? short + "." + domain : short,
@@ -5985,15 +6006,33 @@ function renderGeneral() {
       </div>
       `, "", false)}
 
-    ${gsCard("gs-naming", "vm.svg", "Naming", nm.vmNameIncludeFqdn ? (nm.folderIncludeFqdn ? "FQDN name + FQDN folder" : "FQDN name, short folder") : "short name + short folder", `
-      <p class="hint" style="margin-bottom:10px">Applies to domain-joined VMs only — a VM with no resolvable Domain Join always stays on its short name. The guest's own NetBIOS <code>ComputerName</code> in the answer file is never affected by either toggle; it is always the short name.</p>
+    ${gsCard("gs-naming", "vm.svg", "Naming", (nm.vmNameIncludeFqdn ? (nm.folderIncludeFqdn ? "FQDN name + FQDN folder" : "FQDN name, short folder") : "short name + short folder") + (namingFqdnOverride() ? ` · ${esc(namingFqdnOverride())}` : ""), `
+      <p class="hint" style="margin-bottom:10px">The suffix comes from each VM's Domain Join unless the fixed FQDN below is set — a VM with neither always stays on its short name. The guest's own NetBIOS <code>ComputerName</code> in the answer file is never affected by any of these toggles; it is always the short name.</p>
       <div class="toggle-grid" style="grid-template-columns:1fr">
         ${toggle(`data-nm="vmNameIncludeFqdn"`, "Hyper-V VM name includes the FQDN", nm.vmNameIncludeFqdn, false,
           nm.vmNameIncludeFqdn ? "Hyper-V object name becomes <code>computerName.domain</code>." : "Hyper-V object keeps the short computer name.")}
         ${toggle(`data-nm="folderIncludeFqdn"`, "VM / VHD folder names include the FQDN", nm.folderIncludeFqdn, !nm.vmNameIncludeFqdn,
           nm.vmNameIncludeFqdn ? "Leaf folder under VM path / VHD path." : "Needs the Hyper-V VM name toggle above.")}
+        ${toggle(`data-nm="fqdnOverrideEnabled"`, `Use one fixed FQDN for every VM ${infoTip("Fixed FQDN",
+          "A domain the build creates rather than joins — the first DC of a fresh forest — has no Domain Join account to read a suffix from, so Hyper-V and the folders would fall back to the short name. Typing the domain here gives every VM in this config the same suffix, whether it joins the domain or builds it.")}`,
+          nm.fqdnOverrideEnabled, !nm.vmNameIncludeFqdn,
+          !nm.vmNameIncludeFqdn ? "Needs the Hyper-V VM name toggle above."
+            : (nm.fqdnOverrideEnabled ? "Overrides the Domain Join suffix on every VM, joined or not." : "Off — each VM uses its own Domain Join domain."))}
       </div>
-      <p class="hint" style="margin:14px 0 8px"><code>${esc(namingExample.short)}</code> joined to <code>${esc(namingExample.domain)}</code> is built as:</p>
+      ${nm.vmNameIncludeFqdn && nm.fqdnOverrideEnabled ? `
+      <div class="grid-2" style="margin-top:12px">
+        ${field(fieldLabel("identity.svg", "Fixed FQDN"), `
+          <div class="edit-field">
+            <input data-nm="fqdn" data-name-input="gs:namingFqdn" value="${esc(nm.fqdn)}" spellcheck="false"
+                   placeholder="ad.example.invalid" ${namingFqdnUnlocked ? "" : "readonly"}
+                   class="keep-border ${inv("d:namingFqdn")}"${invAria("d:namingFqdn")}>
+            <button class="btn icon" type="button" data-name-edit="gs:namingFqdn"
+                    title="${namingFqdnUnlocked ? "Done" : "Edit FQDN"}"
+                    aria-label="${namingFqdnUnlocked ? "Done" : "Edit FQDN"}">${namingFqdnUnlocked ? checkIcon() : pencilIcon()}</button>
+          </div>
+          <span class="hint">Used for every VM in this config — the domain a fresh DC builds, not one it joins.</span>`)}
+      </div>` : ""}
+      <p class="hint" style="margin:14px 0 8px"><code>${esc(namingExample.short)}</code> with the suffix <code>${esc(namingExample.domain)}</code> is built as:</p>
       ${namingTree}`, "", false)}
 
     ${!SHOW_IMAGE_DEFAULTS ? "" : gsCard("image-defaults", "shared-gallery.svg", "Image defaults", "Per-image differencing, Secure Boot, memory/CPU", `
@@ -6736,8 +6775,7 @@ function renderServerNetworkAdapters(s) {
    you type cannot drift from the one a full render would draw. */
 function serverNameParts(s) {
   const shortName = (s.name || "new server").toLowerCase().slice(0, NETBIOS_MAX);
-  const d = resolvedDomainForServer(s);
-  const domainFqdn = d ? d.replace(/\.+$/, "").toLowerCase() : "";
+  const domainFqdn = namingSuffixForServer(s);
   const nm = namingDefaults();
   return {
     shortName,
@@ -7630,7 +7668,7 @@ function folderIcon() {
 /** Leaf folder under the VM / VHD roots — short name unless folder FQDN naming is on. */
 function serverFolderName(s) {
   const short = String(s.name || "vm").toLowerCase().slice(0, NETBIOS_MAX) || "vm";
-  const domain = serverDomainSuffix(s);
+  const domain = namingSuffixForServer(s);
   return (domain && namingDefaults().folderIncludeFqdn) ? `${short}.${domain}` : short;
 }
 /** "" when neither a per-VM override nor a General Settings default is set. */
@@ -7845,6 +7883,17 @@ function validate() {
   }
   if (!String(d.locale || "").trim()) {
     warn("No locale set — guests fall back to the image default.", "General Settings › Regional");
+  }
+  const nmValidate = namingDefaults();
+  if (nmValidate.fqdnOverrideEnabled) {
+    const fixed = nmValidate.fqdn.replace(/\.+$/, "");
+    if (!fixed) {
+      err("Fixed FQDN is on but empty — either type the domain or turn the toggle off.", "General Settings › Naming", "d:namingFqdn");
+    } else if (!/^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)*$/i.test(fixed)) {
+      err(`Fixed FQDN "${fixed}" is not a DNS name — labels are letters, digits and hyphens, separated by dots.`, "General Settings › Naming", "d:namingFqdn");
+    } else if (fixed.indexOf(".") === -1) {
+      warn(`Fixed FQDN "${fixed}" is a single label — Hyper-V names and folders get "${fixed}" appended with no dotted suffix.`, "General Settings › Naming");
+    }
   }
   if (storagePlacementActive()) {
     const spWhere = "Failover Cluster › Storage placement";
@@ -8238,6 +8287,7 @@ function reviewGeneralRows() {
     kvRow("Username theme", (USERNAME_THEMES[state.usernameTheme] || {}).label || state.usernameTheme) +
     kvRow("VM name includes FQDN", yesNo(nm.vmNameIncludeFqdn)) +
     kvRow("Folder name includes FQDN", yesNo(nm.folderIncludeFqdn)) +
+    kvRow("Fixed FQDN", namingFqdnOverride() || "Off — each VM uses its own Domain Join domain") +
     kvRow("Failover cluster", cluster.enabled ? (cluster.name || "enabled, unnamed") : "Off")
   );
 }
@@ -8276,7 +8326,7 @@ function reviewServerRows(s) {
   const net = findServerNetwork(s);
   const dj = effectiveDomainJoinAccount(s);
   const arc = effectiveAzureArcPrincipal(s);
-  const domain = serverDomainSuffix(s);
+  const domain = namingSuffixForServer(s);
   const nm = namingDefaults();
   const dns = (s.dnsServers || []).filter(x => String(x || "").trim());
   const disks = s.additionalDisks || [];
@@ -9434,6 +9484,13 @@ document.getElementById("main").addEventListener("input", e => {
   // uncommitted when the checkmark's mousedown is prevented below and blur never fires.
   if (e.target.getAttribute("data-cl") === "name") { state.defaults.cluster.name = e.target.value; return; }
 
+  if (e.target.getAttribute("data-nm") === "fqdn") {
+    state.defaults.naming = state.defaults.naming || {};
+    state.defaults.naming.fqdn = e.target.value;
+    liveValidateRequired(e.target);
+    return;
+  }
+
   const spvIdx = e.target.getAttribute("data-spv");
   if (spvIdx !== null) {
     const vol = storagePlacement().volumes[Number(spvIdx)];
@@ -9786,9 +9843,13 @@ document.getElementById("main").addEventListener("change", e => {
   const nm = e.target.getAttribute("data-nm");
   if (nm) {
     state.defaults.naming = state.defaults.naming || {};
-    state.defaults.naming[nm] = e.target.checked;
-    // Folder FQDN is meaningless while the Hyper-V object name stays short.
-    if (nm === "vmNameIncludeFqdn" && !e.target.checked) state.defaults.naming.folderIncludeFqdn = false;
+    state.defaults.naming[nm] = e.target.type === "checkbox" ? e.target.checked : e.target.value;
+    // Folder FQDN and the fixed suffix are both meaningless while the Hyper-V object name
+    // stays short - nothing would carry either one.
+    if (nm === "vmNameIncludeFqdn" && !e.target.checked) {
+      state.defaults.naming.folderIncludeFqdn = false;
+      state.defaults.naming.fqdnOverrideEnabled = false;
+    }
     scheduleRender();
     return;
   }
@@ -10182,8 +10243,7 @@ function buildObjectPsSnippet(kind, ref) {
     const s = state.servers.find(x => x._id === ref);
     if (!s) return null;
     const shortName = (s.name || "vm").toLowerCase().slice(0, 15);
-    const domainRaw = resolvedDomainForServer(s);
-    const domainFqdn = domainRaw ? domainRaw.replace(/\.+$/, "").toLowerCase() : "";
+    const domainFqdn = namingSuffixForServer(s);
     const nmPs = namingDefaults();
     const name = (domainFqdn && nmPs.vmNameIncludeFqdn) ? `${shortName}.${domainFqdn}` : shortName;
     const folder = (domainFqdn && nmPs.folderIncludeFqdn) ? `${shortName}.${domainFqdn}` : shortName;
