@@ -6039,8 +6039,7 @@ function renderGeneral() {
       </div>
       `, "", false)}
 
-    ${gsCard("gs-naming", "vm.svg", "Naming", (nm.vmNameIncludeFqdn ? (nm.folderIncludeFqdn ? "FQDN name + FQDN folder" : "FQDN name, short folder") : "short name + short folder") + (namingFqdnOverride() ? ` · ${esc(namingFqdnOverride())}` : ""), `
-      <p class="hint" style="margin-bottom:10px">The suffix comes from each VM's Domain Join unless the fixed FQDN below is set — a VM with neither always stays on its short name. The guest's own NetBIOS <code>ComputerName</code> in the answer file is never affected by any of these toggles; it is always the short name.</p>
+    ${gsCard("gs-naming", "vm.svg", `Naming ${infoTip("Naming", "The suffix comes from each VM's Domain Join unless the fixed FQDN below is set — a VM with neither always stays on its short name. The guest's own NetBIOS ComputerName in the answer file is never affected by any of these toggles; it is always the short name.")}`, (nm.vmNameIncludeFqdn ? (nm.folderIncludeFqdn ? "FQDN name + FQDN folder" : "FQDN name, short folder") : "short name + short folder") + (namingFqdnOverride() ? ` · ${esc(namingFqdnOverride())}` : ""), `
       <div class="toggle-grid" style="grid-template-columns:1fr">
         ${toggle(`data-nm="vmNameIncludeFqdn"`, "Hyper-V VM name includes the FQDN", nm.vmNameIncludeFqdn, false,
           nm.vmNameIncludeFqdn ? "Hyper-V object name becomes <code>computerName.domain</code>." : "Hyper-V object keeps the short computer name.")}
