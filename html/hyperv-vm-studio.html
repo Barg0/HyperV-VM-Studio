@@ -7453,13 +7453,14 @@ function renderAzureArcBlade() {
 /* Offline-checkable facts about one clustered VM. Whether the storage really is on CSV
    can only be answered on the host — everything here is about what the config implies. */
 /* The virtual-machine cell every attached-VM table shares: the name jumps to its card. */
-/* Every list that attaches machines to something - Domain Join, Azure Arc, the cluster,
-   the review table - names the VM, not the image it was built from, so it takes vm.svg.
-   The edition glyph stays where the subject really is the image: the VM card head and
-   the image picker. */
+/* Wherever a named machine appears - an attach table, the review cards, the password
+   list, its own card head - it wears its own band: Host blue for a client, Deploy orange
+   for a custom gold, Workloads green for the rest. Plain green vm.svg is left to stand for
+   the idea of a virtual machine rather than one of them: the nav entry, the add and picker
+   buttons, empty states. */
 function vmGridCell(s) {
   return `<button type="button" class="cl-vm" data-goto-vm="${esc(s._id)}">
-    <img src="${iconSrc("vm.svg")}" alt="">
+    <img src="${iconSrcBand("vm.svg", serverGlyphBand(s))}" alt="">
     <span class="sam">${esc(serverDisplayName(s))}</span>
   </button>`;
 }
@@ -7802,7 +7803,7 @@ function renderLabelledPlacement(servers) {
 
   const blocks = servers.map(s => `
     <div class="pl-block">
-      <div class="pl-block-head"><img src="${iconSrc("vm.svg")}" alt=""><span class="sam">${esc(serverDisplayName(s))}</span></div>
+      <div class="pl-block-head"><img src="${iconSrcBand("vm.svg", serverGlyphBand(s))}" alt=""><span class="sam">${esc(serverDisplayName(s))}</span></div>
       ${vmPlacementSummary(s)}
     </div>`).join("");
 
@@ -10493,9 +10494,10 @@ function renderMemberPickerList() {
   const filtered = names.filter(n => !filter || n.includes(filter));
   list.innerHTML = filtered.length ? filtered.map(n => {
     const sel = ctx.selected.includes(n);
+    const server = state.servers.find(x => x.name === n);
     return `<button type="button" class="btn row ${sel ? "selected" : ""}" data-pick-vm="${esc(n)}">
       <span class="op-check">✓</span>
-      <img src="${iconSrc("vm.svg")}" width="16" height="16">
+      <img src="${iconSrcBand("vm.svg", serverGlyphBand(server))}" width="16" height="16">
       <span class="op-name">${esc(n)}</span>
       <span class="op-meta">Gen2</span>
     </button>`;
