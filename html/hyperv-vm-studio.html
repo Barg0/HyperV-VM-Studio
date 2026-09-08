@@ -10124,6 +10124,25 @@ document.getElementById("main").addEventListener("change", e => {
   if (state.blade === "export") scheduleRender();
 });
 
+/* Typing must not re-render the blade - that would drop the caret mid-word - so the
+   handlers above patch the field they touched and return. The sidebar badges read the same
+   state, though, so without this they kept whatever count the last full render left behind:
+   filling in the last required field cleared its red border while the red number beside
+   Review and validate stayed put until some unrelated event forced a render. These listeners
+   run after the handlers above - listeners fire in registration order - and repaint the
+   sidebar only, never the field being typed in. */
+let pendingNavHandle = null;
+function scheduleNavRefresh() {
+  if (pendingNavHandle !== null) return;
+  pendingNavHandle = setTimeout(() => {
+    pendingNavHandle = null;
+    refreshValidation();
+    renderNav();
+  }, 150);
+}
+document.getElementById("main").addEventListener("input", scheduleNavRefresh);
+document.getElementById("main").addEventListener("change", scheduleNavRefresh);
+
 document.getElementById("themeBtn").addEventListener("click", e => {
   e.stopPropagation();
   const pop = document.getElementById("themePopover");
