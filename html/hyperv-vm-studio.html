@@ -523,6 +523,10 @@
   .cl-grid.attach .cl-grid-head, .cl-grid.attach .cl-row {
     grid-template-columns: minmax(0, 220px) minmax(0, 1fr) minmax(0, 190px) 36px;
   }
+  /* Inline switches in a grid row: the label carries the state, so it reads at row size
+     rather than as the muted caption the mini variant uses on its own. */
+  .cl-row .toggle.mini { font-size: 12px; color: var(--fg); }
+  .cl-row .toggle.mini .pill.role { margin-left: 2px; }
   .cl-vm.is-missing { display: inline-flex; align-items: center; gap: 8px; color: var(--fg-muted); }
   .cl-vm.is-missing .sam { font-family: var(--mono); }
   .cl-detach { justify-self: end; }
@@ -3495,6 +3499,19 @@ function effectiveDomainJoinMode(s) {
   return (img.kind === "client" && String(dj.ouPath || "").trim()) ? "deferred" : "specialize";
 }
 
+/* The Join timing cell in the attach table. A row is not a card, so the switch drops its
+   chrome and states the timing it is set to rather than naming the action. The AUTO badge
+   marks a VM still following the client + OU rule; touching the switch pins the mode and
+   the badge goes. */
+function domainJoinTimingCell(s) {
+  const deferred = effectiveDomainJoinMode(s) === "deferred";
+  const dj = (s && s.domainJoin) || {};
+  const pinned = dj.mode === "deferred" || dj.mode === "specialize";
+  const label = (deferred ? "After first boot" : "During specialize") +
+    (pinned ? "" : ` <span class="pill role">auto</span>`);
+  return toggle(`data-s="${esc(s._id)}" data-k="djDeferred"`, label, deferred, false, "", "mini");
+}
+
 /* "Use for every VM" mode for Domain Join / Azure Arc — mirrors the cluster blade's
    addAllVms: a non-destructive global override. Per-VM assignments stay untouched in
    state; the resolvers below short-circuit while the mode is on, and export flattens
@@ -5578,10 +5595,10 @@ function featureInfoTip(item) {
 }
 /* `sub` is trusted markup (same contract as toolbox toggleField) — a short second
    line inside the row, so long explanations stop needing a separate <p class=hint>. */
-function toggle(attrs, label, checked, disabled, sub) {
+function toggle(attrs, label, checked, disabled, sub, variant) {
   const dis = disabled ? " disabled" : "";
   const subHtml = sub ? `<span class="toggle-sub">${sub}</span>` : "";
-  return `<label class="toggle${disabled ? " disabled" : ""}"><input type="checkbox" ${attrs}${checked ? " checked" : ""}${dis}><span class="toggle-track"><span class="toggle-thumb"></span></span><span class="toggle-label">${label}${subHtml}</span></label>`;
+  return `<label class="toggle${variant ? ` ${variant}` : ""}${disabled ? " disabled" : ""}"><input type="checkbox" ${attrs}${checked ? " checked" : ""}${dis}><span class="toggle-track"><span class="toggle-thumb"></span></span><span class="toggle-label">${label}${subHtml}</span></label>`;
 }
 /* The tip rides inside the toggle's own label, right after the text — parked outside the
    bordered row it squeezed the row narrower than its neighbours and the switch looked
@@ -7332,8 +7349,7 @@ function renderDomainJoinBlade() {
               <div class="cl-row">
                 ${vmGridCell(s)}
                 <div><input data-s="${esc(s._id)}" data-k="djOu" value="${esc((s.domainJoin&&s.domainJoin.ouPath)||"")}" placeholder="OU=Servers,OU=Tier0,DC=ad,DC=example,DC=invalid"></div>
-                <div>${toggle(`data-s="${esc(s._id)}" data-k="djDeferred"`, "After first boot", effectiveDomainJoinMode(s) === "deferred", false,
-                  (s.domainJoin && (s.domainJoin.mode === "deferred" || s.domainJoin.mode === "specialize")) ? "Set by hand" : "Automatic")}</div>
+                <div>${domainJoinTimingCell(s)}</div>
                 <div class="cl-detach">${allOn ? "" : `<button class="btn icon danger-text" type="button" title="Detach ${esc(serverDisplayName(s))}" aria-label="Detach ${esc(serverDisplayName(s))}" data-dj-detach="${esc(s._id)}">${trashIcon()}</button>`}</div>
               </div>`).join("")}
             </div>` : `<p class="hint" style="margin:10px 0 0">No VMs attached — this account joins nothing.</p>`}
