@@ -423,7 +423,8 @@ that become clustered roles — each lands on whichever volume has the most room
 ### <picture><source media="(prefers-color-scheme: dark)" srcset=".github/assets/blades/domainjoin-dark.png"><img src=".github/assets/blades/domainjoin-light.png" width="20" alt=""></picture> Domain Join
 
 <picture><source media="(prefers-color-scheme: dark)" srcset=".github/assets/icons/identity-dark.svg"><img src=".github/assets/icons/identity-light.svg" width="16" alt=""></picture> Join accounts defined once, attached to VMs — one per tier or OU if you like,
-with a target OU per machine. The join runs during Windows specialize, before anyone logs in.
+with a target OU per machine. The join runs during Windows specialize, before anyone logs in —
+or, per VM, from a self-erasing scheduled task once first-boot provisioning is done.
 
 <img src=".github/assets/blades/domainjoin-tour.webp" width="860" alt="Adding a join account, attaching a VM, setting its OU path">
 
@@ -444,9 +445,25 @@ Every attached VM gets an **OU path** field — the distinguished name where its
 object lands, e.g. `OU=Servers,OU=Tier0,DC=ad,DC=example,DC=invalid`. Leave it empty and the
 machine goes to the domain's default container, `CN=Computers`.
 
-> <picture><source media="(prefers-color-scheme: dark)" srcset=".github/assets/icons/help-dark.svg"><img src=".github/assets/icons/help-light.svg" width="16" alt=""></picture> A domain-joined VM needs a static IP here — the join runs during specialize, so
-> the address has to exist before any DHCP lease would. DHCP elsewhere on the network is fine;
-> this VM just doesn't use it.
+Next to it sits **Join timing**:
+
+- **Off — during specialize.** The unattend joins before anyone logs in. Simplest, one boot.
+- **On — after first boot.** The unattend stays join-free. `GuestProvision.ps1` finishes
+  everything else, seals the join credential with DPAPI (machine scope), and registers a
+  SYSTEM scheduled task, `VmDeploy-DomainJoin`. A few minutes after Setup has let go of the
+  machine the task joins the domain and OU, wipes the credential, its script and itself —
+  on success **and** on failure — and reboots. Domain policy only ever meets a machine that
+  is already fully provisioned; a hardened OU (CIS build kits, security baselines) can no
+  longer interfere with first boot. A failed join leaves the VM in its workgroup and writes
+  `domainJoin.result` into `C:\ProgramData\VmDeployLogs\state.json`.
+
+Windows client VMs with an OU path start out **on**, everything else **off**; flip it per
+VM. The studio exports the effective value as `domainJoin.mode` (`specialize` or
+`deferred`), and `Build-Vms.ps1` follows it without applying the rule itself.
+
+> <picture><source media="(prefers-color-scheme: dark)" srcset=".github/assets/icons/help-dark.svg"><img src=".github/assets/icons/help-light.svg" width="16" alt=""></picture> A domain-joined VM needs a static IP here, whichever timing it uses — the join
+> has to find a domain controller before any DHCP lease would exist. DHCP elsewhere on the
+> network is fine; this VM just doesn't use it.
 
 ### <picture><source media="(prefers-color-scheme: dark)" srcset=".github/assets/blades/azurearc-dark.png"><img src=".github/assets/blades/azurearc-light.png" width="20" alt=""></picture> Azure Arc
 

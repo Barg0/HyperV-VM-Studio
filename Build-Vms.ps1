@@ -1463,9 +1463,12 @@ function Get-ServerUnattendContent {
 
     # Static IP + domain join both happen in the specialize pass for every OS type
     # (TCPIP + DNS-Client + UnattendedJoin, MAC Identifier - AutomatedLab / AzSHCI
-    # pattern). Win11 requires this path (a post-boot SetupComplete join hangs Win11
-    # OOBE); Server has no such restriction, so it uses the same mechanism instead
-    # of a separate runtime script.
+    # pattern). A join from SetupComplete itself is off the table: it needs a reboot,
+    # and Microsoft documents a reboot inside SetupComplete as leaving the machine in
+    # a bad state (that is the Win11 OOBE hang seen 2026-08-30). domainJoin.mode =
+    # "deferred" therefore keeps the unattend join-free and hands the join to the
+    # VmDeploy-DomainJoin task that GuestProvision registers - see
+    # Set-OfflineGuestProvisionPayload.
     if (-not [string]::IsNullOrWhiteSpace($ipAddress)) {
         $ipv4Pattern = '^\d{1,3}(\.\d{1,3}){3}$'
         if ($ipAddress -notmatch $ipv4Pattern) {
@@ -1710,7 +1713,7 @@ $tcpipIfaceText
 "@
     }
 
-    if ($domainJoin) {
+    if ($domainJoin -and $domainJoin.mode -ne "deferred") {
         $domain = ([string]$domainJoin.domain).Trim()
         $joinUser = ([string]$domainJoin.joinUser).Trim()
         $joinPassword = [string]$domainJoin.joinPassword
@@ -1950,6 +1953,11 @@ function Resolve-DomainJoinForServer {
     $joinUser = ([string]$dj.joinUser).Trim()
     $joinPassword = Convert-ToPlainText -Value $dj.joinPassword
     $ouPath = ([string]$dj.ouPath).Trim()
+    # "specialize" (default) joins from the unattend; "deferred" leaves the unattend alone
+    # and lets GuestProvision register the VmDeploy-DomainJoin task, which joins once
+    # Setup is finished - the studio decides the value, this script never guesses it.
+    $mode = ([string]$dj.mode).Trim().ToLowerInvariant()
+    if ($mode -ne "deferred") { $mode = "specialize" }
 
     # Catalog shape: accountId -> domainJoinAccounts[] (overlay; keep any inline values as fallback)
     if (-not [string]::IsNullOrWhiteSpace($accountId)) {
@@ -2000,6 +2008,7 @@ function Resolve-DomainJoinForServer {
         joinUser     = $joinUser
         joinPassword = $joinPassword
         ouPath       = $ouPath
+        mode         = $mode
     }
 }
 
@@ -2609,6 +2618,15 @@ function Set-OfflineGuestProvisionPayload {
 
     $arc = Get-EffectiveAzureArcConfig -Server $Server -Defaults $Defaults
 
+    # Deferred domain join: the unattend carried no UnattendedJoin, so the guest owns the
+    # join. The manifest gets the non-secret half, domain-join.json the credential (which
+    # GuestProvision seals with DPAPI and wipes before the task ever fires).
+    $deferredJoin = $null
+    $resolvedJoin = Resolve-DomainJoinForServer -Server $Server
+    if ($resolvedJoin -and $resolvedJoin.mode -eq "deferred") {
+        $deferredJoin = $resolvedJoin
+    }
+
     # Only the disks the guest has work to do on. Paths are host-side, so they are not
     # passed through - the guest matches on SCSI location and falls back to disk size.
     $dataDiskJobs = @(Get-ServerDataDiskPlan -Server $Server | Where-Object {
@@ -2631,7 +2649,8 @@ function Set-OfflineGuestProvisionPayload {
                   ($PendingCapabilities.Count -gt 0) -or
                   ($dataDiskJobs.Count -gt 0) -or
                   (@($NicPlan).Count -gt 0) -or
-                  ($null -ne $arc)
+                  ($null -ne $arc) -or
+                  ($null -ne $deferredJoin)
 
     $scriptsDir = Join-Path -Path $OsRoot -ChildPath "Windows\Setup\Scripts"
     $guestProvisionDir = Join-Path -Path $scriptsDir -ChildPath "GuestProvision"
@@ -2655,6 +2674,21 @@ function Set-OfflineGuestProvisionPayload {
     }
     Copy-Item -LiteralPath $sourceScript -Destination (Join-Path -Path $guestProvisionDir -ChildPath "GuestProvision.ps1") -Force
 
+    # The join script rides along only when a deferred join is wanted; a stale copy or
+    # credential from an earlier pass over the same payload is removed either way.
+    $joinScriptTarget = Join-Path -Path $guestProvisionDir -ChildPath "DomainJoin.ps1"
+    $joinSecretTarget = Join-Path -Path $guestProvisionDir -ChildPath "domain-join.json"
+    foreach ($stale in @($joinScriptTarget, $joinSecretTarget)) {
+        if (Test-Path -LiteralPath $stale) { Remove-Item -LiteralPath $stale -Force -ErrorAction SilentlyContinue }
+    }
+    if ($null -ne $deferredJoin) {
+        $joinScriptSource = Join-Path -Path $PSScriptRoot -ChildPath "guest-files\DomainJoin.ps1"
+        if (-not (Test-Path -LiteralPath $joinScriptSource)) {
+            throw "DomainJoin guest script not found at '$joinScriptSource'"
+        }
+        Copy-Item -LiteralPath $joinScriptSource -Destination $joinScriptTarget -Force
+    }
+
     $manifest = @{
         pendingWindowsFeatures  = @($PendingWindowsFeatures)
         pendingRsatCapabilities = @($PendingRsatCapabilities)
@@ -2677,6 +2711,15 @@ function Set-OfflineGuestProvisionPayload {
                 }
             })
         azureArc                = $null
+        domainJoin              = $null
+    }
+    if ($null -ne $deferredJoin) {
+        $manifest.domainJoin = @{
+            enabled = $true
+            mode    = "deferred"
+            domain  = [string]$deferredJoin.domain
+            ouPath  = [string]$deferredJoin.ouPath
+        }
     }
     if ($null -ne $arc) {
         $manifest.azureArc = @{
@@ -2706,9 +2749,20 @@ function Set-OfflineGuestProvisionPayload {
         }
     }
 
+    if ($null -ne $deferredJoin) {
+        $joinDoc = @{
+            domain       = [string]$deferredJoin.domain
+            ouPath       = [string]$deferredJoin.ouPath
+            joinUser     = [string]$deferredJoin.joinUser
+            joinPassword = [string]$deferredJoin.joinPassword
+        } | ConvertTo-Json -Depth 3
+        [System.IO.File]::WriteAllText($joinSecretTarget, $joinDoc, $utf8NoBom)
+        Write-Log "Injected join credential + DomainJoin.ps1 for the deferred domain join" -Tag "Run"
+    }
+
     $setupCmd = @"
 @echo off
-REM GuestProvision - runs after specialize (join already done)
+REM GuestProvision - runs after specialize; a deferred domain join is registered here, not done here
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%~dp0GuestProvision\GuestProvision.ps1" >nul 2>&1
 "@
     [System.IO.File]::WriteAllText((Join-Path -Path $scriptsDir -ChildPath "SetupComplete.cmd"), $setupCmd, $utf8NoBom)
@@ -5337,7 +5391,7 @@ function Invoke-BuildPreflight {
             else {
                 $ou = ([string]$dj.ouPath).Trim()
                 $domain = ([string]$dj.domain).Trim()
-                $joinVia = "specialize (TCPIP + UnattendedJoin)"
+                $joinVia = if ($dj.mode -eq "deferred") { "VmDeploy-DomainJoin task after first boot (unattend stays join-free)" } else { "specialize (TCPIP + UnattendedJoin)" }
                 if ([string]::IsNullOrWhiteSpace($ou)) {
                     $ok.Add("$label domain join via $joinVia -> $domain (default Computers container; OU optional); Hyper-V name = $hyperVName")
                 }
@@ -5716,7 +5770,9 @@ function Get-ServerSummaryRows {
         $domainJoinError = $_.Exception.Message
     }
     if ($domainJoin) {
-        & $addRow "domain join" ([string]$domainJoin.domain)
+        $joinText = [string]$domainJoin.domain
+        if ($domainJoin.mode -eq "deferred") { $joinText += " (task after first boot)" }
+        & $addRow "domain join" $joinText
     }
     elseif (-not [string]::IsNullOrWhiteSpace($domainJoinError)) {
         & $addRow "domain join" "enabled but incomplete - see preflight"

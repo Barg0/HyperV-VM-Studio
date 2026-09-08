@@ -7,7 +7,9 @@
 .DESCRIPTION
     Runs once at the end of Windows Setup (SetupComplete) to finish online work
     that cannot be done offline: leftover Windows features, Client RSAT when no
-    FoD source was available, and Azure Arc onboarding (service-principal mode).
+    FoD source was available, Azure Arc onboarding (service-principal mode), and -
+    for VMs with domainJoin.mode = "deferred" - sealing the join credential and
+    registering the VmDeploy-DomainJoin task that joins after Setup is done.
 
 .NOTES
     Target shell : Windows PowerShell 5.1 and PowerShell 7
@@ -709,6 +711,91 @@ function Connect-GuestProvisionAzureArc {
     }
 }
 
+function Register-DeferredDomainJoin {
+    param(
+        [object]$JoinConfig
+    )
+
+    # domainJoin.mode = "deferred": the unattend did not join. The host dropped the join
+    # credential next to this script as plaintext domain-join.json. Seal it with DPAPI in
+    # LocalMachine scope (only SYSTEM / local admins on this very machine can open it),
+    # wipe the plaintext, and register the task that joins once Setup has let go of the
+    # machine. DomainJoin.ps1 wipes the sealed file, itself and the task on every outcome.
+    if ($null -eq $JoinConfig -or -not [bool]$JoinConfig.enabled) {
+        Write-Log "Domain join not in manifest" -Tag "Info"
+        return $null
+    }
+    if ([string]$JoinConfig.mode -ne "deferred") {
+        Write-Log "Domain join mode is '$([string]$JoinConfig.mode)' - the unattend already joined" -Tag "Info"
+        return $null
+    }
+
+    $plainPath  = Join-Path -Path $PSScriptRoot -ChildPath "domain-join.json"
+    $sealedPath = Join-Path -Path $PSScriptRoot -ChildPath "domain-join.bin"
+    $scriptPath = Join-Path -Path $PSScriptRoot -ChildPath "DomainJoin.ps1"
+    $taskName   = "VmDeploy-DomainJoin"
+    $outcome    = @{ mode = "deferred"; taskRegistered = $false; domain = [string]$JoinConfig.domain; ouPath = [string]$JoinConfig.ouPath }
+
+    try {
+        if (-not (Test-Path -LiteralPath $plainPath)) {
+            throw "Join credential '$plainPath' is missing"
+        }
+        if (-not (Test-Path -LiteralPath $scriptPath)) {
+            throw "Join script '$scriptPath' is missing"
+        }
+
+        Add-Type -AssemblyName System.Security
+        $plainBytes = [System.IO.File]::ReadAllBytes($plainPath)
+        $sealed = [System.Security.Cryptography.ProtectedData]::Protect(
+            $plainBytes, $null, [System.Security.Cryptography.DataProtectionScope]::LocalMachine)
+        [Array]::Clear($plainBytes, 0, $plainBytes.Length)
+        [System.IO.File]::WriteAllBytes($sealedPath, $sealed)
+        & icacls.exe $sealedPath /inheritance:r /grant:r "SYSTEM:F" "BUILTIN\Administrators:F" | Out-Null
+        Write-Log "Sealed join credential with DPAPI (LocalMachine)" -Tag "Ok"
+
+        $powershell = Join-Path -Path $env:SystemRoot -ChildPath "System32\WindowsPowerShell\v1.0\powershell.exe"
+        $action = New-ScheduledTaskAction -Execute $powershell `
+            -Argument "-NoProfile -NonInteractive -ExecutionPolicy Bypass -File `"$scriptPath`""
+        $principal = New-ScheduledTaskPrincipal -UserId "NT AUTHORITY\SYSTEM" -LogonType ServiceAccount -RunLevel Highest
+        # Two triggers: the one-shot fires on this very boot a few minutes after Setup has
+        # finished (SetupComplete must never reboot), the startup trigger covers a machine
+        # that rebooted first for pending features. The script is idempotent either way.
+        $soon = New-ScheduledTaskTrigger -Once -At (Get-Date).AddMinutes(5)
+        $boot = New-ScheduledTaskTrigger -AtStartup
+        $boot.Delay = "PT1M"
+        # No RestartCount: retries live inside DomainJoin.ps1 so its wipe always runs last.
+        $settings = New-ScheduledTaskSettingsSet -StartWhenAvailable -RunOnlyIfNetworkAvailable `
+            -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries `
+            -ExecutionTimeLimit (New-TimeSpan -Minutes 45) -MultipleInstances IgnoreNew
+
+        Register-ScheduledTask -TaskName $taskName -Action $action -Principal $principal `
+            -Trigger @($soon, $boot) -Settings $settings -Force -ErrorAction Stop | Out-Null
+        $outcome.taskRegistered = $true
+        Write-Log "Registered task '$taskName' (SYSTEM, fires in 5 min or at next startup)" -Tag "Ok"
+    }
+    catch {
+        Write-Log "Deferred domain join setup failed: $($_.Exception.Message)" -Tag "Error"
+        # Nothing may stay behind that could open the credential later.
+        if (Test-Path -LiteralPath $sealedPath) {
+            Remove-Item -LiteralPath $sealedPath -Force -ErrorAction SilentlyContinue
+        }
+        throw
+    }
+    finally {
+        if (Test-Path -LiteralPath $plainPath) {
+            try {
+                $length = (Get-Item -LiteralPath $plainPath).Length
+                if ($length -gt 0) { [System.IO.File]::WriteAllBytes($plainPath, (New-Object byte[] $length)) }
+            }
+            catch { }
+            Remove-Item -LiteralPath $plainPath -Force -ErrorAction SilentlyContinue
+            Write-Log "Removed plaintext domain-join.json" -Tag "Info"
+        }
+    }
+
+    return $outcome
+}
+
 # ---------------------------[ Script Start ]---------------------------
 Write-Log "==================== Start ====================" -Tag "Start"
 Write-Log "$env:COMPUTERNAME | $env:USERNAME | $applicationName" -Tag "Info"
@@ -724,6 +811,7 @@ $state = @{
     dataDisks          = @()
     networkAdapters    = @()
     arc                = @{ attempted = $false; authMode = $null }
+    domainJoin         = $null
     completedUtc       = $null
     restartNeeded      = $false
     success            = $false
@@ -803,6 +891,12 @@ try {
         $state.arc.attempted = [bool]$manifest.azureArc.enabled
         $state.arc.authMode  = [string]$manifest.azureArc.authMode
         Connect-GuestProvisionAzureArc -ArcConfig $manifest.azureArc
+    }
+
+    # Last: everything above must be finished before the join task can fire, because the
+    # boot after the join is the one where domain policy lands on this machine.
+    if ($manifest.domainJoin) {
+        $state.domainJoin = Register-DeferredDomainJoin -JoinConfig $manifest.domainJoin
     }
 
     $state.restartNeeded = $restartNeeded

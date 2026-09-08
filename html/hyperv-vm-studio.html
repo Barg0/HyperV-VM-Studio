@@ -521,7 +521,7 @@
   .cl-row:last-child { border-bottom: none; }
   .cl-row:hover { background: var(--bg-hover); }
   .cl-grid.attach .cl-grid-head, .cl-grid.attach .cl-row {
-    grid-template-columns: minmax(0, 220px) minmax(0, 1fr) 36px;
+    grid-template-columns: minmax(0, 220px) minmax(0, 1fr) minmax(0, 190px) 36px;
   }
   .cl-vm.is-missing { display: inline-flex; align-items: center; gap: 8px; color: var(--fg-muted); }
   .cl-vm.is-missing .sam { font-family: var(--mono); }
@@ -3481,6 +3481,20 @@ function findAzureArcPrincipal(id) {
   return (state.azureArcPrincipals || []).find(a => a.id === key || a._id === key) || null;
 }
 
+/* When the join runs. "specialize" = from the unattend, before anyone logs in (today's
+   path). "deferred" = the unattend stays join-free and a SYSTEM task registered at the end
+   of first-boot provisioning joins afterwards - so domain policy (CIS and friends) lands on
+   a machine that is already fully provisioned. mode stays null until the user touches the
+   toggle; until then a Windows client VM with an OU path defaults to deferred, everything
+   else to specialize. The export always writes the effective value - Build-Vms.ps1 never
+   applies this rule itself. */
+function effectiveDomainJoinMode(s) {
+  const dj = (s && s.domainJoin) || {};
+  if (dj.mode === "deferred" || dj.mode === "specialize") return dj.mode;
+  const img = findImage(s && s.imageId);
+  return (img.kind === "client" && String(dj.ouPath || "").trim()) ? "deferred" : "specialize";
+}
+
 /* "Use for every VM" mode for Domain Join / Azure Arc — mirrors the cluster blade's
    addAllVms: a non-destructive global override. Per-VM assignments stay untouched in
    state; the resolvers below short-circuit while the mode is on, and export flattens
@@ -4087,7 +4101,7 @@ function migrateLegacyIdentityCatalogs(parsed) {
 
 function normalizeServerIdentityRefs(s, catalogs) {
   s.azureArc = Object.assign({ enabled: false, principalId: "" }, s.azureArc || {});
-  s.domainJoin = Object.assign({ enabled: false, accountId: "", ouPath: "" }, s.domainJoin || {});
+  s.domainJoin = Object.assign({ enabled: false, accountId: "", ouPath: "", mode: null }, s.domainJoin || {});
   s.cluster = Object.assign({ enabled: false }, s.cluster || {});
 
   // Migrate inline DJ credentials → catalog account
@@ -4416,7 +4430,7 @@ function createServer(name) {
     removeApps: null,
     azureArc: { enabled: false, principalId: "" },
     integrationServices: defaultIntegrationServices(),
-    domainJoin: { enabled: false, accountId: "", ouPath: "" },
+    domainJoin: { enabled: false, accountId: "", ouPath: "", mode: null },
     cluster: { enabled: !!(state.defaults.cluster && state.defaults.cluster.enabled && state.defaults.cluster.addAllVms) },
     network: { enabled: false, networkId: "" }
   };
@@ -4933,6 +4947,7 @@ function buildConfig() {
     if (globalDjAccount) {
       row.domainJoin = { enabled: true, accountId: globalDjAccount.id };
       if (s.domainJoin && s.domainJoin.ouPath) row.domainJoin.ouPath = s.domainJoin.ouPath;
+      row.domainJoin.mode = effectiveDomainJoinMode(s);
       if (globalDjAccount.domain) row.domainJoin.domain = globalDjAccount.domain;
       if (globalDjAccount.joinUser) row.domainJoin.joinUser = globalDjAccount.joinUser;
       if (globalDjAccount.joinPassword) row.domainJoin.joinPassword = globalDjAccount.joinPassword;
@@ -4941,6 +4956,7 @@ function buildConfig() {
       const acc = findDomainJoinAccount(s.domainJoin.accountId);
       row.domainJoin = { enabled: true, accountId: s.domainJoin.accountId };
       if (s.domainJoin.ouPath) row.domainJoin.ouPath = s.domainJoin.ouPath;
+      row.domainJoin.mode = effectiveDomainJoinMode(s);
       // Dual-write resolved credentials so Build-Vms works even if catalog lookup fails
       if (acc) {
         if (acc.domain) row.domainJoin.domain = acc.domain;
@@ -7309,12 +7325,15 @@ function renderDomainJoinBlade() {
               <div class="cl-grid-head">
                 <div>Virtual machine</div>
                 <div>OU path ${infoTip("OU path", "Where the computer object lands. Empty means the domain's default container, CN=Computers.")}</div>
+                <div>Join timing ${infoTip("Join timing", "Off: the join runs during Windows specialize, before anyone logs in. On: the unattend stays join-free and a SYSTEM task joins after first-boot provisioning has finished, so domain policy only ever meets a fully provisioned machine. The task seals the credential with DPAPI, then wipes credential, script and itself whether the join worked or not. Windows client VMs with an OU path start out on.")}</div>
                 <div></div>
               </div>
               ${attached.map(s => `
               <div class="cl-row">
                 ${vmGridCell(s)}
                 <div><input data-s="${esc(s._id)}" data-k="djOu" value="${esc((s.domainJoin&&s.domainJoin.ouPath)||"")}" placeholder="OU=Servers,OU=Tier0,DC=ad,DC=example,DC=invalid"></div>
+                <div>${toggle(`data-s="${esc(s._id)}" data-k="djDeferred"`, "After first boot", effectiveDomainJoinMode(s) === "deferred", false,
+                  (s.domainJoin && (s.domainJoin.mode === "deferred" || s.domainJoin.mode === "specialize")) ? "Set by hand" : "Automatic")}</div>
                 <div class="cl-detach">${allOn ? "" : `<button class="btn icon danger-text" type="button" title="Detach ${esc(serverDisplayName(s))}" aria-label="Detach ${esc(serverDisplayName(s))}" data-dj-detach="${esc(s._id)}">${trashIcon()}</button>`}</div>
               </div>`).join("")}
             </div>` : `<p class="hint" style="margin:10px 0 0">No VMs attached — this account joins nothing.</p>`}
@@ -8370,6 +8389,7 @@ function reviewServerRows(s) {
     kvRow("Local password", s.localUserPassword ? "Set" : "") +
     kvRow("Domain join", dj ? `${dj.domain} as ${dj.joinUser}` : "Off") +
     (dj && s.domainJoin.ouPath ? kvRow("Target OU", s.domainJoin.ouPath) : "") +
+    (dj ? kvRow("Join timing", effectiveDomainJoinMode(s) === "deferred" ? "After first boot (scheduled task)" : "During specialize (unattend)") : "") +
     kvRow("Azure Arc", arc ? `${arc.resourceGroup} · ${azureRegionLabel(arc.location)} · ${arc.authMode === "hostContext" ? "host context" : "service principal"}` : "Off") +
     kvRow("Failover cluster", (state.defaults.cluster && state.defaults.cluster.enabled)
       ? (clusterIncludesServer(s)
@@ -8897,7 +8917,7 @@ document.getElementById("main").addEventListener("click", e => {
   if (djDetach) {
     const s = state.servers.find(x => x._id === djDetach.getAttribute("data-dj-detach"));
     if (s) {
-      s.domainJoin = { enabled: false, accountId: "", ouPath: "" };
+      s.domainJoin = { enabled: false, accountId: "", ouPath: "", mode: null };
       render();
       toast(`${serverDisplayName(s)} detached`);
     }
@@ -9140,7 +9160,7 @@ document.getElementById("main").addEventListener("click", e => {
     if (acc) {
       state.servers.forEach(s => {
         if (s.domainJoin && s.domainJoin.accountId === acc.id) {
-          s.domainJoin = { enabled: false, accountId: "", ouPath: "" };
+          s.domainJoin = { enabled: false, accountId: "", ouPath: "", mode: null };
         }
       });
     }
@@ -9700,10 +9720,12 @@ document.getElementById("main").addEventListener("input", e => {
   const s = state.servers.find(x => x._id === sid);
   if (!s) return;
   if (k === "djOu") {
-    s.domainJoin = s.domainJoin || { enabled: false, accountId: "", ouPath: "" };
+    s.domainJoin = s.domainJoin || { enabled: false, accountId: "", ouPath: "", mode: null };
     s.domainJoin.ouPath = e.target.value;
     return;
   }
+  // Re-renders (the "Automatic" note follows the value) — the change handler owns it.
+  if (k === "djDeferred") return;
   if (k === "useDifferencingDisk" || k === "enableSecureBoot" || k === "enableVtpm" || k === "startAfterCreate") {
     s[k] = e.target.checked; return;
   }
@@ -10003,6 +10025,15 @@ document.getElementById("main").addEventListener("change", e => {
         return;
       }
       if (k === "nestedVirtualization") { s.nestedVirtualization = nestedVirtRequired(s) || e.target.checked; scheduleRender(); return; }
+      if (k === "djDeferred") {
+        s.domainJoin = s.domainJoin || { enabled: false, accountId: "", ouPath: "", mode: null };
+        s.domainJoin.mode = e.target.checked ? "deferred" : "specialize";
+        scheduleRender();
+        return;
+      }
+      // Leaving the OU field can flip the automatic join timing; fires on blur, so the
+      // re-render never steals focus mid-typing.
+      if (k === "djOu") { scheduleRender(); return; }
       if (k === "automaticStartEnabled") {
         // Hyper-V's own default once a VM opts in at all — "start it again if it was running".
         if (e.target.checked) {
@@ -10477,7 +10508,7 @@ function applyMemberPicker() {
           const ou = (s.domainJoin && s.domainJoin.accountId === a.id) ? (s.domainJoin.ouPath || "") : ((s.domainJoin && s.domainJoin.ouPath) || "");
           s.domainJoin = { enabled: true, accountId: a.id, ouPath: ou };
         } else if (s.domainJoin && s.domainJoin.accountId === a.id) {
-          s.domainJoin = { enabled: false, accountId: "", ouPath: "" };
+          s.domainJoin = { enabled: false, accountId: "", ouPath: "", mode: null };
         }
       });
     }
