@@ -5397,7 +5397,7 @@ function pathField(key, value, placeholder, extraAttrs) {
     <div class="edit-field">
       <input data-d="${esc(key)}" data-name-input="gs:${esc(key)}" value="${esc(value || "")}"
              placeholder="${esc(placeholder || "")}" spellcheck="false" ${unlocked ? "" : "readonly"} ${extraAttrs || ""}>
-      <button class="btn icon ghost" type="button" data-name-edit="gs:${esc(key)}"
+      <button class="btn icon" type="button" data-name-edit="gs:${esc(key)}"
               title="${unlocked ? "Done" : "Edit path"}" aria-label="${unlocked ? "Done" : "Edit path"}">${unlocked ? checkIcon() : pencilIcon()}</button>
     </div>`;
 }
@@ -5962,7 +5962,6 @@ function renderGeneral() {
   const c = d.cluster || {};
   const themeLabel = (USERNAME_THEMES[state.usernameTheme] || {}).label || state.usernameTheme;
   const nm = namingDefaults();
-  const namingFqdnUnlocked = !!state.nameEdit["gs:namingFqdn"];
   // Prefer a real VM with a suffix, then any VM, then a generic one. The fixed FQDN is
   // the whole config's, so it stands in even while the VM list is still empty.
   const nmSample = state.servers.find(s => namingSuffixForServer(s)) || state.servers[0];
@@ -6030,11 +6029,11 @@ function renderGeneral() {
 
     ${gsCard("gs-paths", "storage.svg", "Paths", "Gold VHDX, VM/VHD paths, SxS source", `
       <div class="grid-2" style="align-items:start">
-        ${field(fieldLabel("vm.svg", "VM path"), pathField("vmPath", d.vmPath, "blank = Hyper-V host default", `class="${inv("d:vmPath")}"${invAria("d:vmPath")}`))}
-        ${field(fieldLabel("disk.svg", "VHD path"), pathField("vhdPath", d.vhdPath, "blank = Hyper-V host default", `class="${inv("d:vhdPath")}"${invAria("d:vhdPath")}`))}
-        ${field(fieldLabel("gold-image.svg", "Gold VHDX directory"), pathField("vhdxDirectory", d.vhdxDirectory, "", `class="${inv("d:vhdxDirectory")}"${invAria("d:vhdxDirectory")}`) +
+        ${field(fieldLabel("vm.svg", "VM path"), pathField("vmPath", d.vmPath, "blank = Hyper-V host default", `class="keep-border ${inv("d:vmPath")}"${invAria("d:vmPath")}`))}
+        ${field(fieldLabel("disk.svg", "VHD path"), pathField("vhdPath", d.vhdPath, "blank = Hyper-V host default", `class="keep-border ${inv("d:vhdPath")}"${invAria("d:vhdPath")}`))}
+        ${field(fieldLabel("gold-image.svg", "Gold VHDX directory"), pathField("vhdxDirectory", d.vhdxDirectory, "", `class="keep-border ${inv("d:vhdxDirectory")}"${invAria("d:vhdxDirectory")}`) +
           `<span class="hint">Default <code>vhdx</code> → $PSScriptRoot\\vhdx</span>`)}
-        ${field(fieldLabel("iso-media.svg", "SxS source path (.NET 3.5)"), pathField("sxsSourcePath", d.sxsSourcePath || "", "e.g. E:\\sources\\sxs", `class="${inv("d:sxsSourcePath")}"${invAria("d:sxsSourcePath")}`) +
+        ${field(fieldLabel("iso-media.svg", "SxS source path (.NET 3.5)"), pathField("sxsSourcePath", d.sxsSourcePath || "", "e.g. E:\\sources\\sxs", `class="keep-border ${inv("d:sxsSourcePath")}"${invAria("d:sxsSourcePath")}`) +
           `<span class="hint">ISO <code>sources\\sxs</code> when installing NET-Framework-Core</span>`)}
       </div>
       `, "", false)}
@@ -6054,14 +6053,9 @@ function renderGeneral() {
       ${nm.vmNameIncludeFqdn && nm.fqdnOverrideEnabled ? `
       <div class="grid-2" style="margin-top:12px">
         ${field(fieldLabel("identity.svg", "Fixed FQDN"), `
-          <div class="edit-field">
-            <input data-nm="fqdn" data-name-input="gs:namingFqdn" value="${esc(nm.fqdn)}" spellcheck="false"
-                   placeholder="ad.example.invalid" ${namingFqdnUnlocked ? "" : "readonly"}
-                   class="keep-border ${inv("d:namingFqdn")}"${invAria("d:namingFqdn")}>
-            <button class="btn icon" type="button" data-name-edit="gs:namingFqdn"
-                    title="${namingFqdnUnlocked ? "Done" : "Edit FQDN"}"
-                    aria-label="${namingFqdnUnlocked ? "Done" : "Edit FQDN"}">${namingFqdnUnlocked ? checkIcon() : pencilIcon()}</button>
-          </div>
+          <input data-nm="fqdn" value="${esc(nm.fqdn)}" spellcheck="false"
+                 placeholder="ad.example.invalid"
+                 class="${inv("d:namingFqdn")}"${invAria("d:namingFqdn")}>
           <span class="hint">Used for every VM in this config — the domain a fresh DC builds, not one it joins.</span>`)}
       </div>` : ""}
       <p class="hint" style="margin:14px 0 8px"><code>${esc(namingExample.short)}</code> with the suffix <code>${esc(namingExample.domain)}</code> is built as:</p>
@@ -7514,8 +7508,8 @@ function renderClusterBlade() {
         <div class="edit-field">
           <input data-cl="name" data-name-input="cluster:name" value="${esc(c.name || "")}" spellcheck="false"
                  placeholder="${clusterNameUnlocked ? "NetBIOS name, max 15 characters" : "the cluster this host belongs to"}"
-                 ${clusterNameUnlocked ? "" : "readonly"} class="${inv("d:clusterName")}"${invAria("d:clusterName")}>
-          <button class="btn icon ghost" type="button" data-name-edit="cluster:name"
+                 ${clusterNameUnlocked ? "" : "readonly"} class="keep-border ${inv("d:clusterName")}"${invAria("d:clusterName")}>
+          <button class="btn icon" type="button" data-name-edit="cluster:name"
                   title="${clusterNameUnlocked ? "Done" : "Name a different cluster"}"
                   aria-label="${clusterNameUnlocked ? "Done" : "Name a different cluster"}">${clusterNameUnlocked ? checkIcon() : pencilIcon()}</button>
         </div>
@@ -7648,10 +7642,10 @@ function renderVhdSets() {
                   `Generated file name: ${autoFile}. Leave this blank and the set is written to {vhdPath}/vhds/${file}. Either way the location has to be a Cluster Shared Volume or an SMB 3 share — preflight fails if it is not, because the other nodes cannot reach it.`)}</span>`, `
                 <div class="edit-field">
                   <input data-vs="${esc(v._id)}" data-vk="path" data-name-input="${esc(pathKey)}" spellcheck="false"
-                         class="${inv(`vs:${v._id}:path`)}"${invAria(`vs:${v._id}:path`)}
+                         class="keep-border ${inv(`vs:${v._id}:path`)}"${invAria(`vs:${v._id}:path`)}
                          value="${esc(v.path || "")}" placeholder="e.g. C:\\ClusterStorage\\Volume1\\vhds\\${esc(file)}"
                          ${unlocked ? "" : "readonly"}>
-                  <button class="btn icon ghost" type="button" data-name-edit="${esc(pathKey)}"
+                  <button class="btn icon" type="button" data-name-edit="${esc(pathKey)}"
                           title="${unlocked ? "Done" : "Set a custom path"}" aria-label="${unlocked ? "Done" : "Set a custom path"}">${unlocked ? checkIcon() : pencilIcon()}</button>
                 </div>`);
             })()}
