@@ -2701,9 +2701,87 @@ function Set-HyperVDeployUnattend {
     Write-Utf8NoBomFile -Path $deployPath -Content $Content
 }
 
+function Get-BcdBootFailureReason {
+    # bcdboot that never ran prints nothing, so the exit code is the only evidence there
+    # is. 0xC0E90002 is STATUS_SYSTEM_INTEGRITY_POLICY_VIOLATION: the kernel refused to
+    # launch the binary. Here that means a code integrity policy (WDAC, Smart App
+    # Control) blocked the copy of bcdboot.exe living inside the mounted image.
+    param([int]$ExitCode)
+
+    if ($ExitCode -eq -1058471934) {
+        return " / 0xC0E90002 STATUS_SYSTEM_INTEGRITY_POLICY_VIOLATION - a code integrity policy on this host blocked the executable"
+    }
+
+    return ""
+}
+
+function Invoke-BcdBoot {
+    # Returns the exit code and the output rather than throwing, so the caller can try
+    # the other copy of the tool before it gives up on the disk.
+    param(
+        [string]$BcdBootPath,
+        [string]$OsRoot,
+        [string]$SystemVolume
+    )
+
+    Write-Log "$BcdBootPath $OsRoot /s $SystemVolume /f UEFI" -Tag "Debug"
+    $output = & $BcdBootPath $OsRoot /s $SystemVolume /f UEFI 2>&1
+    return [pscustomobject]@{ ExitCode = $LASTEXITCODE; Output = $output }
+}
+
 function Set-BootFiles {
+    # Two copies of bcdboot can do this job: the host's, and the one inside the image
+    # that was just applied. The host's goes first, because a code integrity policy on
+    # the host refuses to execute a binary that lives on a mounted VHDX - the kernel
+    # stops it before its first instruction, so it prints nothing at all and returns
+    # 0xC0E90002. The image's copy is still the better tool when the image is newer
+    # than the host, so it is tried second rather than dropped.
+    param(
+        [string]$OsRoot = "W:\Windows",
+        [string]$SystemVolume = "S:"
+    )
+
     Write-Log "Writing UEFI boot files" -Tag "Run"
-    & "W:\Windows\System32\bcdboot.exe" "W:\Windows" /s "S:" /f UEFI | Out-Null
+
+    $candidates = @(
+        [pscustomobject]@{ Name = "host"; Path = (Join-Path -Path $env:SystemRoot -ChildPath "System32\bcdboot.exe") },
+        [pscustomobject]@{ Name = "image"; Path = "W:\Windows\System32\bcdboot.exe" }
+    )
+
+    $lastResult = $null
+    foreach ($candidate in $candidates) {
+        if (-not (Test-Path -LiteralPath $candidate.Path)) {
+            Write-Log "No $($candidate.Name) bcdboot at '$($candidate.Path)'" -Tag "Debug"
+            continue
+        }
+
+        $lastResult = Invoke-BcdBoot -BcdBootPath $candidate.Path -OsRoot $OsRoot -SystemVolume $SystemVolume
+        if ($lastResult.ExitCode -eq 0) {
+            Write-Log "Boot files written with the $($candidate.Name) bcdboot" -Tag "Ok"
+            break
+        }
+
+        $reason = Get-BcdBootFailureReason -ExitCode $lastResult.ExitCode
+        $detail = ($lastResult.Output | Out-String).Trim()
+        if ([string]::IsNullOrWhiteSpace($detail)) { $detail = "no output" }
+        Write-Log "The $($candidate.Name) bcdboot failed (exit $($lastResult.ExitCode)$reason): $detail" -Tag "Warn"
+    }
+
+    # Judged on what is actually on the EFI partition, not on an exit code. A gold that
+    # leaves here without a loader boots to the Hyper-V UEFI summary and nothing else,
+    # and it is cheaper to lose the build than to find that out from a VM.
+    $loaderPath = "$SystemVolume\EFI\Microsoft\Boot\bootmgfw.efi"
+    if (-not (Test-Path -LiteralPath $loaderPath)) {
+        $why = if ($null -eq $lastResult) {
+            "no bcdboot.exe was found to run"
+        }
+        else {
+            "last exit $($lastResult.ExitCode)$(Get-BcdBootFailureReason -ExitCode $lastResult.ExitCode)"
+        }
+        throw "No boot loader at '$loaderPath' after bcdboot - $why. The disk would not boot."
+    }
+
+    Write-Log "Boot loader present at '$loaderPath'" -Tag "Ok"
 }
 
 function Invoke-DismRaw {
