@@ -2285,6 +2285,38 @@ function Install-OfflineRsatCapabilities {
     return @($pending)
 }
 
+# What a feature request is expected to leave behind, keyed by the feature asked for.
+# Enable-WindowsOptionalFeature reports success for the name it was handed, which says
+# nothing about the two leaves that actually carry Hyper-V Manager and the PowerShell
+# module, and nothing about what else came along. Both get read back afterwards.
+#
+#   Expect - must end Enabled, or the VM did not get what the tick promised.
+#   Guard  - must NOT end Enabled. -All enables a feature's PARENTS, and the Hyper-V
+#            platform is a sibling of the tools rather than an ancestor, so it should stay
+#            off; "should" is not the same as verified, and the docs only say a parent is
+#            "enabled with default values" without saying what a container's defaults are.
+$script:ClientFeatureChecks = @{
+    "Microsoft-Hyper-V-Tools-All" = @{
+        Expect = @("Microsoft-Hyper-V-Management-Clients", "Microsoft-Hyper-V-Management-PowerShell")
+        Guard  = @("Microsoft-Hyper-V")
+    }
+}
+
+function Get-OfflineFeatureState {
+    param(
+        [string]$OsRoot,
+        [string]$FeatureName
+    )
+
+    try {
+        return [string](Get-WindowsOptionalFeature -Path $OsRoot -FeatureName $FeatureName -ErrorAction Stop).State
+    }
+    catch {
+        Write-Log "Could not read the state of '$FeatureName': $($_.Exception.Message)" -Tag "Debug"
+        return ""
+    }
+}
+
 function Enable-OfflineClientFeatures {
     <#
       Windows optional features on a client VM, enabled straight into the mounted image.
@@ -2294,12 +2326,18 @@ function Enable-OfflineClientFeatures {
       guest. The one entry the studio offers is Microsoft-Hyper-V-Tools-All - Hyper-V
       Manager, vmconnect and the Hyper-V PowerShell module. There is no
       Rsat.Hyper-V.Tools capability; that name does not exist, and asking for it is how
-      this used to fail.
+      this first failed.
 
-      No -All: it enables a feature's parents, which for the Hyper-V tools means
-      Microsoft-Hyper-V-All and the hypervisor underneath it. Management tools are the
-      request; running VMs inside a VM is a different one, and needs nested
-      virtualization exposed on the host.
+      -All, because the run without it came back "One or several parent features are
+      disabled so current feature can not be enabled": the tools hang off the
+      Microsoft-Hyper-V-All container, and a disabled parent blocks the child. That is what
+      -All is documented to fix.
+
+      Everything after the enable is there because the cmdlet's own success only covers the
+      name it was given. The leaves are checked so a VM cannot ship without the consoles
+      the tick promised, and the platform is checked because a workstation that quietly
+      grew a hypervisor it has no nested virtualization for is worse than one missing a
+      console.
 
       A failure is a warning, not a build stop: the VM is still the VM, minus a console.
     #>
@@ -2313,11 +2351,42 @@ function Enable-OfflineClientFeatures {
     Write-Log "Enabling $($FeatureNames.Count) Windows feature(s) offline (payload is in the image)" -Tag "Run"
     foreach ($featureName in $FeatureNames) {
         try {
-            $result = Enable-WindowsOptionalFeature -Path $OsRoot -FeatureName $featureName -NoRestart -ErrorAction Stop
+            $result = Enable-WindowsOptionalFeature -Path $OsRoot -FeatureName $featureName -All -NoRestart -ErrorAction Stop
             Write-Log "Offline feature '$featureName' enabled (RestartNeeded=$($result.RestartNeeded))" -Tag "Ok"
         }
         catch {
             Write-Log "Offline feature '$featureName' failed: $($_.Exception.Message)" -Tag "Warn"
+            continue
+        }
+
+        $checks = $script:ClientFeatureChecks[$featureName]
+        if ($null -eq $checks) { continue }
+
+        foreach ($expected in @($checks.Expect)) {
+            $state = Get-OfflineFeatureState -OsRoot $OsRoot -FeatureName $expected
+            if ("$state" -eq "Enabled") {
+                Write-Log "'$expected' is Enabled" -Tag "Ok"
+            }
+            else {
+                Write-Log "'$featureName' reported success but '$expected' is '$state' - the VM may not get that tool" -Tag "Warn"
+            }
+        }
+
+        foreach ($guarded in @($checks.Guard)) {
+            $state = Get-OfflineFeatureState -OsRoot $OsRoot -FeatureName $guarded
+            if ("$state" -ne "Enabled") {
+                Write-Log "'$guarded' stayed '$state' - as intended" -Tag "Debug"
+                continue
+            }
+
+            Write-Log "'$featureName' also enabled '$guarded' - turning it back off" -Tag "Warn"
+            try {
+                Disable-WindowsOptionalFeature -Path $OsRoot -FeatureName $guarded -NoRestart -ErrorAction Stop | Out-Null
+                Write-Log "'$guarded' disabled again (now '$(Get-OfflineFeatureState -OsRoot $OsRoot -FeatureName $guarded)')" -Tag "Ok"
+            }
+            catch {
+                Write-Log "Could not disable '$guarded': $($_.Exception.Message) - the VM carries it" -Tag "Warn"
+            }
         }
     }
 }
