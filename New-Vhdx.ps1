@@ -15,7 +15,14 @@
     keep Windows from turning BitLocker on by itself after OOBE
     (-PreventDeviceEncryption, default ON): a qualifying VM encrypts itself once OOBE
     finishes and arms for real at domain join, which pre-empts the policy that is
-    supposed to make that call.
+    supposed to make that call. Client images also take a VM power plan
+    (-SetVmPowerPlan, default ON): High performance, display and sleep set to never,
+    hibernation off - a lab VM has no battery to save and no screen to blank, and the
+    hiberfil.sys it never uses costs the same gigabytes on every differencing disk.
+    Hyper-V Manager and the Hyper-V PowerShell module can be enabled into a client gold
+    (-EnableHyperVTools, default off). Those are the in-box optional feature
+    Microsoft-Hyper-V-Tools-All, not an RSAT Features on Demand download, so the payload
+    comes from the image itself and needs no second ISO. The Hyper-V platform stays off.
 
     A Windows 11 Pro index can also be built as an Enterprise multi-session gold
     (-MultiSessionImageIndexes) - its own build next to any plain golds, so one run
@@ -157,6 +164,12 @@ param (
 
     [Parameter(HelpMessage = "On client editions, bake PreventDeviceEncryption so Windows does not turn BitLocker on by itself after OOBE. No effect on Server images. Default on: encryption is expected to be armed by policy after deployment, not by the image on its own.")]
     [bool]$PreventDeviceEncryption = $true,
+
+    [Parameter(HelpMessage = "On client editions, bake the High performance power scheme with display and sleep set to never and hibernation off. No effect on Server images. Default on: the gold runs as a VM, where blanking a console and sleeping a machine nobody is sitting at only gets in the way.")]
+    [bool]$SetVmPowerPlan = $true,
+
+    [Parameter(HelpMessage = "On client editions, enable the in-box Hyper-V management tools (Microsoft-Hyper-V-Tools-All: Hyper-V Manager, vmconnect and the Hyper-V PowerShell module) offline. The Hyper-V platform itself stays off. No effect on Server images - there the tools come from Install-WindowsFeature. Default off.")]
+    [bool]$EnableHyperVTools = $false,
 
     [Parameter(HelpMessage = "Image indexes to build as Windows 11 Enterprise multi-session golds - upgraded offline, after generalize. Each index here is its own build on top of whatever -ImageIndexes lists: the same index in both produces a Pro gold and a multi-session gold. Pass the index of a Windows 11 Pro image; the build aborts early if the image cannot become multi-session.")]
     [ValidateRange(1, 99)]
@@ -2278,6 +2291,8 @@ function Start-InteractiveConfiguration {
         [bool]$CurrentSuppressFirstSignInAnimation = $false,
         [bool]$CurrentBlockSignInInputMethods = $false,
         [bool]$CurrentPreventDeviceEncryption = $true,
+        [bool]$CurrentSetVmPowerPlan = $true,
+        [bool]$CurrentEnableHyperVTools = $false,
         [int[]]$CurrentMultiSessionImageIndexes = @(),
         [int[]]$CurrentAzureEditionImageIndexes = @()
     )
@@ -2506,6 +2521,11 @@ function Start-InteractiveConfiguration {
     # gold stays out of the decision rather than pre-empting it.
     if ($buildHasClient) {
         $featureItems += [PSCustomObject]@{ Id = "autode"; Label = "Prevent automatic BitLocker device encryption"; Selected = $CurrentPreventDeviceEncryption; Section = "Recommended (Client)" }
+        # Also recommended on the client path: the gold's whole life is as a VM, where the
+        # console blanking after ten minutes and the machine sleeping after thirty are
+        # settings written for a laptop lid, and hiberfil.sys is dead weight on every disk
+        # cloned from it.
+        $featureItems += [PSCustomObject]@{ Id = "power"; Label = "VM power plan (High performance, display/sleep never, no hibernation)"; Selected = $CurrentSetVmPowerPlan; Section = "Recommended (Client)" }
     }
     # Applies to both client and server: pin sign-in keyboard to the baked layout.
     $featureItems += [PSCustomObject]@{ Id = "signin"; Label = "Block per-user input methods on sign-in screen (STIG)"; Selected = $CurrentBlockSignInInputMethods; Section = "Optional" }
@@ -2515,6 +2535,7 @@ function Start-InteractiveConfiguration {
     if ($buildHasClient) {
         $featureItems += [PSCustomObject]@{ Id = "welcome"; Label = "Suppress Getting Started / Welcome Experience"; Selected = $CurrentSuppressWelcomeExperience; Section = "Optional (Client)" }
         $featureItems += [PSCustomObject]@{ Id = "signinanim"; Label = "Suppress first sign-in animation"; Selected = $CurrentSuppressFirstSignInAnimation; Section = "Optional (Client)" }
+        $featureItems += [PSCustomObject]@{ Id = "hvtools"; Label = "Hyper-V management tools (Manager + PowerShell, not the platform)"; Selected = $CurrentEnableHyperVTools; Section = "Optional (Client)" }
     }
     $featureChoice = Show-MultiSelectMenu -Title "Recommended & optional features" -Items $featureItems -AllowEmpty `
         -Subtitle "Space toggles selection - grouped by relevance to this build" `
@@ -2528,6 +2549,8 @@ function Start-InteractiveConfiguration {
     $suppressSignInAnimation = $featureChoice -contains "signinanim"
     $blockSignIn = $featureChoice -contains "signin"
     $preventDeviceEncryption = $featureChoice -contains "autode"
+    $setVmPowerPlan = $featureChoice -contains "power"
+    $enableHyperVTools = $featureChoice -contains "hvtools"
 
     # Dedicated VHDX window: size and type together on one form.
     $vhdxConfig = Show-VhdxConfigForm -Title "Configure VHDX" -Subtitle "Disk size and provisioning type" `
@@ -2575,6 +2598,8 @@ function Start-InteractiveConfiguration {
             Write-FastfetchInfoRow -Label "suppress welcome exp" -Value $(if ($suppressWelcome) { "Enabled" } else { "Disabled" }) -LabelWidth 24 -IndentWidth 2
             Write-FastfetchInfoRow -Label "suppress signin anim" -Value $(if ($suppressSignInAnimation) { "Enabled" } else { "Disabled" }) -LabelWidth 24 -IndentWidth 2
             Write-FastfetchInfoRow -Label "auto bitlocker" -Value $(if ($preventDeviceEncryption) { "Prevented" } else { "Left to Windows" }) -LabelWidth 24 -IndentWidth 2
+            Write-FastfetchInfoRow -Label "power plan" -Value $(if ($setVmPowerPlan) { "High performance, display/sleep never, no hibernation" } else { "Windows default (Balanced)" }) -LabelWidth 24 -IndentWidth 2
+            Write-FastfetchInfoRow -Label "hyper-v tools" -Value $(if ($enableHyperVTools) { "Enabled (tools only)" } else { "Not enabled" }) -LabelWidth 24 -IndentWidth 2
         }
         Write-Host ""
         Write-Host "  Disk" -ForegroundColor White
@@ -2614,6 +2639,8 @@ function Start-InteractiveConfiguration {
         SuppressFirstSignInAnimation = $suppressSignInAnimation
         BlockSignInInputMethods      = $blockSignIn
         PreventDeviceEncryption      = $preventDeviceEncryption
+        SetVmPowerPlan               = $setVmPowerPlan
+        EnableHyperVTools            = $enableHyperVTools
         MultiSessionImageIndexes     = @($multiSessionIndexes)
         AzureEditionImageIndexes     = @($azureEditionIndexes)
     }
@@ -2995,6 +3022,102 @@ function Set-OfflineDeviceEncryptionPolicy {
     finally {
         Dismount-ImageHive -HiveRoot $hiveRoot
     }
+}
+
+function Set-OfflinePowerPolicy {
+    # The gold only ever runs as a VM. Windows still arrives with the settings written for
+    # a laptop: Balanced, console off after ten minutes, asleep after thirty, and a
+    # hiberfil.sys sized after the RAM. None of that helps a machine nobody is sitting at,
+    # and a VM that has put itself to sleep is a VM that stopped answering.
+    #
+    # Written straight into the offline SYSTEM hive rather than run through powercfg at
+    # first boot: a Hyper-V gold carries no boot-time scripts, and the active scheme and
+    # its per-setting indexes are plain registry values. ActivePowerScheme is machine-wide,
+    # so it survives into every profile the deployed VM creates.
+    #
+    # High performance and not Ultimate Performance: Ultimate is hidden on client and is
+    # normally unlocked with 'powercfg -duplicatescheme', which mints a new scheme under a
+    # random GUID - a tree this would have to recreate by hand, for idle and parking
+    # tunables the hypervisor mostly owns anyway.
+    param([string]$MountRoot)
+
+    # Scheme and setting GUIDs are Windows' own, identical on every install.
+    $highPerformance = "8c5e7fda-e8bf-4a96-9a85-a6e23a8c635c"
+    $videoSubgroup   = "7516b95f-f776-4464-8c53-06167f40cc99"  # Display
+    $videoIdle       = "3c0bc021-c8a8-4e07-a973-6b14cbcb2b7e"  # Turn off display after
+    $sleepSubgroup   = "238c9fa8-0aad-41ed-83f4-97be242c8f20"  # Sleep
+    $standbyIdle     = "29f6c1db-86da-48c5-9fdb-f2b67b1f44da"  # Sleep after
+
+    $systemHive = Join-Path -Path $MountRoot -ChildPath "Windows\System32\config\SYSTEM"
+    $hiveRoot = "HKLM\OfflineImagePower"
+    $controlSet = "$hiveRoot\ControlSet001"
+    $schemeKey = "$controlSet\Control\Power\User\PowerSchemes\$highPerformance"
+
+    Write-Log "Loading offline SYSTEM hive for the power plan" -Tag "Run"
+    & reg.exe load $hiveRoot $systemHive | Out-Null
+    if ($LASTEXITCODE -ne 0) {
+        throw "Failed to load offline SYSTEM hive (exit $LASTEXITCODE)"
+    }
+
+    try {
+        Write-Log "Setting the active power scheme to High performance" -Tag "Run"
+        & reg.exe add "$controlSet\Control\Power\User\PowerSchemes" /v ActivePowerScheme /t REG_SZ /d $highPerformance /f | Out-Null
+
+        # 0 means never. AC and DC both, because a Gen 2 VM reports no battery and Windows
+        # still keeps a DC column - leaving it at the default is leaving half the setting.
+        Write-Log "Display and sleep timeouts set to never (AC and DC)" -Tag "Run"
+        foreach ($setting in @(
+            @{ Key = "$schemeKey\$videoSubgroup\$videoIdle"; Label = "turn off display after" },
+            @{ Key = "$schemeKey\$sleepSubgroup\$standbyIdle"; Label = "sleep after" }
+        )) {
+            Write-Log "$($setting.Label) = 0 (never)" -Tag "Debug"
+            & reg.exe add "$($setting.Key)" /v ACSettingIndex /t REG_DWORD /d 0 /f | Out-Null
+            & reg.exe add "$($setting.Key)" /v DCSettingIndex /t REG_DWORD /d 0 /f | Out-Null
+        }
+
+        # Nothing hibernates a VM, and hiberfil.sys is charged to every differencing disk
+        # cloned off this gold.
+        Write-Log "Disabling hibernation (no hiberfil.sys)" -Tag "Run"
+        & reg.exe add "$controlSet\Control\Power" /v HibernateEnabled /t REG_DWORD /d 0 /f | Out-Null
+        & reg.exe add "$controlSet\Control\Power" /v HibernateEnabledDefault /t REG_DWORD /d 0 /f | Out-Null
+    }
+    finally {
+        Dismount-ImageHive -HiveRoot $hiveRoot
+    }
+}
+
+function Enable-OfflineHyperVTools {
+    # Hyper-V Manager, vmconnect and the Hyper-V PowerShell module, for a client gold that
+    # administers hosts rather than runs VMs. These are NOT RSAT: there is no
+    # Rsat.Hyper-V.Tools capability to add, the payload ships inside install.wim, and the
+    # enable needs no Features on Demand ISO and no Windows Update.
+    #
+    # Microsoft-Hyper-V-Tools-All is the container the "Hyper-V Management Tools" checkbox
+    # in Turn Windows features on or off maps to, and requesting a container enables its
+    # children. Deliberately no /All: that walks up to Microsoft-Hyper-V-All and would drag
+    # the hypervisor in, which is a different decision - one that needs nested
+    # virtualization exposed on the host per VM.
+    #
+    # The enable lands after generalize, like every other offline change here, so the
+    # staged servicing completes during the deployed VM's first boot. A failure is logged
+    # and the build continues: the gold is still the gold, minus two consoles. Windows
+    # client editions that carry no Hyper-V at all (Home) report 0x800f080c here.
+    param([string]$MountRoot)
+
+    $featureName = "Microsoft-Hyper-V-Tools-All"
+    Write-Log "Enabling '$featureName' offline (management tools only, platform stays off)" -Tag "Run"
+    $result = Invoke-DismRaw -Arguments @(
+        "/Image:$MountRoot",
+        "/Enable-Feature",
+        "/FeatureName:$featureName"
+    )
+    if ($result.ExitCode -ne 0) {
+        Write-Log "Hyper-V management tools were not enabled (dism exit $($result.ExitCode)): $($result.Output | Select-Object -Last 3)" -Tag "Warn"
+        return $false
+    }
+
+    Write-Log "Hyper-V management tools enabled - they finish installing on the VM's first boot" -Tag "Ok"
+    return $true
 }
 
 function Set-OfflineRdpAndFirewall {
@@ -3383,7 +3506,9 @@ function Set-OfflineImageCustomization {
         [bool]$SuppressWelcomeExperience = $false,
         [bool]$SuppressFirstSignInAnimation = $false,
         [bool]$BlockSignInInputMethods = $false,
-        [bool]$PreventDeviceEncryption = $false
+        [bool]$PreventDeviceEncryption = $false,
+        [bool]$SetVmPowerPlan = $false,
+        [bool]$EnableHyperVTools = $false
     )
 
     Write-Log "Applying offline customization to '$VhdPath'" -Tag "Run"
@@ -3484,11 +3609,20 @@ function Set-OfflineImageCustomization {
             if ($PreventDeviceEncryption) {
                 Set-OfflineDeviceEncryptionPolicy -MountRoot $mountRoot
             }
+            if ($SetVmPowerPlan) {
+                Set-OfflinePowerPolicy -MountRoot $mountRoot
+            }
+            if ($EnableHyperVTools) {
+                Enable-OfflineHyperVTools -MountRoot $mountRoot | Out-Null
+            }
         }
         else {
             # Device encryption is a client feature; Server never turns BitLocker on by
             # itself, so the opt-out has nothing to opt out of here.
-            Write-Log "Server image - Welcome Experience, sign-in animation and device encryption policies not applicable" -Tag "Debug"
+            # Server has its own power defaults (High performance already, display off at
+            # ten minutes) and gets its Hyper-V tools from Install-WindowsFeature, so
+            # neither client tick has anything to do here.
+            Write-Log "Server image - Welcome Experience, sign-in animation, device encryption, power plan and Hyper-V tools not applicable" -Tag "Debug"
         }
 
         if ($Target -ne "AzureLocal") {
@@ -3968,6 +4102,8 @@ function Invoke-ImageBuildPipeline {
         [bool]$SuppressFirstSignInAnimation = $false,
         [bool]$BlockSignInInputMethods = $false,
         [bool]$PreventDeviceEncryption = $false,
+        [bool]$SetVmPowerPlan = $false,
+        [bool]$EnableHyperVTools = $false,
         [string]$EditionUpgrade = ""
     )
 
@@ -4061,7 +4197,9 @@ function Invoke-ImageBuildPipeline {
             -SuppressWelcomeExperience $SuppressWelcomeExperience `
             -SuppressFirstSignInAnimation $SuppressFirstSignInAnimation `
             -BlockSignInInputMethods $BlockSignInInputMethods `
-            -PreventDeviceEncryption $PreventDeviceEncryption
+            -PreventDeviceEncryption $PreventDeviceEncryption `
+            -SetVmPowerPlan $SetVmPowerPlan `
+            -EnableHyperVTools $EnableHyperVTools
     }
     catch {
         Write-Log "Failed to apply offline customization to '$VhdPath': $($_.Exception.Message)" -Tag "Error"
@@ -4120,6 +4258,8 @@ if ($needsInteractive) {
         -CurrentSuppressFirstSignInAnimation $SuppressFirstSignInAnimation `
         -CurrentBlockSignInInputMethods $BlockSignInInputMethods `
         -CurrentPreventDeviceEncryption $PreventDeviceEncryption `
+        -CurrentSetVmPowerPlan $SetVmPowerPlan `
+        -CurrentEnableHyperVTools $EnableHyperVTools `
         -CurrentMultiSessionImageIndexes @($MultiSessionImageIndexes) `
         -CurrentAzureEditionImageIndexes @($AzureEditionImageIndexes)
 
@@ -4150,6 +4290,8 @@ if ($needsInteractive) {
     $SuppressFirstSignInAnimation = $config.SuppressFirstSignInAnimation
     $BlockSignInInputMethods = $config.BlockSignInInputMethods
     $PreventDeviceEncryption = $config.PreventDeviceEncryption
+    $SetVmPowerPlan = $config.SetVmPowerPlan
+    $EnableHyperVTools = $config.EnableHyperVTools
     $MultiSessionImageIndexes = @($config.MultiSessionImageIndexes)
     $AzureEditionImageIndexes = @($config.AzureEditionImageIndexes)
 }
@@ -4255,6 +4397,8 @@ Write-Log ("Suppress at logon - " + ($suppressParts -join " | ")) -Tag "Info"
 
 if ($runHasClient) {
     Write-Log "Automatic BitLocker device encryption: $(if ($PreventDeviceEncryption) { 'prevented in the image' } else { 'left to Windows' })" -Tag "Info"
+    Write-Log "Power plan: $(if ($SetVmPowerPlan) { 'High performance, display and sleep never, hibernation off' } else { 'left at the Windows default' })" -Tag "Info"
+    Write-Log "Hyper-V management tools: $(if ($EnableHyperVTools) { 'enabled offline (tools only, no platform)' } else { 'not enabled' })" -Tag "Info"
 }
 if (@($MultiSessionImageIndexes).Count -gt 0) {
     Write-Log "Upgrading to Enterprise multi-session after generalize: index $(@($MultiSessionImageIndexes) -join ', ')" -Tag "Info"
@@ -4336,6 +4480,8 @@ foreach ($buildSpec in $buildSpecs) {
         -SuppressFirstSignInAnimation $SuppressFirstSignInAnimation `
         -BlockSignInInputMethods $BlockSignInInputMethods `
         -PreventDeviceEncryption $PreventDeviceEncryption `
+        -SetVmPowerPlan $SetVmPowerPlan `
+        -EnableHyperVTools $EnableHyperVTools `
         -EditionUpgrade $editionUpgrade
 
     if (-not $ok) {

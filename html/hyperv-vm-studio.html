@@ -1567,7 +1567,7 @@ const DEFS = {
   "vm.svg": ["work", '<g fill="@H"><polygon points="9,1.6 16.2,5.6 16.2,12.4 9,16.4 1.8,12.4 1.8,5.6"/></g>' + S + '<path d="M1.8 5.6L9 9.6l7.2-4M9 9.6v6.6"/></g>'],
   "servers.svg": ["work", '<g fill="@H"><rect x="1.8" y="2.2" width="14.4" height="4" rx="1"/><rect x="1.8" y="7" width="14.4" height="4" rx="1"/><rect x="1.8" y="11.8" width="14.4" height="4" rx="1"/></g>' + S + '<path d="M12.6 4.2h1.4M12.6 9h1.4M12.6 13.8h1.4M4.2 4.2h3M4.2 9h3M4.2 13.8h3"/></g>'],
   "rds.svg": ["work", '<g fill="@H"><rect x="1.6" y="2.8" width="11.2" height="9" rx="1.3"/><rect x="9.2" y="8.4" width="7.2" height="7.2" rx="1.3"/></g>' + S + '<rect x="9.5" y="8.7" width="6.6" height="6.6" rx="1.1"/><path d="M11.4 12h2.8M12.8 10.6l1.4 1.4-1.4 1.4"/><path d="M4.2 5.6h4"/></g>'],
-  "paw.svg": ["work", '<g fill="@H"><rect x="2.4" y="2.8" width="13.2" height="8.8" rx="1.2"/><rect x="1" y="12.6" width="16" height="2.2" rx="1.1"/></g>' + S + '<path d="M9 5l2.6 1v1.9c0 1.4-1.2 2.4-2.6 2.9-1.4-.5-2.6-1.5-2.6-2.9V6z"/></g>'],
+  "paw.svg": ["host", '<g fill="@H"><rect x="2.4" y="2.8" width="13.2" height="8.8" rx="1.2"/><rect x="1" y="12.6" width="16" height="2.2" rx="1.1"/></g>' + S + '<path d="M9 5l2.6 1v1.9c0 1.4-1.2 2.4-2.6 2.9-1.4-.5-2.6-1.5-2.6-2.9V6z"/></g>'],
   "client-apps.svg": ["work", '<g fill="@H"><rect x="1.8" y="1.8" width="3.6" height="3.6" rx=".9"/><rect x="7.2" y="1.8" width="3.6" height="3.6" rx=".9"/><rect x="12.6" y="1.8" width="3.6" height="3.6" rx=".9"/><rect x="1.8" y="7.2" width="3.6" height="3.6" rx=".9"/><rect x="7.2" y="7.2" width="3.6" height="3.6" rx=".9"/><rect x="12.6" y="7.2" width="3.6" height="3.6" rx=".9"/><rect x="1.8" y="12.6" width="3.6" height="3.6" rx=".9"/><rect x="7.2" y="12.6" width="3.6" height="3.6" rx=".9"/><rect x="12.6" y="12.6" width="3.6" height="3.6" rx=".9"/></g>'],
   "files.svg": ["work", '<g fill="@H"><path d="M1.6 4.6a1.2 1.2 0 0 1 1.2-1.2h4l1.6 1.8h6.8a1.2 1.2 0 0 1 1.2 1.2v7.6a1.2 1.2 0 0 1-1.2 1.2H2.8a1.2 1.2 0 0 1-1.2-1.2z"/></g>' + S + '<path d="M1.6 7.6h14.8"/></g>'],
   "file-shares.svg": ["work", '<g fill="@H"><path d="M1.4 5a1.1 1.1 0 0 1 1.1-1.1h3.6l1.4 1.7h4.6a1.1 1.1 0 0 1 1.1 1.1v5.8a1.1 1.1 0 0 1-1.1 1.1H2.5A1.1 1.1 0 0 1 1.4 12.5z"/><circle cx="14.6" cy="14.6" r="1.9"/></g>' + S + '<path d="M1.4 7.6h11.2M12.2 12.4l1.3 1.3"/></g>'],
@@ -2727,12 +2727,23 @@ const RSAT_CATALOG = [
   { id: "Rsat.GroupPolicy.Management.Tools~~~~0.0.1.0", label: "Group Policy Management Tools", icon: "gpo.svg", paw: true, info: "Adds Rsat.GroupPolicy.Management.Tools — GPMC on the client." },
   { id: "Rsat.FileServices.Tools~~~~0.0.1.0", label: "File Services Tools", icon: "files.svg", info: "Adds Rsat.FileServices.Tools — DFS Management and related file-service consoles." },
   { id: "Rsat.PrintAndDocumentServices.Tools~~~~0.0.1.0", label: "Print Services Tools", icon: "print.svg", info: "Adds Rsat.PrintAndDocumentServices.Tools — Print Management." },
-  { id: "Rsat.Hyper-V.Tools~~~~0.0.1.0", label: "Hyper-V Management Tools", icon: "hyperv.svg", info: "Adds Rsat.Hyper-V.Tools — Hyper-V Manager and Hyper-V PowerShell." },
   { id: "Rsat.FailoverCluster.Management.Tools~~~~0.0.1.0", label: "Failover Clustering Tools", icon: "virtual-clusters.svg", info: "Adds Rsat.FailoverCluster.Management.Tools — Failover Cluster Manager." },
   { id: "Rsat.DHCP.Tools~~~~0.0.1.0", label: "DHCP Server Tools", icon: "dhcp.svg", paw: true, info: "Adds Rsat.DHCP.Tools — DHCP console and PowerShell." },
   { id: "Rsat.Dns.Tools~~~~0.0.1.0", label: "DNS Server Tools", icon: "dns.svg", paw: true, info: "Adds Rsat.Dns.Tools — DNS Manager and DNS PowerShell." },
   { id: "Rsat.ServerManager.Tools~~~~0.0.1.0", label: "Server Manager", icon: "servers.svg", paw: true, info: "Adds Rsat.ServerManager.Tools — Server Manager on Windows client." },
   { id: "Rsat.BitLocker.Recovery.Tools~~~~0.0.1.0", label: "BitLocker Recovery Password Viewer", icon: "security.svg", info: "Adds Rsat.BitLocker.Recovery.Tools — view BitLocker recovery passwords in ADUC." }
+];
+
+/** Client Windows optional features (Enable-WindowsOptionalFeature). Not RSAT and not
+    Features on Demand: the payload ships inside the client image, so Build-Vms.ps1 enables
+    these offline with no ISO, nothing to download and nothing to defer to the guest. */
+const CLIENT_FEATURE_CATALOG = [
+  {
+    id: "Microsoft-Hyper-V-Tools-All",
+    label: "Hyper-V Management Tools",
+    icon: "hyperv.svg",
+    info: "Enables Microsoft-Hyper-V-Tools-All — Hyper-V Manager, vmconnect and the Hyper-V PowerShell module, the same checkbox as Hyper-V Management Tools in Turn Windows features on or off. There is no Rsat.Hyper-V.Tools capability: these tools live in the image, not in the Languages and Optional Features ISO. The Hyper-V platform itself stays off — running VMs inside this VM is a separate decision that needs nested virtualization on the host. Pro, Enterprise and Education only."
+  }
 ];
 
 const ROLE_PRESETS = {
@@ -2825,7 +2836,14 @@ function imagePickerGroups() {
 }
 
 const RSAT_PRESETS = {
-  "paw": { label: "PAW essentials", capabilities: RSAT_CATALOG.filter(x => x.paw).map(x => x.id) }
+  "paw": {
+    label: "PAW essentials",
+    capabilities: RSAT_CATALOG.filter(x => x.paw).map(x => x.id),
+    // Same list on screen, so the preset fills both halves of it. Hyper-V Manager belongs on
+    // a privileged workstation for the same reason ADUC does: the host is administered from
+    // here, not from the host.
+    clientFeatures: ["Microsoft-Hyper-V-Tools-All"]
+  }
 };
 
 /* Whole-VM starting points, picked at the top of a VM card. A template owns the build shape
@@ -3241,7 +3259,8 @@ const VM_TEMPLATES = {
     name: "paw-01",
     removeBuiltInApps: true,
     imageId: "w11-pro",
-    rsatCapabilities: RSAT_CATALOG.map(x => x.id)
+    rsatCapabilities: RSAT_CATALOG.map(x => x.id),
+    clientFeatures: CLIENT_FEATURE_CATALOG.map(x => x.id)
   },
   "paw-w11-enterprise": {
     group: "Privileged workstations",
@@ -3252,7 +3271,8 @@ const VM_TEMPLATES = {
     name: "paw-01",
     removeBuiltInApps: true,
     imageId: "w11-enterprise",
-    rsatCapabilities: RSAT_CATALOG.map(x => x.id)
+    rsatCapabilities: RSAT_CATALOG.map(x => x.id),
+    clientFeatures: CLIENT_FEATURE_CATALOG.map(x => x.id)
   }
 };
 
@@ -3316,7 +3336,7 @@ function vmTemplateSpecHtml(t) {
   if (!t) return "";
   const img = templateImage(t);
   const p = profileFor(img.id);
-  const rsat = (t.rsatCapabilities || []).length;
+  const rsat = (t.rsatCapabilities || []).length + (t.clientFeatures || []).length;
   const bits = [];
   if (img) {
     const experience = imageExperienceLabel(img);
@@ -4258,6 +4278,7 @@ function applyImageProfile(server, imageId) {
       server.windowsFeatures = [];
     } else {
       server.rsatCapabilities = [];
+      server.clientFeatures = [];
       server.removeBuiltInApps = false;
     }
   }
@@ -4302,6 +4323,7 @@ function applyVmTemplate(server, templateId) {
   if (t.cpuCount != null) server.cpuCount = t.cpuCount;
   server.windowsFeatures = [...(t.windowsFeatures || [])];
   server.rsatCapabilities = [...(t.rsatCapabilities || [])];
+  server.clientFeatures = [...(t.clientFeatures || [])];
   server.appCompatFod = !!t.appCompatFod;
   if (t.nestedVirtualization != null) server.nestedVirtualization = !!t.nestedVirtualization;
   // Hardware a template asks for is only ever added, never cleared: a template that says
@@ -4369,6 +4391,11 @@ function sanitizeServerFeaturesForImage(server) {
       server.localUserName = generateLocalUsername(state.usernameTheme);
     }
     server.rsatCapabilities = Array.isArray(server.rsatCapabilities) ? server.rsatCapabilities.filter(Boolean) : [];
+    // Only ids this build knows how to enable - an unknown feature name is a DISM failure
+    // at build time, and the catalog is the whole list of what the client image carries.
+    server.clientFeatures = (Array.isArray(server.clientFeatures) ? server.clientFeatures : [])
+      .filter(Boolean)
+      .filter(id => CLIENT_FEATURE_CATALOG.some(f => f.id === id));
     // Built-in app removal covers every Windows 11 client image - N and multi-session included.
     if (!supportsAppRemoval(server.imageId)) server.removeBuiltInApps = false;
     else server.removeBuiltInApps = !!server.removeBuiltInApps;
@@ -4388,6 +4415,7 @@ function sanitizeServerFeaturesForImage(server) {
     }
   } else {
     server.rsatCapabilities = [];
+    server.clientFeatures = [];
     // Server Core ships a subset of the component store — drop anything it cannot install,
     // otherwise Install-WindowsFeature fails with "The name was not found" at build time.
     server.windowsFeatures = (Array.isArray(server.windowsFeatures) ? server.windowsFeatures : [])
@@ -4443,6 +4471,7 @@ function createServer(name) {
     windowsFeatures: [],
     includeManagementTools: true,
     rsatCapabilities: [],
+    clientFeatures: [],
     removeBuiltInApps: false,
     removeApps: null,
     azureArc: { enabled: false, principalId: "" },
@@ -4951,6 +4980,8 @@ function buildConfig() {
     if (imageTakesServerRoles(findImage(s.imageId)) && features.length) row.windowsFeatures = features;
     const rsat = [...new Set((s.rsatCapabilities || []).filter(Boolean))];
     if (findImage(s.imageId).kind === "client" && rsat.length) row.rsatCapabilities = rsat;
+    const clientFeatures = [...new Set((s.clientFeatures || []).filter(Boolean))];
+    if (findImage(s.imageId).kind === "client" && clientFeatures.length) row.clientFeatures = clientFeatures;
     if (supportsAppRemoval(s.imageId) && s.removeBuiltInApps) {
       const appSel = appRemovalSelection(s);
       if (appSel === null) row.removeBuiltInApps = true;
@@ -5219,6 +5250,7 @@ function applyConfigDocument(parsed, opts) {
     s.customPaths = !!(s.vmPath.trim() || s.vhdPath.trim());
     if (!String(s.localUserName || "").trim()) s.localUserName = generateLocalUsername(state.usernameTheme);
     s.rsatCapabilities = Array.isArray(s.rsatCapabilities) ? s.rsatCapabilities : [];
+    s.clientFeatures = Array.isArray(s.clientFeatures) ? s.clientFeatures : [];
     s.integrationServices = Object.assign(defaultIntegrationServices(), s.integrationServices || {});
     normalizeServerNicsAndPower(s);
     normalizeServerIdentityRefs(s, catalogs);
@@ -5305,6 +5337,7 @@ function decodeState(text) {
     n.appCompatFod = !!n.appCompatFod;
     if (!String(n.localUserName || "").trim()) n.localUserName = generateLocalUsername(state.usernameTheme);
     n.rsatCapabilities = Array.isArray(n.rsatCapabilities) ? n.rsatCapabilities : [];
+    n.clientFeatures = Array.isArray(n.clientFeatures) ? n.clientFeatures : [];
     n.integrationServices = Object.assign(defaultIntegrationServices(), n.integrationServices || {});
     normalizeServerNicsAndPower(n);
     normalizeServerIdentityRefs(n, catalogs);
@@ -6443,16 +6476,38 @@ function renderServerRolesSection(s) {
   const filter = (state.featureFilter[s._id] || "").toLowerCase().trim();
   const features = s.windowsFeatures || [];
   const rsat = s.rsatCapabilities || [];
+  const clientFeatures = s.clientFeatures || [];
   const open = isNestedOpen(s._id + "-roles", false);
 
   let body = "";
   let headTip = "";
   if (isClient) {
     const filtered = RSAT_CATALOG.filter(r => !filter || r.label.toLowerCase().includes(filter) || r.id.toLowerCase().includes(filter));
+    // One list, two install mechanisms. A client admin toolbox is a client admin toolbox to
+    // whoever is ticking it, so the in-box optional features sit at the top of the same list
+    // rather than in a section of their own - the row's own tip says where its payload comes
+    // from, and that is the only place the difference matters.
+    const filteredClientFeatures = CLIENT_FEATURE_CATALOG.filter(f => !filter || f.label.toLowerCase().includes(filter) || f.id.toLowerCase().includes(filter));
+    const clientRows = [
+      ...filteredClientFeatures.map(f => renderFeatureListRow({
+        on: hasFeature(clientFeatures, f.id),
+        icon: f.icon,
+        label: f.label,
+        item: f,
+        attrs: `data-clientfeat-toggle="${esc(s._id)}" data-clientfeat="${esc(f.id)}"`
+      })),
+      ...filtered.map(r => renderFeatureListRow({
+        on: hasFeature(rsat, r.id),
+        icon: r.icon,
+        label: r.label,
+        item: r,
+        attrs: `data-rsat-toggle="${esc(s._id)}" data-cap="${esc(r.id)}"`
+      }))
+    ];
     body = `
       <p class="hint" style="margin:10px 0 10px">Client OS — install RSAT tools.</p>
       ${fodBanner("Windows 11 <em>Languages and Optional Features</em>",
-        "otherwise every capability below is a separate Windows Update download on first boot — slow, and blocked by a WSUS without optional content.",
+        "otherwise every RSAT capability below is a separate Windows Update download on first boot — slow, and blocked by a WSUS without optional content. The Hyper-V tools are in the image already and never need it.",
         "https://learn.microsoft.com/en-us/windows-hardware/manufacture/desktop/features-on-demand-v2--capabilities")}
       <div class="feature-presets" style="margin-top:12px">
         ${Object.keys(RSAT_PRESETS).map(pid => `<button class="btn sm" type="button" data-rsat-preset="${esc(s._id)}" data-preset="${esc(pid)}"><img src="${iconSrc("paw.svg")}"> ${esc(RSAT_PRESETS[pid].label)}</button>`).join("")}
@@ -6460,13 +6515,7 @@ function renderServerRolesSection(s) {
       </div>
       <input class="feature-search" data-feat-filter="${esc(s._id)}" value="${esc(state.featureFilter[s._id]||"")}" placeholder="Search RSAT tools…">
       <div class="role-tree">
-        ${filtered.map(r => renderFeatureListRow({
-          on: hasFeature(rsat, r.id),
-          icon: r.icon,
-          label: r.label,
-          item: r,
-          attrs: `data-rsat-toggle="${esc(s._id)}" data-cap="${esc(r.id)}"`
-        })).join("") || `<div class="hint" style="padding:12px">No matches.</div>`}
+        ${clientRows.join("") || `<div class="hint" style="padding:12px">No matches.</div>`}
       </div>`;
   } else {
     const onImage = item => featureAvailableOnImage(item, img);
@@ -6504,7 +6553,7 @@ function renderServerRolesSection(s) {
       ${renderServerAppCompatBlock(s)}`;
   }
 
-  const count = isClient ? rsat.length : features.length;
+  const count = isClient ? rsat.length + clientFeatures.length : features.length;
   const meta = `${count} selected${!isClient && supportsAppCompatFod(s) && s.appCompatFod ? " · App Compat FOD" : ""}`;
   return `
     <div class="section collapsible ${open ? "" : "collapsed"}">
@@ -7870,6 +7919,14 @@ function rsatCapabilityLabel(id) {
   const hit = RSAT_CATALOG.find(r => r.id === id);
   return hit ? hit.label : String(id).split("~")[0];
 }
+function clientFeatureLabel(id) {
+  const hit = CLIENT_FEATURE_CATALOG.find(f => f.id === id);
+  return hit ? hit.label : String(id);
+}
+function clientFeatureGlyph(id) {
+  const hit = CLIENT_FEATURE_CATALOG.find(f => f.id === id);
+  return hit ? hit.icon : "settings.svg";
+}
 function azureRegionLabel(id) {
   const hit = AZURE_REGIONS.find(r => r.id === id);
   return hit ? hit.label : (id || "");
@@ -8221,6 +8278,12 @@ function validate() {
       // its absence costs time at first boot and nothing else.
       info(`${label} installs ${(s.rsatCapabilities || []).length} RSAT capability(ies) — Build-Vms.ps1 asks for the Windows 11 Languages and Optional Features ISO. Without it each one is a separate Windows Update download at first boot.`, `Virtual machines › ${label}`);
     }
+    if ((s.clientFeatures || []).length) {
+      // Deliberately not the FOD note above: this payload is in the image, so there is no
+      // ISO to ask for and nothing to download - the only cost is a longer first boot
+      // while the staged feature finishes installing.
+      info(`${label} enables ${(s.clientFeatures || []).length} Windows feature(s) offline from the image itself — no Features on Demand ISO needed.`, `Virtual machines › ${label}`);
+    }
     if (isAdDomainController(s)) {
       info(`${label} installs AD DS binaries only — promote it in the guest afterwards with Install-ADDSForest.`, `Virtual machines › ${label}`);
     }
@@ -8424,9 +8487,12 @@ function reviewServerRows(s) {
 function reviewServerChips(s) {
   const img = findImage(s.imageId);
   const items = img.kind === "client"
-    ? (s.rsatCapabilities || []).filter(Boolean).map(id => ({ label: rsatCapabilityLabel(id), icon: rsatCapabilityGlyph(id) }))
+    ? [
+        ...(s.clientFeatures || []).filter(Boolean).map(id => ({ label: clientFeatureLabel(id), icon: clientFeatureGlyph(id) })),
+        ...(s.rsatCapabilities || []).filter(Boolean).map(id => ({ label: rsatCapabilityLabel(id), icon: rsatCapabilityGlyph(id) }))
+      ]
     : (s.windowsFeatures || []).filter(Boolean).map(id => ({ label: windowsFeatureLabel(id), icon: windowsFeatureGlyph(id) }));
-  if (!items.length) return `<p class="hint" style="margin-top:10px">No ${img.kind === "client" ? "RSAT capabilities" : "roles or features"} selected.</p>`;
+  if (!items.length) return `<p class="hint" style="margin-top:10px">No ${img.kind === "client" ? "Windows features or RSAT capabilities" : "roles or features"} selected.</p>`;
   return `<div class="chips" style="margin:12px 0 0">${items.map(x =>
     `<span class="pill"><img src="${iconSrc(x.icon)}" alt="">${esc(x.label)}</span>`).join("")}</div>`;
 }
@@ -9371,6 +9437,19 @@ document.getElementById("main").addEventListener("click", e => {
     return;
   }
 
+  const clientFeatToggle = e.target.closest("[data-clientfeat-toggle]");
+  if (clientFeatToggle && !e.target.closest(".tip-warn") && !e.target.closest(".tip-info") && !e.target.closest(".warn-banner")) {
+    const s = state.servers.find(x => x._id === clientFeatToggle.getAttribute("data-clientfeat-toggle"));
+    const feat = clientFeatToggle.getAttribute("data-clientfeat");
+    if (s && feat) {
+      s.clientFeatures = s.clientFeatures || [];
+      const on = !hasFeature(s.clientFeatures, feat);
+      s.clientFeatures = toggleFeatureId(s.clientFeatures, feat, on);
+      render();
+    }
+    return;
+  }
+
   const featChip = e.target.closest(".role-row[data-feat-toggle], .role-child[data-feat-toggle]");
   if (featChip && !e.target.closest(".toggle") && !e.target.closest(".tip-warn") && !e.target.closest(".tip-info") && !e.target.closest(".warn-banner")) {
     e.stopPropagation();
@@ -9425,6 +9504,7 @@ document.getElementById("main").addEventListener("click", e => {
     const preset = RSAT_PRESETS[rsatPreset.getAttribute("data-preset")];
     if (s && preset) {
       s.rsatCapabilities = [...new Set([...(s.rsatCapabilities || []), ...preset.capabilities])];
+      s.clientFeatures = [...new Set([...(s.clientFeatures || []), ...(preset.clientFeatures || [])])];
       render();
       toast("Preset applied: " + preset.label);
     }
@@ -9433,7 +9513,7 @@ document.getElementById("main").addEventListener("click", e => {
   const rsatClear = e.target.closest("[data-rsat-clear]");
   if (rsatClear) {
     const s = state.servers.find(x => x._id === rsatClear.getAttribute("data-rsat-clear"));
-    if (s) { s.rsatCapabilities = []; render(); }
+    if (s) { s.rsatCapabilities = []; s.clientFeatures = []; render(); }
     return;
   }
   const delDisk = e.target.closest("[data-del-disk]");

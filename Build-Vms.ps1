@@ -2285,6 +2285,43 @@ function Install-OfflineRsatCapabilities {
     return @($pending)
 }
 
+function Enable-OfflineClientFeatures {
+    <#
+      Windows optional features on a client VM, enabled straight into the mounted image.
+
+      Unlike RSAT these are not Features on Demand: the payload ships inside the client
+      image, so there is no ISO to find, nothing to download and nothing to defer to the
+      guest. The one entry the studio offers is Microsoft-Hyper-V-Tools-All - Hyper-V
+      Manager, vmconnect and the Hyper-V PowerShell module. There is no
+      Rsat.Hyper-V.Tools capability; that name does not exist, and asking for it is how
+      this used to fail.
+
+      No -All: it enables a feature's parents, which for the Hyper-V tools means
+      Microsoft-Hyper-V-All and the hypervisor underneath it. Management tools are the
+      request; running VMs inside a VM is a different one, and needs nested
+      virtualization exposed on the host.
+
+      A failure is a warning, not a build stop: the VM is still the VM, minus a console.
+    #>
+    param(
+        [string]$OsRoot,
+        [string[]]$FeatureNames
+    )
+
+    if ($null -eq $FeatureNames -or $FeatureNames.Count -eq 0) { return }
+
+    Write-Log "Enabling $($FeatureNames.Count) Windows feature(s) offline (payload is in the image)" -Tag "Run"
+    foreach ($featureName in $FeatureNames) {
+        try {
+            $result = Enable-WindowsOptionalFeature -Path $OsRoot -FeatureName $featureName -NoRestart -ErrorAction Stop
+            Write-Log "Offline feature '$featureName' enabled (RestartNeeded=$($result.RestartNeeded))" -Tag "Ok"
+        }
+        catch {
+            Write-Log "Offline feature '$featureName' failed: $($_.Exception.Message)" -Tag "Warn"
+        }
+    }
+}
+
 $script:ServerCoreAppCompatCapability = "ServerCore.AppCompatibility~~~~0.0.1.0"
 
 # Where each Features on Demand medium comes from, decided once per run by Resolve-FodPlans.
@@ -2880,6 +2917,14 @@ function Set-OfflineUnattendFile {
                 }
                 $pendingRsat = @(Install-OfflineRsatCapabilities -OsRoot $osRoot -CapabilityNames $rsatNames `
                     -Source $rsatSource -ForceOnline:$rsatOnline)
+
+                # In-box optional features. No FoD plan applies - nothing here is downloaded,
+                # so there is no medium to choose and no online fallback to defer to.
+                $clientFeatureNames = @()
+                if ($Server.clientFeatures) {
+                    $clientFeatureNames = @($Server.clientFeatures | ForEach-Object { [string]$_ } | Where-Object { $_ -ne "" } | Select-Object -Unique)
+                }
+                Enable-OfflineClientFeatures -OsRoot $osRoot -FeatureNames $clientFeatureNames
                 if ($null -ne $Server.includeManagementTools) {
                     $includeMgmt = [bool]$Server.includeManagementTools
                 }
@@ -5312,6 +5357,21 @@ function Invoke-BuildPreflight {
             }
             else {
                 $warnings.Add("$label $($rsatWanted.Count) RSAT capability(ies) install online in the guest at first boot - slow, one Windows Update download each")
+            }
+        }
+
+        $clientFeaturesWanted = @()
+        if ($server.clientFeatures) {
+            $clientFeaturesWanted = @($server.clientFeatures | ForEach-Object { [string]$_ } | Where-Object { $_ -ne "" })
+        }
+        if ($clientFeaturesWanted.Count -gt 0) {
+            # Client-only, and gated on the imageId shape for the same reason the offline
+            # enable is: these feature names exist in a Windows client image and nowhere else.
+            if (([string]$server.imageId).ToLowerInvariant() -match "^w1[01]-") {
+                $ok.Add("$label $($clientFeaturesWanted.Count) Windows feature(s) enabled offline from the image: $($clientFeaturesWanted -join ', ')")
+            }
+            else {
+                $warnings.Add("$label clientFeatures is only valid on Windows client images - ignored on '$($server.imageId)'")
             }
         }
 
