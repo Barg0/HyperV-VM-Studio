@@ -3014,60 +3014,96 @@ function Set-OfflineDeviceEncryptionPolicy {
 
 function Set-OfflinePowerPolicy {
     # The gold only ever runs as a VM. Windows still arrives with the settings written for
-    # a laptop: Balanced, console off after ten minutes, asleep after thirty, and a
-    # hiberfil.sys sized after the RAM. None of that helps a machine nobody is sitting at,
-    # and a VM that has put itself to sleep is a VM that stopped answering.
+    # a laptop: Balanced, console off after ten minutes, asleep after thirty. Neither helps
+    # a machine nobody is sitting at, and a VM that has put itself to sleep is a VM that
+    # stopped answering.
     #
-    # Written straight into the offline SYSTEM hive rather than run through powercfg at
-    # first boot: a Hyper-V gold carries no boot-time scripts, and the active scheme and
-    # its per-setting indexes are plain registry values. ActivePowerScheme is machine-wide,
-    # so it survives into every profile the deployed VM creates.
+    # Written as machine policy, into SOFTWARE\Policies, and not into the scheme itself.
+    # Control\Power\User\PowerSchemes is ACL'd against Administrators - powercfg reaches
+    # it through the power manager, a direct write does not, and those ACLs travel with the
+    # hive when it is loaded offline, so every write there came back "Access is denied".
+    # Taking ownership of a protected key in every gold to get around that is fighting the
+    # OS. The policy keys are the same knobs a GPO would set (Administrative Templates >
+    # System > Power Management), they live in a hive this script already writes, and a
+    # real domain GPO later overrides them on its own.
     #
-    # High performance and not Ultimate Performance: Ultimate is hidden on client and is
-    # normally unlocked with 'powercfg -duplicatescheme', which mints a new scheme under a
-    # random GUID - a tree this would have to recreate by hand, for idle and parking
-    # tunables the hypervisor mostly owns anyway.
+    # DISM has no power verb and powercfg has no offline mode, so the registry is the only
+    # offline lever here; the choice was only which key.
+    #
+    # Cost: the deployed VM's Settings page says power is managed by the organization.
     param([string]$MountRoot)
 
     # Scheme and setting GUIDs are Windows' own, identical on every install.
     $highPerformance = "8c5e7fda-e8bf-4a96-9a85-a6e23a8c635c"
-    $videoSubgroup   = "7516b95f-f776-4464-8c53-06167f40cc99"  # Display
     $videoIdle       = "3c0bc021-c8a8-4e07-a973-6b14cbcb2b7e"  # Turn off display after
-    $sleepSubgroup   = "238c9fa8-0aad-41ed-83f4-97be242c8f20"  # Sleep
     $standbyIdle     = "29f6c1db-86da-48c5-9fdb-f2b67b1f44da"  # Sleep after
 
-    $systemHive = Join-Path -Path $MountRoot -ChildPath "Windows\System32\config\SYSTEM"
+    $softwareHive = Join-Path -Path $MountRoot -ChildPath "Windows\System32\config\SOFTWARE"
     $hiveRoot = "HKLM\OfflineImagePower"
-    $controlSet = "$hiveRoot\ControlSet001"
-    $schemeKey = "$controlSet\Control\Power\User\PowerSchemes\$highPerformance"
 
-    Write-Log "Loading offline SYSTEM hive for the power plan" -Tag "Run"
-    & reg.exe load $hiveRoot $systemHive | Out-Null
+    Write-Log "Loading offline SOFTWARE hive for the power plan" -Tag "Run"
+    & reg.exe load $hiveRoot $softwareHive | Out-Null
     if ($LASTEXITCODE -ne 0) {
-        throw "Failed to load offline SYSTEM hive (exit $LASTEXITCODE)"
+        throw "Failed to load offline SOFTWARE hive for the power plan (exit $LASTEXITCODE)"
     }
 
     try {
-        Write-Log "Setting the active power scheme to High performance" -Tag "Run"
-        & reg.exe add "$controlSet\Control\Power\User\PowerSchemes" /v ActivePowerScheme /t REG_SZ /d $highPerformance /f | Out-Null
-
-        # 0 means never. AC and DC both, because a Gen 2 VM reports no battery and Windows
-        # still keeps a DC column - leaving it at the default is leaving half the setting.
-        Write-Log "Display and sleep timeouts set to never (AC and DC)" -Tag "Run"
-        foreach ($setting in @(
-            @{ Key = "$schemeKey\$videoSubgroup\$videoIdle"; Label = "turn off display after" },
-            @{ Key = "$schemeKey\$sleepSubgroup\$standbyIdle"; Label = "sleep after" }
-        )) {
-            Write-Log "$($setting.Label) = 0 (never)" -Tag "Debug"
-            & reg.exe add "$($setting.Key)" /v ACSettingIndex /t REG_DWORD /d 0 /f | Out-Null
-            & reg.exe add "$($setting.Key)" /v DCSettingIndex /t REG_DWORD /d 0 /f | Out-Null
+        $policyRoot = "Registry::$hiveRoot\Policies\Microsoft\Power\PowerSettings"
+        if (-not (Test-Path -Path $policyRoot)) {
+            New-Item -Path $policyRoot -Force | Out-Null
         }
 
-        # Nothing hibernates a VM, and hiberfil.sys is charged to every differencing disk
-        # cloned off this gold.
+        Write-Log "Policy: active power scheme = High performance" -Tag "Run"
+        Set-ItemProperty -Path $policyRoot -Name "ActivePowerScheme" -Value $highPerformance -Type String -Force
+
+        # 0 means never. AC and DC both: a Gen 2 VM reports no battery and Windows still
+        # keeps a DC column, so leaving it at the default is leaving half the setting.
+        foreach ($setting in @(
+            @{ Guid = $videoIdle;   Label = "turn off display after" },
+            @{ Guid = $standbyIdle; Label = "sleep after" }
+        )) {
+            Write-Log "Policy: $($setting.Label) = 0 (never), AC and DC" -Tag "Run"
+            $settingPath = "$policyRoot\$($setting.Guid)"
+            if (-not (Test-Path -Path $settingPath)) {
+                New-Item -Path $settingPath -Force | Out-Null
+            }
+            Set-ItemProperty -Path $settingPath -Name "ACSettingIndex" -Value 0 -Type DWord -Force
+            Set-ItemProperty -Path $settingPath -Name "DCSettingIndex" -Value 0 -Type DWord -Force
+        }
+    }
+    finally {
+        Dismount-ImageHive -HiveRoot $hiveRoot
+    }
+
+    Set-OfflineHibernationPolicy -MountRoot $MountRoot
+}
+
+function Set-OfflineHibernationPolicy {
+    # Hibernation has no policy equivalent - it is one value in the SYSTEM hive, and the
+    # same ACLs that block the scheme tree may block this one too. So it is attempted on
+    # its own and reported rather than assumed: a failure here costs a hiberfil.sys the VM
+    # was probably never going to create anyway (a Gen 2 guest is not offered S4), and it
+    # must not take a finished gold down with it.
+    param([string]$MountRoot)
+
+    $systemHive = Join-Path -Path $MountRoot -ChildPath "Windows\System32\config\SYSTEM"
+    $hiveRoot = "HKLM\OfflineImagePowerSys"
+
+    & reg.exe load $hiveRoot $systemHive | Out-Null
+    if ($LASTEXITCODE -ne 0) {
+        Write-Log "Could not load the offline SYSTEM hive for hibernation (exit $LASTEXITCODE) - hibernation left at the Windows default" -Tag "Warn"
+        return
+    }
+
+    try {
         Write-Log "Disabling hibernation (no hiberfil.sys)" -Tag "Run"
-        & reg.exe add "$controlSet\Control\Power" /v HibernateEnabled /t REG_DWORD /d 0 /f | Out-Null
-        & reg.exe add "$controlSet\Control\Power" /v HibernateEnabledDefault /t REG_DWORD /d 0 /f | Out-Null
+        $powerKey = "Registry::$hiveRoot\ControlSet001\Control\Power"
+        Set-ItemProperty -Path $powerKey -Name "HibernateEnabled" -Value 0 -Type DWord -Force -ErrorAction Stop
+        Set-ItemProperty -Path $powerKey -Name "HibernateEnabledDefault" -Value 0 -Type DWord -Force -ErrorAction Stop
+        Write-Log "Hibernation disabled in the image" -Tag "Ok"
+    }
+    catch {
+        Write-Log "Hibernation left at the Windows default: $($_.Exception.Message)" -Tag "Warn"
     }
     finally {
         Dismount-ImageHive -HiveRoot $hiveRoot
