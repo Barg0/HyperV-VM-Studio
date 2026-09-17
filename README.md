@@ -136,7 +136,11 @@ The UI language stays whatever the ISO shipped.
 > blanked after ten minutes, asleep after thirty, and a `hiberfil.sys` charged to every
 > differencing disk cloned off the gold. High performance rather than Ultimate Performance —
 > Ultimate is hidden on client and only exists once `powercfg -duplicatescheme` mints it
-> under a fresh GUID, for idle tunables the hypervisor mostly owns anyway.
+> under a fresh GUID, for idle tunables the hypervisor mostly owns anyway. It is baked as
+> machine policy (`SOFTWARE\Policies\Microsoft\Power`), the same knobs an Administrative
+> Templates GPO sets — the scheme's own registry tree is ACL'd against Administrators even
+> offline, and a later domain GPO overrides the baked policy on its own. The deployed VM's
+> power page says the settings are managed by your organization, because they are.
 
 **Disk** — the VHDX size (64 GB by default) and whether it is Fixed (default) or Dynamic.
 
