@@ -19,10 +19,6 @@
     (-SetVmPowerPlan, default ON): High performance, display and sleep set to never,
     hibernation off - a lab VM has no battery to save and no screen to blank, and the
     hiberfil.sys it never uses costs the same gigabytes on every differencing disk.
-    Hyper-V Manager and the Hyper-V PowerShell module can be enabled into a client gold
-    (-EnableHyperVTools, default off). Those are the in-box optional feature
-    Microsoft-Hyper-V-Tools-All, not an RSAT Features on Demand download, so the payload
-    comes from the image itself and needs no second ISO. The Hyper-V platform stays off.
 
     A Windows 11 Pro index can also be built as an Enterprise multi-session gold
     (-MultiSessionImageIndexes) - its own build next to any plain golds, so one run
@@ -167,9 +163,6 @@ param (
 
     [Parameter(HelpMessage = "On client editions, bake the High performance power scheme with display and sleep set to never and hibernation off. No effect on Server images. Default on: the gold runs as a VM, where blanking a console and sleeping a machine nobody is sitting at only gets in the way.")]
     [bool]$SetVmPowerPlan = $true,
-
-    [Parameter(HelpMessage = "On client editions, enable the in-box Hyper-V management tools (Microsoft-Hyper-V-Tools-All: Hyper-V Manager, vmconnect and the Hyper-V PowerShell module) offline. The Hyper-V platform itself stays off. No effect on Server images - there the tools come from Install-WindowsFeature. Default off.")]
-    [bool]$EnableHyperVTools = $false,
 
     [Parameter(HelpMessage = "Image indexes to build as Windows 11 Enterprise multi-session golds - upgraded offline, after generalize. Each index here is its own build on top of whatever -ImageIndexes lists: the same index in both produces a Pro gold and a multi-session gold. Pass the index of a Windows 11 Pro image; the build aborts early if the image cannot become multi-session.")]
     [ValidateRange(1, 99)]
@@ -2292,7 +2285,6 @@ function Start-InteractiveConfiguration {
         [bool]$CurrentBlockSignInInputMethods = $false,
         [bool]$CurrentPreventDeviceEncryption = $true,
         [bool]$CurrentSetVmPowerPlan = $true,
-        [bool]$CurrentEnableHyperVTools = $false,
         [int[]]$CurrentMultiSessionImageIndexes = @(),
         [int[]]$CurrentAzureEditionImageIndexes = @()
     )
@@ -2535,7 +2527,6 @@ function Start-InteractiveConfiguration {
     if ($buildHasClient) {
         $featureItems += [PSCustomObject]@{ Id = "welcome"; Label = "Suppress Getting Started / Welcome Experience"; Selected = $CurrentSuppressWelcomeExperience; Section = "Optional (Client)" }
         $featureItems += [PSCustomObject]@{ Id = "signinanim"; Label = "Suppress first sign-in animation"; Selected = $CurrentSuppressFirstSignInAnimation; Section = "Optional (Client)" }
-        $featureItems += [PSCustomObject]@{ Id = "hvtools"; Label = "Hyper-V management tools (Manager + PowerShell, not the platform)"; Selected = $CurrentEnableHyperVTools; Section = "Optional (Client)" }
     }
     $featureChoice = Show-MultiSelectMenu -Title "Recommended & optional features" -Items $featureItems -AllowEmpty `
         -Subtitle "Space toggles selection - grouped by relevance to this build" `
@@ -2550,7 +2541,6 @@ function Start-InteractiveConfiguration {
     $blockSignIn = $featureChoice -contains "signin"
     $preventDeviceEncryption = $featureChoice -contains "autode"
     $setVmPowerPlan = $featureChoice -contains "power"
-    $enableHyperVTools = $featureChoice -contains "hvtools"
 
     # Dedicated VHDX window: size and type together on one form.
     $vhdxConfig = Show-VhdxConfigForm -Title "Configure VHDX" -Subtitle "Disk size and provisioning type" `
@@ -2599,7 +2589,6 @@ function Start-InteractiveConfiguration {
             Write-FastfetchInfoRow -Label "suppress signin anim" -Value $(if ($suppressSignInAnimation) { "Enabled" } else { "Disabled" }) -LabelWidth 24 -IndentWidth 2
             Write-FastfetchInfoRow -Label "auto bitlocker" -Value $(if ($preventDeviceEncryption) { "Prevented" } else { "Left to Windows" }) -LabelWidth 24 -IndentWidth 2
             Write-FastfetchInfoRow -Label "power plan" -Value $(if ($setVmPowerPlan) { "High performance, display/sleep never, no hibernation" } else { "Windows default (Balanced)" }) -LabelWidth 24 -IndentWidth 2
-            Write-FastfetchInfoRow -Label "hyper-v tools" -Value $(if ($enableHyperVTools) { "Enabled (tools only)" } else { "Not enabled" }) -LabelWidth 24 -IndentWidth 2
         }
         Write-Host ""
         Write-Host "  Disk" -ForegroundColor White
@@ -2640,7 +2629,6 @@ function Start-InteractiveConfiguration {
         BlockSignInInputMethods      = $blockSignIn
         PreventDeviceEncryption      = $preventDeviceEncryption
         SetVmPowerPlan               = $setVmPowerPlan
-        EnableHyperVTools            = $enableHyperVTools
         MultiSessionImageIndexes     = @($multiSessionIndexes)
         AzureEditionImageIndexes     = @($azureEditionIndexes)
     }
@@ -3086,40 +3074,6 @@ function Set-OfflinePowerPolicy {
     }
 }
 
-function Enable-OfflineHyperVTools {
-    # Hyper-V Manager, vmconnect and the Hyper-V PowerShell module, for a client gold that
-    # administers hosts rather than runs VMs. These are NOT RSAT: there is no
-    # Rsat.Hyper-V.Tools capability to add, the payload ships inside install.wim, and the
-    # enable needs no Features on Demand ISO and no Windows Update.
-    #
-    # Microsoft-Hyper-V-Tools-All is the container the "Hyper-V Management Tools" checkbox
-    # in Turn Windows features on or off maps to, and requesting a container enables its
-    # children. Deliberately no /All: that walks up to Microsoft-Hyper-V-All and would drag
-    # the hypervisor in, which is a different decision - one that needs nested
-    # virtualization exposed on the host per VM.
-    #
-    # The enable lands after generalize, like every other offline change here, so the
-    # staged servicing completes during the deployed VM's first boot. A failure is logged
-    # and the build continues: the gold is still the gold, minus two consoles. Windows
-    # client editions that carry no Hyper-V at all (Home) report 0x800f080c here.
-    param([string]$MountRoot)
-
-    $featureName = "Microsoft-Hyper-V-Tools-All"
-    Write-Log "Enabling '$featureName' offline (management tools only, platform stays off)" -Tag "Run"
-    $result = Invoke-DismRaw -Arguments @(
-        "/Image:$MountRoot",
-        "/Enable-Feature",
-        "/FeatureName:$featureName"
-    )
-    if ($result.ExitCode -ne 0) {
-        Write-Log "Hyper-V management tools were not enabled (dism exit $($result.ExitCode)): $($result.Output | Select-Object -Last 3)" -Tag "Warn"
-        return $false
-    }
-
-    Write-Log "Hyper-V management tools enabled - they finish installing on the VM's first boot" -Tag "Ok"
-    return $true
-}
-
 function Set-OfflineRdpAndFirewall {
     param(
         [string]$MountRoot,
@@ -3507,8 +3461,7 @@ function Set-OfflineImageCustomization {
         [bool]$SuppressFirstSignInAnimation = $false,
         [bool]$BlockSignInInputMethods = $false,
         [bool]$PreventDeviceEncryption = $false,
-        [bool]$SetVmPowerPlan = $false,
-        [bool]$EnableHyperVTools = $false
+        [bool]$SetVmPowerPlan = $false
     )
 
     Write-Log "Applying offline customization to '$VhdPath'" -Tag "Run"
@@ -3612,17 +3565,13 @@ function Set-OfflineImageCustomization {
             if ($SetVmPowerPlan) {
                 Set-OfflinePowerPolicy -MountRoot $mountRoot
             }
-            if ($EnableHyperVTools) {
-                Enable-OfflineHyperVTools -MountRoot $mountRoot | Out-Null
-            }
         }
         else {
             # Device encryption is a client feature; Server never turns BitLocker on by
             # itself, so the opt-out has nothing to opt out of here.
-            # Server has its own power defaults (High performance already, display off at
-            # ten minutes) and gets its Hyper-V tools from Install-WindowsFeature, so
-            # neither client tick has anything to do here.
-            Write-Log "Server image - Welcome Experience, sign-in animation, device encryption, power plan and Hyper-V tools not applicable" -Tag "Debug"
+            # Server has its own power defaults - High performance already, display off at
+            # ten minutes - so the client power tick has nothing to do here either.
+            Write-Log "Server image - Welcome Experience, sign-in animation, device encryption and power plan not applicable" -Tag "Debug"
         }
 
         if ($Target -ne "AzureLocal") {
@@ -4103,7 +4052,6 @@ function Invoke-ImageBuildPipeline {
         [bool]$BlockSignInInputMethods = $false,
         [bool]$PreventDeviceEncryption = $false,
         [bool]$SetVmPowerPlan = $false,
-        [bool]$EnableHyperVTools = $false,
         [string]$EditionUpgrade = ""
     )
 
@@ -4198,8 +4146,7 @@ function Invoke-ImageBuildPipeline {
             -SuppressFirstSignInAnimation $SuppressFirstSignInAnimation `
             -BlockSignInInputMethods $BlockSignInInputMethods `
             -PreventDeviceEncryption $PreventDeviceEncryption `
-            -SetVmPowerPlan $SetVmPowerPlan `
-            -EnableHyperVTools $EnableHyperVTools
+            -SetVmPowerPlan $SetVmPowerPlan
     }
     catch {
         Write-Log "Failed to apply offline customization to '$VhdPath': $($_.Exception.Message)" -Tag "Error"
@@ -4259,7 +4206,6 @@ if ($needsInteractive) {
         -CurrentBlockSignInInputMethods $BlockSignInInputMethods `
         -CurrentPreventDeviceEncryption $PreventDeviceEncryption `
         -CurrentSetVmPowerPlan $SetVmPowerPlan `
-        -CurrentEnableHyperVTools $EnableHyperVTools `
         -CurrentMultiSessionImageIndexes @($MultiSessionImageIndexes) `
         -CurrentAzureEditionImageIndexes @($AzureEditionImageIndexes)
 
@@ -4291,7 +4237,6 @@ if ($needsInteractive) {
     $BlockSignInInputMethods = $config.BlockSignInInputMethods
     $PreventDeviceEncryption = $config.PreventDeviceEncryption
     $SetVmPowerPlan = $config.SetVmPowerPlan
-    $EnableHyperVTools = $config.EnableHyperVTools
     $MultiSessionImageIndexes = @($config.MultiSessionImageIndexes)
     $AzureEditionImageIndexes = @($config.AzureEditionImageIndexes)
 }
@@ -4398,7 +4343,6 @@ Write-Log ("Suppress at logon - " + ($suppressParts -join " | ")) -Tag "Info"
 if ($runHasClient) {
     Write-Log "Automatic BitLocker device encryption: $(if ($PreventDeviceEncryption) { 'prevented in the image' } else { 'left to Windows' })" -Tag "Info"
     Write-Log "Power plan: $(if ($SetVmPowerPlan) { 'High performance, display and sleep never, hibernation off' } else { 'left at the Windows default' })" -Tag "Info"
-    Write-Log "Hyper-V management tools: $(if ($EnableHyperVTools) { 'enabled offline (tools only, no platform)' } else { 'not enabled' })" -Tag "Info"
 }
 if (@($MultiSessionImageIndexes).Count -gt 0) {
     Write-Log "Upgrading to Enterprise multi-session after generalize: index $(@($MultiSessionImageIndexes) -join ', ')" -Tag "Info"
@@ -4481,7 +4425,6 @@ foreach ($buildSpec in $buildSpecs) {
         -BlockSignInInputMethods $BlockSignInInputMethods `
         -PreventDeviceEncryption $PreventDeviceEncryption `
         -SetVmPowerPlan $SetVmPowerPlan `
-        -EnableHyperVTools $EnableHyperVTools `
         -EditionUpgrade $editionUpgrade
 
     if (-not $ok) {

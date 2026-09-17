@@ -127,7 +127,6 @@ The UI language stays whatever the ISO shipped.
 | Block per-user input methods on the sign-in screen | off | all |
 | Suppress Server Manager at logon | off | server |
 | Suppress Welcome Experience / first sign-in animation | off | client |
-| Hyper-V management tools (Manager + PowerShell, not the platform) | off | client |
 
 > <picture><source media="(prefers-color-scheme: dark)" srcset=".github/assets/icons/help-dark.png"><img src=".github/assets/icons/help-light.png" width="16" alt=""></picture> Windows 11 encrypts itself after OOBE on a VM with vTPM and Secure Boot. If you arm
 > BitLocker by policy after deployment, leave the prevent-tick on so the image doesn't
@@ -138,12 +137,6 @@ The UI language stays whatever the ISO shipped.
 > differencing disk cloned off the gold. High performance rather than Ultimate Performance —
 > Ultimate is hidden on client and only exists once `powercfg -duplicatescheme` mints it
 > under a fresh GUID, for idle tunables the hypervisor mostly owns anyway.
-
-> <picture><source media="(prefers-color-scheme: dark)" srcset=".github/assets/icons/help-dark.png"><img src=".github/assets/icons/help-light.png" width="16" alt=""></picture> The Hyper-V tick is the in-box optional feature `Microsoft-Hyper-V-Tools-All`, not
-> RSAT — there is no `Rsat.Hyper-V.Tools` capability, the payload ships inside the image, and
-> nothing is downloaded. It gives the gold Hyper-V Manager, `vmconnect` and the Hyper-V
-> PowerShell module for administering hosts. The Hyper-V platform stays off: running VMs
-> inside the VM is a separate decision that needs nested virtualization on the host.
 
 **Disk** — the VHDX size (64 GB by default) and whether it is Fixed (default) or Dynamic.
 
@@ -212,9 +205,6 @@ Everything the menu asks can be passed instead — useful once a build is routin
 
 # Windows default BitLocker behavior instead of the opt-out
 .\New-Vhdx.ps1 -IsoPath .\isos\win11.iso -ImageIndexes 5 -PreventDeviceEncryption $false
-
-# An admin workstation gold: Hyper-V Manager and the Hyper-V module baked in
-.\New-Vhdx.ps1 -IsoPath .\isos\win11.iso -ImageIndexes 5 -EnableHyperVTools $true
 ```
 
 </details>
