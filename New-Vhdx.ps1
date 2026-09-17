@@ -19,6 +19,10 @@
     (-SetVmPowerPlan, default ON): High performance, display and sleep set to never,
     hibernation off - a lab VM has no battery to save and no screen to blank, and the
     hiberfil.sys it never uses costs the same gigabytes on every differencing disk.
+    Client and Server images can also take a Microsoft Edge machine policy baseline
+    (-ConfigureEdge, default off): Google as the default and only search engine, no
+    first-run experience, no mini menu, a new tab page stripped of Microsoft content,
+    background images and default top sites, and diagnostic data held to required only.
 
     A Windows 11 Pro index can also be built as an Enterprise multi-session gold
     (-MultiSessionImageIndexes) - its own build next to any plain golds, so one run
@@ -160,6 +164,9 @@ param (
 
     [Parameter(HelpMessage = "On client editions, bake PreventDeviceEncryption so Windows does not turn BitLocker on by itself after OOBE. No effect on Server images. Default on: encryption is expected to be armed by policy after deployment, not by the image on its own.")]
     [bool]$PreventDeviceEncryption = $true,
+
+    [Parameter(HelpMessage = "Bake the Microsoft Edge machine policy baseline (Google as default search engine, no first-run experience, no mini menu, a cleared new tab page, required-only diagnostic data). Applies to client and server. Default off.")]
+    [bool]$ConfigureEdge = $false,
 
     [Parameter(HelpMessage = "On client editions, bake the High performance power scheme with display and sleep set to never and hibernation off. No effect on Server images. Default on: the gold runs as a VM, where blanking a console and sleeping a machine nobody is sitting at only gets in the way.")]
     [bool]$SetVmPowerPlan = $true,
@@ -672,6 +679,23 @@ function Test-IsServerDatacenterImage {
 
     $name = $ImageName.ToLowerInvariant()
     return (($name -match "server") -and ($name -match "datacenter"))
+}
+
+function Test-IsServerCoreImage {
+    # Server Core, i.e. a Server image that is not Desktop Experience. WIM names never say
+    # "Core" - the GUI ones say "Desktop Experience" and Core is what is left, which is the
+    # same test Get-VhdxFileName slugs with.
+    param([string]$ImageName)
+
+    if ([string]::IsNullOrWhiteSpace($ImageName)) {
+        return $false
+    }
+
+    $name = $ImageName.ToLowerInvariant()
+    if ($name -notmatch "server") {
+        return $false
+    }
+    return ($name -notmatch "desktop")
 }
 
 function Test-IsClientImage {
@@ -2285,6 +2309,7 @@ function Start-InteractiveConfiguration {
         [bool]$CurrentBlockSignInInputMethods = $false,
         [bool]$CurrentPreventDeviceEncryption = $true,
         [bool]$CurrentSetVmPowerPlan = $true,
+        [bool]$CurrentConfigureEdge = $false,
         [int[]]$CurrentMultiSessionImageIndexes = @(),
         [int[]]$CurrentAzureEditionImageIndexes = @()
     )
@@ -2447,6 +2472,8 @@ function Start-InteractiveConfiguration {
     $editionsSummary = $summaryParts -join "; "
     $buildHasServer = (@($selectedImageObjects | Where-Object { -not (Test-IsClientImage -ImageName $_.ImageName) })).Count -gt 0
     $buildHasClient = (@($selectedImageObjects | Where-Object { Test-IsClientImage -ImageName $_.ImageName })).Count -gt 0
+    # Anything that ships a browser: every client image, and Server with Desktop Experience.
+    $buildHasEdge = (@($selectedImageObjects | Where-Object { -not (Test-IsServerCoreImage -ImageName $_.ImageName) })).Count -gt 0
 
     # Status-line value for every later screen: plain indexes as-is, virtual edition
     # builds marked so "5, 5 ms, 2 az" reads as separate golds from their indexes.
@@ -2521,6 +2548,11 @@ function Start-InteractiveConfiguration {
     }
     # Applies to both client and server: pin sign-in keyboard to the baked layout.
     $featureItems += [PSCustomObject]@{ Id = "signin"; Label = "Block per-user input methods on sign-in screen (STIG)"; Selected = $CurrentBlockSignInInputMethods; Section = "Optional" }
+    # Edge ships on both sides of the client/server line, but not on Server Core - that
+    # install has no browser to manage, so a build made only of Core images is never asked.
+    if ($buildHasEdge) {
+        $featureItems += [PSCustomObject]@{ Id = "edge"; Label = "Microsoft Edge Config (Google search, no first run, clean new tab)"; Selected = $CurrentConfigureEdge; Section = "Optional" }
+    }
     if ($buildHasServer) {
         $featureItems += [PSCustomObject]@{ Id = "svrmgr"; Label = "Suppress Server Manager at logon"; Selected = $CurrentSuppressServerManagerAtLogon; Section = "Optional (Server)" }
     }
@@ -2539,6 +2571,7 @@ function Start-InteractiveConfiguration {
     $suppressWelcome = $featureChoice -contains "welcome"
     $suppressSignInAnimation = $featureChoice -contains "signinanim"
     $blockSignIn = $featureChoice -contains "signin"
+    $configureEdge = $featureChoice -contains "edge"
     $preventDeviceEncryption = $featureChoice -contains "autode"
     $setVmPowerPlan = $featureChoice -contains "power"
 
@@ -2581,6 +2614,9 @@ function Start-InteractiveConfiguration {
         Write-FastfetchInfoRow -Label "remote desktop (rdp)" -Value $(if ($enableRdp) { "Enabled" } else { "Disabled" }) -LabelWidth 24 -IndentWidth 2
         Write-FastfetchInfoRow -Label "icmp echo (ping)"     -Value $(if ($enablePing) { "Enabled" } else { "Disabled" }) -LabelWidth 24 -IndentWidth 2
         Write-FastfetchInfoRow -Label "block sign-in imes"   -Value $(if ($blockSignIn) { "Enabled" } else { "Disabled" }) -LabelWidth 24 -IndentWidth 2
+        if ($buildHasEdge) {
+            Write-FastfetchInfoRow -Label "edge config"          -Value $(if ($configureEdge) { "Baked (Google, no first run, clean new tab)" } else { "Not baked" }) -LabelWidth 24 -IndentWidth 2
+        }
         if ($buildHasServer) {
             Write-FastfetchInfoRow -Label "suppress server mgr" -Value $(if ($suppressServerManager) { "Enabled" } else { "Disabled" }) -LabelWidth 24 -IndentWidth 2
         }
@@ -2627,6 +2663,7 @@ function Start-InteractiveConfiguration {
         SuppressWelcomeExperience    = $suppressWelcome
         SuppressFirstSignInAnimation = $suppressSignInAnimation
         BlockSignInInputMethods      = $blockSignIn
+        ConfigureEdge                = $configureEdge
         PreventDeviceEncryption      = $preventDeviceEncryption
         SetVmPowerPlan               = $setVmPowerPlan
         MultiSessionImageIndexes     = @($multiSessionIndexes)
@@ -3006,6 +3043,73 @@ function Set-OfflineDeviceEncryptionPolicy {
     try {
         Write-Log "Baking PreventDeviceEncryption=1 - Windows will not turn BitLocker on by itself" -Tag "Run"
         & reg.exe add "$hiveRoot\ControlSet001\Control\BitLocker" /v PreventDeviceEncryption /t REG_DWORD /d 1 /f | Out-Null
+    }
+    finally {
+        Dismount-ImageHive -HiveRoot $hiveRoot
+    }
+}
+
+function Set-OfflineEdgePolicy {
+    <#
+      A Microsoft Edge baseline, written as machine policy into the offline SOFTWARE hive.
+
+      Every value below is an Edge policy under HKLM\SOFTWARE\Policies\Microsoft\Edge -
+      the same keys the Microsoft Edge ADMX writes - so Edge reads them as managed settings,
+      the pages show "managed by your organization", and a real domain GPO overrides them
+      later without a fight. Edge is not installed on Server Core and the key is inert
+      there, which is why the tick is offered for every image rather than gated on client.
+
+      Search: ManagedSearchEngines is the list, with Google marked is_default. The
+      DefaultSearchProvider* values ride along because NewTabPageSearchBox is documented to
+      take effect only when DefaultSearchProviderEnabled and DefaultSearchProviderSearchURL
+      are set; "redirect" then hands the new tab box to the address bar, which searches with
+      the default engine instead of Bing.
+    #>
+    param([string]$MountRoot)
+
+    # One source for the URLs - the ManagedSearchEngines JSON repeats them.
+    $googleSearchUrl  = "https://www.google.com/search?q={searchTerms}"
+    $googleSuggestUrl = "https://www.google.com/complete/search?output=chrome&q={searchTerms}"
+    $managedSearchEngines = '[{"suggest_url": "' + $googleSuggestUrl + '", "image_search_url": "", "name": "Google", "keyword": "google", "is_default": true, "search_url": "' + $googleSearchUrl + '"}]'
+
+    # Name / value / type, each with the Group Policy setting it corresponds to, so a row
+    # here can be matched against gpedit without going looking for it.
+    $edgePolicies = @(
+        @{ Name = "ManagedSearchEngines";             Value = $managedSearchEngines; Type = "String"; Policy = "Manage Search Engines - Google only, set as default" }
+        @{ Name = "DefaultSearchProviderEnabled";     Value = 1;                     Type = "DWord";  Policy = "Enable the default search provider" }
+        @{ Name = "DefaultSearchProviderName";        Value = "Google";              Type = "String"; Policy = "Default search provider name" }
+        @{ Name = "DefaultSearchProviderSearchURL";   Value = $googleSearchUrl;      Type = "String"; Policy = "Default search provider search URL" }
+        @{ Name = "DefaultSearchProviderSuggestURL";  Value = $googleSuggestUrl;     Type = "String"; Policy = "Default search provider URL for suggestions" }
+        @{ Name = "QuickSearchShowMiniMenu";          Value = 0;                     Type = "DWord";  Policy = "Enables Microsoft Edge mini menu - Disabled" }
+        @{ Name = "HideFirstRunExperience";           Value = 1;                     Type = "DWord";  Policy = "Hide the First-run experience and splash screen - Enabled" }
+        @{ Name = "NewTabPageSearchBox";              Value = "redirect";            Type = "String"; Policy = "Configure the new tab page search box experience - Address bar" }
+        @{ Name = "NewTabPageContentEnabled";         Value = 0;                     Type = "DWord";  Policy = "Allow Microsoft content on the new tab page - Disabled" }
+        @{ Name = "NewTabPageAllowedBackgroundTypes"; Value = 3;                     Type = "DWord";  Policy = "Background types allowed for the new tab page layout - Disable all background image types" }
+        @{ Name = "NewTabPageHideDefaultTopSites";    Value = 1;                     Type = "DWord";  Policy = "Hide the default top sites from the new tab page - Enabled" }
+        @{ Name = "DiagnosticData";                   Value = 1;                     Type = "DWord";  Policy = "Send required and optional diagnostic data about browser usage - Required data" }
+    )
+
+    $softwareHive = Join-Path -Path $MountRoot -ChildPath "Windows\System32\config\SOFTWARE"
+    $hiveRoot = "HKLM\OfflineImageEdge"
+
+    Write-Log "Loading offline SOFTWARE hive for the Microsoft Edge policy baseline" -Tag "Run"
+    & reg.exe load $hiveRoot $softwareHive | Out-Null
+    if ($LASTEXITCODE -ne 0) {
+        throw "Failed to load offline SOFTWARE hive for the Edge policy (exit $LASTEXITCODE)"
+    }
+
+    try {
+        $edgeKey = "Registry::$hiveRoot\Policies\Microsoft\Edge"
+        if (-not (Test-Path -Path $edgeKey)) {
+            New-Item -Path $edgeKey -Force | Out-Null
+        }
+
+        foreach ($policy in $edgePolicies) {
+            Write-Log "Edge policy: $($policy.Policy)" -Tag "Run"
+            Set-ItemProperty -Path $edgeKey -Name $policy.Name -Value $policy.Value -Type $policy.Type -Force
+        }
+
+        Write-Log "Baked $($edgePolicies.Count) Microsoft Edge policy value(s)" -Tag "Ok"
     }
     finally {
         Dismount-ImageHive -HiveRoot $hiveRoot
@@ -3490,6 +3594,7 @@ function Set-OfflineImageCustomization {
         [string]$AvmaKey,
         [bool]$RemovePantherUnattend,
         [bool]$IsClient = $false,
+        [bool]$IsServerCore = $false,
         [bool]$EnableRdp = $true,
         [bool]$EnablePing = $true,
         [bool]$SuppressServerManagerAtLogon = $false,
@@ -3497,7 +3602,8 @@ function Set-OfflineImageCustomization {
         [bool]$SuppressFirstSignInAnimation = $false,
         [bool]$BlockSignInInputMethods = $false,
         [bool]$PreventDeviceEncryption = $false,
-        [bool]$SetVmPowerPlan = $false
+        [bool]$SetVmPowerPlan = $false,
+        [bool]$ConfigureEdge = $false
     )
 
     Write-Log "Applying offline customization to '$VhdPath'" -Tag "Run"
@@ -3578,6 +3684,17 @@ function Set-OfflineImageCustomization {
 
         if ($BlockSignInInputMethods) {
             Set-OfflineSignInKeyboardPolicy -MountRoot $mountRoot
+        }
+        if ($ConfigureEdge) {
+            # Server Core has no Edge to manage. The policy key would be inert rather than
+            # harmful, but a gold that carries settings for a browser it cannot run is a
+            # gold that lies about itself.
+            if ($IsServerCore) {
+                Write-Log "Server Core image - no Microsoft Edge to configure, policy not baked" -Tag "Debug"
+            }
+            else {
+                Set-OfflineEdgePolicy -MountRoot $mountRoot
+            }
         }
         Set-OfflineRdpAndFirewall -MountRoot $mountRoot -EnableRdp $EnableRdp -EnablePing $EnablePing
 
@@ -4088,11 +4205,13 @@ function Invoke-ImageBuildPipeline {
         [bool]$BlockSignInInputMethods = $false,
         [bool]$PreventDeviceEncryption = $false,
         [bool]$SetVmPowerPlan = $false,
+        [bool]$ConfigureEdge = $false,
         [string]$EditionUpgrade = ""
     )
 
     $isDatacenter = Test-IsServerDatacenterImage -ImageName $ImageName
     $isClient = Test-IsClientImage -ImageName $ImageName
+    $isServerCore = Test-IsServerCoreImage -ImageName $ImageName
     $avmaKey = ""
     $productKey = ""
 
@@ -4175,14 +4294,15 @@ function Invoke-ImageBuildPipeline {
     try {
         Set-OfflineImageCustomization -VhdPath $VhdPath -Target $Target -Locale $Locale `
             -KeyboardLayout $KeyboardLayout -TimeZone $TimeZone -AvmaKey $avmaKey `
-            -RemovePantherUnattend:$removePanther -IsClient $isClient `
+            -RemovePantherUnattend:$removePanther -IsClient $isClient -IsServerCore $isServerCore `
             -EnableRdp $EnableRdp -EnablePing $EnablePing `
             -SuppressServerManagerAtLogon $SuppressServerManagerAtLogon `
             -SuppressWelcomeExperience $SuppressWelcomeExperience `
             -SuppressFirstSignInAnimation $SuppressFirstSignInAnimation `
             -BlockSignInInputMethods $BlockSignInInputMethods `
             -PreventDeviceEncryption $PreventDeviceEncryption `
-            -SetVmPowerPlan $SetVmPowerPlan
+            -SetVmPowerPlan $SetVmPowerPlan `
+            -ConfigureEdge $ConfigureEdge
     }
     catch {
         Write-Log "Failed to apply offline customization to '$VhdPath': $($_.Exception.Message)" -Tag "Error"
@@ -4242,6 +4362,7 @@ if ($needsInteractive) {
         -CurrentBlockSignInInputMethods $BlockSignInInputMethods `
         -CurrentPreventDeviceEncryption $PreventDeviceEncryption `
         -CurrentSetVmPowerPlan $SetVmPowerPlan `
+        -CurrentConfigureEdge $ConfigureEdge `
         -CurrentMultiSessionImageIndexes @($MultiSessionImageIndexes) `
         -CurrentAzureEditionImageIndexes @($AzureEditionImageIndexes)
 
@@ -4273,6 +4394,7 @@ if ($needsInteractive) {
     $BlockSignInInputMethods = $config.BlockSignInInputMethods
     $PreventDeviceEncryption = $config.PreventDeviceEncryption
     $SetVmPowerPlan = $config.SetVmPowerPlan
+    $ConfigureEdge = $config.ConfigureEdge
     $MultiSessionImageIndexes = @($config.MultiSessionImageIndexes)
     $AzureEditionImageIndexes = @($config.AzureEditionImageIndexes)
 }
@@ -4361,10 +4483,12 @@ Write-Log "RDP: $EnableRdp | Ping: $EnablePing" -Tag "Info"
 # encrypt itself.
 $runHasClient = $false
 $runHasServer = $false
+$runHasEdge = $false
 foreach ($index in $buildIndexes) {
     $match = $availableImages | Where-Object { $_.ImageIndex -eq $index } | Select-Object -First 1
     if ($null -eq $match) { continue }
     if (Test-IsClientImage -ImageName $match.ImageName) { $runHasClient = $true } else { $runHasServer = $true }
+    if (-not (Test-IsServerCoreImage -ImageName $match.ImageName)) { $runHasEdge = $true }
 }
 
 $suppressParts = @()
@@ -4375,6 +4499,9 @@ if ($runHasClient) {
 }
 $suppressParts += "sign-in IMEs: $BlockSignInInputMethods"
 Write-Log ("Suppress at logon - " + ($suppressParts -join " | ")) -Tag "Info"
+if ($runHasEdge) {
+    Write-Log "Microsoft Edge policy baseline: $(if ($ConfigureEdge) { 'baked (Google search, no first run, clean new tab, required-only diagnostics)' } else { 'not baked' })" -Tag "Info"
+}
 
 if ($runHasClient) {
     Write-Log "Automatic BitLocker device encryption: $(if ($PreventDeviceEncryption) { 'prevented in the image' } else { 'left to Windows' })" -Tag "Info"
@@ -4461,6 +4588,7 @@ foreach ($buildSpec in $buildSpecs) {
         -BlockSignInInputMethods $BlockSignInInputMethods `
         -PreventDeviceEncryption $PreventDeviceEncryption `
         -SetVmPowerPlan $SetVmPowerPlan `
+        -ConfigureEdge $ConfigureEdge `
         -EditionUpgrade $editionUpgrade
 
     if (-not $ok) {
