@@ -2291,10 +2291,11 @@ function Install-OfflineRsatCapabilities {
 # module, and nothing about what else came along. Both get read back afterwards.
 #
 #   Expect - must end Enabled, or the VM did not get what the tick promised.
-#   Guard  - must NOT end Enabled. -All enables a feature's PARENTS, and the Hyper-V
-#            platform is a sibling of the tools rather than an ancestor, so it should stay
-#            off; "should" is not the same as verified, and the docs only say a parent is
-#            "enabled with default values" without saying what a container's defaults are.
+#   Guard  - must NOT end Enabled. -All enables a feature's parents "with default values",
+#            and the Microsoft-Hyper-V-All container's defaults turn out to include the
+#            platform: every build enables the hypervisor on the way to the consoles, and
+#            every build switches it back off. Measured, not assumed - the first run with
+#            -All is what showed it.
 $script:ClientFeatureChecks = @{
     "Microsoft-Hyper-V-Tools-All" = @{
         Expect = @("Microsoft-Hyper-V-Management-Clients", "Microsoft-Hyper-V-Management-PowerShell")
@@ -2362,6 +2363,37 @@ function Enable-OfflineClientFeatures {
         $checks = $script:ClientFeatureChecks[$featureName]
         if ($null -eq $checks) { continue }
 
+        # Guard first, leaves after. The tools and the platform are separate features, so
+        # switching one off should not touch the other - but a leaf checked before the
+        # guard runs only proves what was true a moment earlier, and the state that ships
+        # is the one after every change has been made.
+        foreach ($guarded in @($checks.Guard)) {
+            if ((Get-OfflineFeatureState -OsRoot $OsRoot -FeatureName $guarded) -ne "Enabled") {
+                Write-Log "'$guarded' stayed off - as intended" -Tag "Debug"
+                continue
+            }
+
+            # Expected on every build, not a surprise: -All enables the parents, and the
+            # Microsoft-Hyper-V-All container's default values include the platform. The
+            # tools were the request; the hypervisor was not.
+            Write-Log "'$featureName' brings '$guarded' with it - switching it back off" -Tag "Run"
+            try {
+                Disable-WindowsOptionalFeature -Path $OsRoot -FeatureName $guarded -NoRestart -ErrorAction Stop | Out-Null
+            }
+            catch {
+                Write-Log "Could not disable '$guarded': $($_.Exception.Message) - the VM carries it" -Tag "Warn"
+                continue
+            }
+
+            $guardState = Get-OfflineFeatureState -OsRoot $OsRoot -FeatureName $guarded
+            if ("$guardState" -eq "Enabled") {
+                Write-Log "'$guarded' is still Enabled after being disabled - the VM carries it" -Tag "Warn"
+            }
+            else {
+                Write-Log "'$guarded' is off ('$guardState')" -Tag "Ok"
+            }
+        }
+
         foreach ($expected in @($checks.Expect)) {
             $state = Get-OfflineFeatureState -OsRoot $OsRoot -FeatureName $expected
             if ("$state" -eq "Enabled") {
@@ -2369,23 +2401,6 @@ function Enable-OfflineClientFeatures {
             }
             else {
                 Write-Log "'$featureName' reported success but '$expected' is '$state' - the VM may not get that tool" -Tag "Warn"
-            }
-        }
-
-        foreach ($guarded in @($checks.Guard)) {
-            $state = Get-OfflineFeatureState -OsRoot $OsRoot -FeatureName $guarded
-            if ("$state" -ne "Enabled") {
-                Write-Log "'$guarded' stayed '$state' - as intended" -Tag "Debug"
-                continue
-            }
-
-            Write-Log "'$featureName' also enabled '$guarded' - turning it back off" -Tag "Warn"
-            try {
-                Disable-WindowsOptionalFeature -Path $OsRoot -FeatureName $guarded -NoRestart -ErrorAction Stop | Out-Null
-                Write-Log "'$guarded' disabled again (now '$(Get-OfflineFeatureState -OsRoot $OsRoot -FeatureName $guarded)')" -Tag "Ok"
-            }
-            catch {
-                Write-Log "Could not disable '$guarded': $($_.Exception.Message) - the VM carries it" -Tag "Warn"
             }
         }
     }
