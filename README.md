@@ -125,6 +125,7 @@ The UI language stays whatever the ISO shipped.
 | Prevent automatic BitLocker device encryption | on | client |
 | VM power plan — High performance, display and sleep never, no hibernation | on | client |
 | Block per-user input methods on the sign-in screen | off | all |
+| Microsoft Edge Config | off | client + Server Desktop Experience |
 | Suppress Server Manager at logon | off | server |
 | Suppress Welcome Experience / first sign-in animation | off | client |
 
@@ -141,6 +142,27 @@ The UI language stays whatever the ISO shipped.
 > Templates GPO sets — the scheme's own registry tree is ACL'd against Administrators even
 > offline, and a later domain GPO overrides the baked policy on its own. The deployed VM's
 > power page says the settings are managed by your organization, because they are.
+
+> <picture><source media="(prefers-color-scheme: dark)" srcset=".github/assets/icons/help-dark.png"><img src=".github/assets/icons/help-light.png" width="16" alt=""></picture> **Microsoft Edge Config** writes a machine policy baseline under
+> `SOFTWARE\Policies\Microsoft\Edge` — the same values the Edge ADMX sets, so the browser
+> treats them as managed and a domain GPO still overrides them later:
+>
+> | Policy | Value |
+> |--------|-------|
+> | `ManagedSearchEngines` | Google only, `is_default` |
+> | `DefaultSearchProviderEnabled` / `Name` / `SearchURL` / `SuggestURL` | Google — required for the new tab box to honour it |
+> | `NewTabPageSearchBox` | `redirect` (the box searches through the address bar) |
+> | `QuickSearchShowMiniMenu` | `0` — no mini menu on text selection |
+> | `HideFirstRunExperience` | `1` |
+> | `NewTabPageContentEnabled` | `0` — no Microsoft content |
+> | `NewTabPageAllowedBackgroundTypes` | `3` — no background images |
+> | `NewTabPageHideDefaultTopSites` | `1` |
+> | `DiagnosticData` | `1` — required data only |
+>
+> Offered wherever a browser exists — every client image and Server with Desktop
+> Experience. A build made only of Server Core images is never asked, and in a mixed run
+> the Core gold is skipped: a gold carrying settings for a browser it cannot run is a gold
+> that lies about itself.
 
 **Disk** — the VHDX size (64 GB by default) and whether it is Fixed (default) or Dynamic.
 
@@ -209,6 +231,9 @@ Everything the menu asks can be passed instead — useful once a build is routin
 
 # Windows default BitLocker behavior instead of the opt-out
 .\New-Vhdx.ps1 -IsoPath .\isos\win11.iso -ImageIndexes 5 -PreventDeviceEncryption $false
+
+# Edge policy baseline on a Server 2025 gold
+.\New-Vhdx.ps1 -IsoPath .\isos\server2025.iso -ImageIndexes 4 -ConfigureEdge $true
 ```
 
 </details>
