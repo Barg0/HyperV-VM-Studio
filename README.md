@@ -123,13 +123,27 @@ The UI language stays whatever the ISO shipped.
 | Remote Desktop + firewall rules | on | all |
 | ICMP echo (ping) | on | all |
 | Prevent automatic BitLocker device encryption | on | client |
+| VM power plan — High performance, display and sleep never, no hibernation | on | client |
 | Block per-user input methods on the sign-in screen | off | all |
 | Suppress Server Manager at logon | off | server |
 | Suppress Welcome Experience / first sign-in animation | off | client |
+| Hyper-V management tools (Manager + PowerShell, not the platform) | off | client |
 
 > <picture><source media="(prefers-color-scheme: dark)" srcset=".github/assets/icons/help-dark.png"><img src=".github/assets/icons/help-light.png" width="16" alt=""></picture> Windows 11 encrypts itself after OOBE on a VM with vTPM and Secure Boot. If you arm
 > BitLocker by policy after deployment, leave the prevent-tick on so the image doesn't
 > pre-empt it. Untick it if you want the Windows default.
+
+> <picture><source media="(prefers-color-scheme: dark)" srcset=".github/assets/icons/help-dark.png"><img src=".github/assets/icons/help-light.png" width="16" alt=""></picture> The power plan is the settings a VM would otherwise inherit from a laptop: console
+> blanked after ten minutes, asleep after thirty, and a `hiberfil.sys` charged to every
+> differencing disk cloned off the gold. High performance rather than Ultimate Performance —
+> Ultimate is hidden on client and only exists once `powercfg -duplicatescheme` mints it
+> under a fresh GUID, for idle tunables the hypervisor mostly owns anyway.
+
+> <picture><source media="(prefers-color-scheme: dark)" srcset=".github/assets/icons/help-dark.png"><img src=".github/assets/icons/help-light.png" width="16" alt=""></picture> The Hyper-V tick is the in-box optional feature `Microsoft-Hyper-V-Tools-All`, not
+> RSAT — there is no `Rsat.Hyper-V.Tools` capability, the payload ships inside the image, and
+> nothing is downloaded. It gives the gold Hyper-V Manager, `vmconnect` and the Hyper-V
+> PowerShell module for administering hosts. The Hyper-V platform stays off: running VMs
+> inside the VM is a separate decision that needs nested virtualization on the host.
 
 **Disk** — the VHDX size (64 GB by default) and whether it is Fixed (default) or Dynamic.
 
@@ -198,6 +212,9 @@ Everything the menu asks can be passed instead — useful once a build is routin
 
 # Windows default BitLocker behavior instead of the opt-out
 .\New-Vhdx.ps1 -IsoPath .\isos\win11.iso -ImageIndexes 5 -PreventDeviceEncryption $false
+
+# An admin workstation gold: Hyper-V Manager and the Hyper-V module baked in
+.\New-Vhdx.ps1 -IsoPath .\isos\win11.iso -ImageIndexes 5 -EnableHyperVTools $true
 ```
 
 </details>
@@ -382,6 +399,7 @@ summary line, so twelve machines still fit on a screen.
 
   <img src=".github/assets/blades/servers-disks.webp" width="640" alt="Adding a data disk: size, type, filesystem, volume label">
 - <picture><source media="(prefers-color-scheme: dark)" srcset=".github/assets/icons/extensions-dark.svg"><img src=".github/assets/icons/extensions-light.svg" width="16" alt=""></picture> **Roles &amp; Features** *(Server)* — tick a role, get what the Add Roles wizard would install: role services nested, management tools alongside, sixteen roles from AD DS to WSUS. Windows features (Failover Clustering, MPIO, .NET 3.5…) sit beside them.
+- <picture><source media="(prefers-color-scheme: dark)" srcset=".github/assets/icons/fod-dark.svg"><img src=".github/assets/icons/fod-light.svg" width="16" alt=""></picture> **RSAT tools** *(client)* — the management consoles a workstation administers the lab from. **Hyper-V Management Tools** heads the list (Hyper-V Manager, `vmconnect`, the Hyper-V module — the platform stays off); it is an in-box optional feature rather than a Features on Demand capability, so it installs offline out of the image with no ISO. Everything under it is RSAT and wants the ISO described further down. *PAW essentials* ticks the privileged-workstation set, Hyper-V included.
 - <picture><source media="(prefers-color-scheme: dark)" srcset=".github/assets/icons/client-apps-dark.svg"><img src=".github/assets/icons/client-apps-light.svg" width="16" alt=""></picture> **Built-in apps** *(client)* — strips the provisioned Store apps offline, before first boot. Every app is individually tickable — all 43 by default, an "All apps" master row for the whole set — and a protected list (Store, Terminal, Notepad, Photos…) is never offered. All ticked exports the compact `removeBuiltInApps: true`; a custom pick exports `removeApps` with just those package ids.
 - <picture><source media="(prefers-color-scheme: dark)" srcset=".github/assets/icons/secure-boot-dark.svg"><img src=".github/assets/icons/secure-boot-light.svg" width="16" alt=""></picture> **Boot / disk** — toggles Secure Boot and vTPM, and chooses a differencing disk versus a full copy of the gold.
 
@@ -578,6 +596,10 @@ FOD per release, one for all Windows 11 RSAT — with three answers:
   VHD, before the VM ever boots.
 - **Install in guest** — each VM pulls the payload from Windows Update at first boot.
 - **Skip** — the VMs build without them.
+
+Hyper-V Manager is not one of them, despite sitting in the same list: the client Hyper-V tools
+are an in-box optional feature, not an RSAT capability, so that row installs offline out of the
+image with no ISO involved.
 
 Give it the ISO. The online path adds minutes to every first boot and needs internet — or a
 WSUS that allows optional content, without which every download fails. RSAT is the worst
