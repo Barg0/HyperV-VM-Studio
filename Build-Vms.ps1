@@ -785,9 +785,27 @@ function Show-GoldLanguageForm {
         return $map
     }
 
+    # Header once, list on every keypress - see the repaint helpers.
+    $anchor = $null
+    $windowTop = $null
+
     while ($true) {
-        Show-MenuHeader -Title "Choose the gold image language" -StatusLines $StatusLines `
-            -Subtitle "More than one language is on disk for these images"
+        $repainted = $false
+        if ($null -ne $anchor -and -not (Test-MenuWindowScrolled -TopBefore $windowTop)) {
+            if (Set-MenuCursorAnchor -Anchor $anchor) {
+                $repainted = (Clear-MenuBelowCursor)
+                if (-not $repainted) { $anchor = $null }
+            }
+            else {
+                $anchor = $null
+            }
+        }
+
+        if (-not $repainted) {
+            Show-MenuHeader -Title "Choose the gold image language" -StatusLines $StatusLines `
+                -Subtitle "More than one language is on disk for these images"
+            $anchor = Get-MenuCursorAnchor
+        }
 
         $cursor = 0
 
@@ -879,6 +897,12 @@ function Show-GoldLanguageForm {
         Write-Studio -Text "  Up/Down move   Left/Right change language   Enter continue   Esc/Q cancel" -Key "muted"
         Write-Host ""
 
+        # Read when the frame is COMPLETE, never half way through it. A frame taller
+        # than the window scrolls as its last lines are written, so a top measured
+        # before the list was drawn always disagrees with the one measured after - and
+        # the guard then declared a scroll on every keypress and redrew the whole
+        # screen, which is the flicker coming back on exactly the tall blades.
+        $windowTop = Get-MenuWindowTop
         $key = $Host.UI.RawUI.ReadKey("NoEcho,IncludeKeyDown")
         $virtualKey = [int]$key.VirtualKeyCode
         $charKey = [string]$key.Character
@@ -5861,6 +5885,74 @@ function Show-MenuHeader {
     Write-Host ""
 }
 
+# ---------------------------[ Flicker-Free Repaint ]---------------------------
+# Every interactive blade used to redraw itself from the top on each keypress:
+# Clear-Host, the logo, the header, then the list. On a short list that reads as a
+# blink; on a long one it is a page of writing per arrow key and the screen visibly
+# flashes.
+#
+# The header does not change while a list is being walked, so it is drawn ONCE and the
+# cursor parked underneath it. Each keypress rewinds to that spot, wipes what is below
+# and writes the list again - the top of the screen is never touched, so there is
+# nothing to flash.
+#
+# Where the host cannot report or set a cursor position - ISE, a redirected console, a
+# terminal with no VT - every one of these returns false and the caller falls back to
+# the full redraw it always did.
+
+function Get-MenuCursorAnchor {
+    if (-not (Test-MenuHostSupported)) { return $null }
+    if (-not (Test-MenuAnsiSupported)) { return $null }
+    try { return $Host.UI.RawUI.CursorPosition }
+    catch { return $null }
+}
+
+function Set-MenuCursorAnchor {
+    param($Anchor)
+
+    if ($null -eq $Anchor) { return $false }
+    if (-not (Test-MenuHostSupported)) { return $false }
+    try {
+        $Host.UI.RawUI.CursorPosition = $Anchor
+        return $true
+    }
+    catch {
+        # The buffer scrolled and the row the anchor names is gone. Saying so is what
+        # makes the caller draw the whole screen again instead of writing the list
+        # somewhere arbitrary.
+        return $false
+    }
+}
+
+function Clear-MenuBelowCursor {
+    # ESC[0J - erase from the cursor to the end of the screen. Clear-Host would take
+    # the header and the logo with it, and redrawing those is the flicker.
+    if (-not (Test-MenuAnsiSupported)) { return $false }
+    try {
+        Write-Host ("{0}[0J" -f [char]27) -NoNewline
+        return $true
+    }
+    catch {
+        return $false
+    }
+}
+
+function Test-MenuWindowScrolled {
+    # A frame taller than the window scrolls as its last lines are written, so this is
+    # only ever asked once a frame is COMPLETE - see where the caller reads it.
+    param($TopBefore)
+
+    if ($null -eq $TopBefore) { return $false }
+    try { return ($Host.UI.RawUI.WindowPosition.Y -ne $TopBefore) }
+    catch { return $true }
+}
+
+function Get-MenuWindowTop {
+    if (-not (Test-MenuHostSupported)) { return $null }
+    try { return [int]$Host.UI.RawUI.WindowPosition.Y }
+    catch { return $null }
+}
+
 function Show-Menu {
     param(
         [string]$Title,
@@ -5881,11 +5973,30 @@ function Show-Menu {
 
     $useRawUi = Test-MenuHostSupported
 
-    while ($true) {
-        Show-MenuHeader -Title $Title -StatusLines $StatusLines -Subtitle $Subtitle
+        # Header and anything above the list stay put while it is walked - they are
+        # drawn once and the keypress repaints only what is below them.
+        $anchor = $null
+        $windowTop = $null
 
-        if ($PreItems) {
-            & $PreItems
+    while ($true) {
+        $repainted = $false
+        if ($null -ne $anchor -and -not (Test-MenuWindowScrolled -TopBefore $windowTop)) {
+            if (Set-MenuCursorAnchor -Anchor $anchor) {
+                $repainted = (Clear-MenuBelowCursor)
+                if (-not $repainted) { $anchor = $null }
+            }
+            else {
+                $anchor = $null
+            }
+        }
+        if (-not $repainted) {
+            Show-MenuHeader -Title $Title -StatusLines $StatusLines -Subtitle $Subtitle
+
+            if ($PreItems) {
+                & $PreItems
+            }
+
+            $anchor = Get-MenuCursorAnchor
         }
 
         for ($i = 0; $i -lt $Items.Count; $i++) {
@@ -5913,6 +6024,12 @@ function Show-Menu {
         }
         Write-Host ""
 
+        # Read when the frame is COMPLETE, never half way through it. A frame taller
+        # than the window scrolls as its last lines are written, so a top measured
+        # before the list was drawn always disagrees with the one measured after - and
+        # the guard then declared a scroll on every keypress and redrew the whole
+        # screen, which is the flicker coming back on exactly the tall blades.
+        $windowTop = Get-MenuWindowTop
         if ($useRawUi) {
             $key = $Host.UI.RawUI.ReadKey("NoEcho,IncludeKeyDown")
             $virtualKey = [int]$key.VirtualKeyCode
@@ -5966,8 +6083,27 @@ function Show-MultiSelectMenu {
 
     $useRawUi = Test-MenuHostSupported
 
+        # Header and anything above the list stay put while it is walked - they are
+        # drawn once and the keypress repaints only what is below them.
+        $anchor = $null
+        $windowTop = $null
+
     while ($true) {
-        Show-MenuHeader -Title $Title -StatusLines $StatusLines -Subtitle "Space toggles selection"
+        $repainted = $false
+        if ($null -ne $anchor -and -not (Test-MenuWindowScrolled -TopBefore $windowTop)) {
+            if (Set-MenuCursorAnchor -Anchor $anchor) {
+                $repainted = (Clear-MenuBelowCursor)
+                if (-not $repainted) { $anchor = $null }
+            }
+            else {
+                $anchor = $null
+            }
+        }
+        if (-not $repainted) {
+            Show-MenuHeader -Title $Title -StatusLines $StatusLines -Subtitle "Space toggles selection"
+
+            $anchor = Get-MenuCursorAnchor
+        }
 
         for ($i = 0; $i -lt $Items.Count; $i++) {
             $item  = $Items[$i]
@@ -5996,6 +6132,12 @@ function Show-MultiSelectMenu {
         }
         Write-Host ""
 
+        # Read when the frame is COMPLETE, never half way through it. A frame taller
+        # than the window scrolls as its last lines are written, so a top measured
+        # before the list was drawn always disagrees with the one measured after - and
+        # the guard then declared a scroll on every keypress and redrew the whole
+        # screen, which is the flicker coming back on exactly the tall blades.
+        $windowTop = Get-MenuWindowTop
         if ($useRawUi) {
             $key = $Host.UI.RawUI.ReadKey("NoEcho,IncludeKeyDown")
             $virtualKey = [int]$key.VirtualKeyCode
@@ -6162,6 +6304,14 @@ function Show-IsoFilePicker {
     $index = 0
     $useRawUi = Test-MenuHostSupported
 
+    # Unlike the menus, this header is not constant: it carries the folder being
+    # browsed. Walking the rows inside one folder repaints the list alone; stepping
+    # into a folder changes the header, so the anchor is dropped and the whole screen
+    # is drawn again - which is once per folder rather than once per arrow key.
+    $anchor = $null
+    $windowTop = $null
+    $anchoredPath = $null
+
     while ($true) {
         $entries = @(Get-FilePickerEntries -CurrentPath $currentPath)
         if ($entries.Count -eq 0) {
@@ -6174,7 +6324,22 @@ function Show-IsoFilePicker {
         $displayPath = $currentPath
         if ($displayPath -eq ":DRIVES") { $displayPath = "This PC (drives)" }
 
-        Show-MenuHeader -Title $Title -Subtitle $Subtitle -StatusLines ([ordered]@{ path = $displayPath })
+        $repainted = $false
+        if ($null -ne $anchor -and $anchoredPath -eq $displayPath -and -not (Test-MenuWindowScrolled -TopBefore $windowTop)) {
+            if (Set-MenuCursorAnchor -Anchor $anchor) {
+                $repainted = (Clear-MenuBelowCursor)
+                if (-not $repainted) { $anchor = $null }
+            }
+            else {
+                $anchor = $null
+            }
+        }
+
+        if (-not $repainted) {
+            Show-MenuHeader -Title $Title -Subtitle $Subtitle -StatusLines ([ordered]@{ path = $displayPath })
+            $anchor = Get-MenuCursorAnchor
+            $anchoredPath = $displayPath
+        }
 
         $maxVisible = 16
         $windowStart = 0
@@ -6212,6 +6377,12 @@ function Show-IsoFilePicker {
         }
 
         $chosen = $null
+        # Read when the frame is COMPLETE, never half way through it. A frame taller
+        # than the window scrolls as its last lines are written, so a top measured
+        # before the list was drawn always disagrees with the one measured after - and
+        # the guard then declared a scroll on every keypress and redrew the whole
+        # screen, which is the flicker coming back on exactly the tall blades.
+        $windowTop = Get-MenuWindowTop
         if ($useRawUi) {
             $key = $Host.UI.RawUI.ReadKey("NoEcho,IncludeKeyDown")
             switch ($key.VirtualKeyCode) {
