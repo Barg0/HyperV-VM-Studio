@@ -5506,8 +5506,22 @@ function Write-FastfetchInfoRow {
         [string]$Label,
         [string]$Value,
         [int]$LabelWidth = 8,
-        [int]$IndentWidth = 0
+        [int]$IndentWidth = 0,
+        # Columns already consumed before this call - the logo and the gap after it,
+        # which Show-MenuHeader writes itself. Without it this function believes the
+        # row starts at column zero.
+        [int]$ReservedWidth = 0
     )
+
+    # A value that does not fit WRAPS, and the wrapped part lands in the logo's
+    # columns on the next line - straight through the artwork. Truncating is the only
+    # honest option: the header is a summary, and a summary that redraws the screen
+    # badly is worse than one that says the value ends in three dots.
+    $available = (Get-ConsoleWidth) - 1 - $ReservedWidth - $IndentWidth - $LabelWidth - 2
+    if ($available -lt 8) { $available = 8 }
+    if ($Value.Length -gt $available) {
+        $Value = $Value.Substring(0, $available - 3) + "..."
+    }
 
     if ($IndentWidth -gt 0) {
         Write-Host (" " * $IndentWidth) -NoNewline
@@ -5626,7 +5640,7 @@ function Show-MenuHeader {
             }
             default {
                 Write-FastfetchInfoRow -Label $row.Label -Value $row.Value `
-                    -LabelWidth $row.LabelWidth -IndentWidth $row.Indent
+                    -LabelWidth $row.LabelWidth -IndentWidth $row.Indent -ReservedWidth ($logoWidth + 3)
             }
         }
     }
