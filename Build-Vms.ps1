@@ -3276,6 +3276,71 @@ function Get-CloudInitNetworkConfig {
     return ($lines -join "`n") + "`n"
 }
 
+function Get-IsoStreamWriterType {
+    <#
+        IMAPI2FS hands back its finished image as a COM IStream, and PowerShell cannot
+        get at it: casting the __ComObject to
+        System.Runtime.InteropServices.ComTypes.IStream throws
+
+            Cannot convert the "System.__ComObject" value of type "System.__ComObject"
+            to type "System.Runtime.InteropServices.ComTypes.IStream"
+
+        because the PowerShell cast operator does not QueryInterface a runtime callable
+        wrapper for an interface it was not already typed as. C#'s `as` does, which is
+        why every published IMAPI script goes through a compiled helper. This is that
+        helper, and it is the whole reason it exists.
+
+        Added once per session and cached: a resume run reaches this a second time, and
+        Add-Type throws on a type that already exists rather than returning it.
+    #>
+    $existing = "VhdxBuild.IsoStreamWriter" -as [type]
+    if ($existing) { return $existing }
+
+    Add-Type -TypeDefinition @"
+using System;
+using System.IO;
+using System.Runtime.InteropServices;
+using System.Runtime.InteropServices.ComTypes;
+
+namespace VhdxBuild {
+    public static class IsoStreamWriter {
+        public static void Write(object comStream, string path, int blockSize) {
+            IStream stream = comStream as IStream;
+            if (stream == null) {
+                throw new InvalidOperationException("The IMAPI2FS result image did not expose IStream.");
+            }
+            if (blockSize <= 0) { blockSize = 2048; }
+
+            // IStream.Read reports how much it read through unmanaged memory rather
+            // than a return value, so the count needs somewhere to live.
+            IntPtr readCount = Marshal.AllocHGlobal(4);
+            try {
+                using (FileStream file = File.Create(path)) {
+                    byte[] buffer = new byte[blockSize];
+                    while (true) {
+                        stream.Read(buffer, blockSize, readCount);
+                        int got = Marshal.ReadInt32(readCount);
+                        if (got <= 0) { break; }
+                        file.Write(buffer, 0, got);
+                    }
+                    file.Flush();
+                }
+            }
+            finally {
+                Marshal.FreeHGlobal(readCount);
+                // No ReleaseComObject: `as` hands back the SAME runtime callable wrapper
+                // the caller still holds, and releasing it here would leave them with a
+                // separated RCW - a confusing failure a garbage collection would have
+                // avoided by itself. The stream is in memory and small.
+            }
+        }
+    }
+}
+"@ -ErrorAction Stop
+
+    return ("VhdxBuild.IsoStreamWriter" -as [type])
+}
+
 function New-CloudInitSeedIso {
     <#
         Writes the CIDATA ISO with IMAPI2FS.
@@ -3313,7 +3378,6 @@ function New-CloudInitSeedIso {
         $image.Root.AddTree($stagingDirectory, $false)
 
         $result = $image.CreateResultImage()
-        $stream = $result.ImageStream
 
         $directory = Split-Path -Path $IsoPath -Parent
         if ($directory -and -not (Test-Path -LiteralPath $directory)) {
@@ -3321,31 +3385,10 @@ function New-CloudInitSeedIso {
         }
         if (Test-Path -LiteralPath $IsoPath) { Remove-Item -LiteralPath $IsoPath -Force }
 
-        # CreateResultImage hands back a COM IStream, which is not a .NET Stream and has
-        # no CopyTo. Cast it to the interop interface and pump it block by block; the
-        # byte count comes back through an unmanaged int, which is what the IntPtr is
-        # for. No ADODB, no temp copy, nothing beyond what IMAPI2FS already loaded.
-        $comStream = [System.Runtime.InteropServices.ComTypes.IStream]$stream
-        $blockSize = [int]$result.BlockSize
-        if ($blockSize -le 0) { $blockSize = 2048 }
-
-        $buffer = New-Object byte[] $blockSize
-        $readPtr = [System.Runtime.InteropServices.Marshal]::AllocHGlobal(4)
-        $fileStream = [System.IO.File]::Create($IsoPath)
-        try {
-            while ($true) {
-                $comStream.Read($buffer, $blockSize, $readPtr)
-                $read = [System.Runtime.InteropServices.Marshal]::ReadInt32($readPtr)
-                if ($read -le 0) { break }
-                $fileStream.Write($buffer, 0, $read)
-            }
-            $fileStream.Flush()
-        }
-        finally {
-            $fileStream.Dispose()
-            [System.Runtime.InteropServices.Marshal]::FreeHGlobal($readPtr)
-            [void][System.Runtime.InteropServices.Marshal]::ReleaseComObject($comStream)
-        }
+        # The IStream -> file copy lives in a compiled helper because PowerShell cannot
+        # cast the COM object to IStream at all - see Get-IsoStreamWriterType.
+        $writer = Get-IsoStreamWriterType
+        $writer::Write($result.ImageStream, $IsoPath, [int]$result.BlockSize)
 
         Write-Log "Wrote cloud-init seed '$IsoPath'" -Tag "Run"
         return $IsoPath
