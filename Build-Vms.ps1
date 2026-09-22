@@ -2499,7 +2499,7 @@ function Install-OfflineRsatCapabilities {
     foreach ($capabilityName in $CapabilityNames) {
         try {
             $result = Add-WindowsCapability -Path $OsRoot -Name $capabilityName -Source $source -LimitAccess -ErrorAction Stop
-            Write-Log "RSAT '$capabilityName' OK (restart=$($result.RestartNeeded))" -Tag "Ok"
+            Write-Log "RSAT '$capabilityName' (restart=$($result.RestartNeeded))" -Tag "Ok"
         }
         catch {
             Write-Log "Offline RSAT '$capabilityName' failed: $($_.Exception.Message) - deferring to guest" -Tag "Warn"
@@ -2704,7 +2704,7 @@ function Install-OfflineServerCoreAppCompat {
     Write-Log "App Compatibility FOD offline from '$source'" -Tag "Run"
     try {
         $result = Add-WindowsCapability -Path $OsRoot -Name $capability -Source $source -LimitAccess -ErrorAction Stop
-        Write-Log "App Compatibility FOD OK (restart=$($result.RestartNeeded))" -Tag "Ok"
+        Write-Log "App Compatibility FOD (restart=$($result.RestartNeeded))" -Tag "Ok"
         return @()
     }
     catch {
@@ -4608,7 +4608,7 @@ function Install-OfflineServerFeaturesOnVhd {
                 }
                 $result = Install-WindowsFeature @params
                 if ($result.Success) {
-                    Write-Log "Offline feature '$featureName' OK" -Tag "Ok"
+                    Write-Log "Offline feature '$featureName' enabled" -Tag "Ok"
                     $installed = $true
                 }
                 else {
@@ -4716,7 +4716,7 @@ function Connect-HostContextAzureArc {
         try {
             Connect-AzConnectedMachine -ResourceGroupName $arc.resourceGroup -Name $arcResourceName `
                 -Location $arc.location -SubscriptionId $arc.subscriptionId -PSSession $session -ErrorAction Stop
-            Write-Log "Host Arc connect succeeded for '$arcResourceName'" -Tag "Ok"
+            Write-Log "Host Arc connected '$arcResourceName'" -Tag "Ok"
         }
         finally {
             Remove-PSSession -Session $session -ErrorAction SilentlyContinue
@@ -5698,7 +5698,7 @@ function New-ProvisionedVm {
         Write-Log "VM '$hyperVName' created (not started)" -Tag "Info"
     }
 
-    Write-Log "Provisioned '$hyperVName' successfully" -Tag "Ok"
+    Write-Log "Provisioned '$hyperVName'" -Tag "Ok"
 }
 
 # ---------------------------[ Console Menu ]---------------------------
@@ -6471,10 +6471,12 @@ function Show-IsoFilePicker {
 
         for ($i = $windowStart; $i -le $windowEnd; $i++) {
             $entry = $entries[$i]
-            $color = "Gray"
-            if ($entry.Kind -eq "iso") { $color = "Cyan" }
-            elseif ($entry.Kind -eq "dir" -or $entry.Kind -eq "drive") { $color = "Yellow" }
-            elseif ($entry.Kind -eq "nav") { $color = "DarkGray" }
+            # Palette keys, not ConsoleColor names - see the note in New-Vhdx.ps1's
+            # copy of this picker. Cyan, Yellow and DarkGray are not in the table, so
+            # every row fell back to `fg`.
+            $color = "fg"
+            if ($entry.Kind -eq "dir" -or $entry.Kind -eq "drive") { $color = "warn" }
+            elseif ($entry.Kind -eq "nav") { $color = "accent" }
 
             if ($i -eq $index) {
                 Write-Studio -Text "  > " -Key "accent" -NoNewline
@@ -6488,10 +6490,18 @@ function Show-IsoFilePicker {
 
         if ($windowEnd -lt ($entries.Count - 1)) { Write-Studio -Text "    ..." -Key "muted" }
 
+        # Closed the same way every other blade is: one blank line, then the rule, then
+        # what the keys do. Without it the list simply stopped in the middle of the
+        # screen with nothing under it.
         Write-Host ""
-        if (-not $useRawUi) {
+        Write-Studio -Text ("  " + ("-" * 62)) -Key "muted"
+        if ($useRawUi) {
+            Write-Studio -Text "  Up/Down move   Enter open/select   Backspace up   Esc cancel" -Key "muted"
+        }
+        else {
             Write-Studio -Text "  Enter a number, or blank to cancel." -Key "muted"
         }
+        Write-Host ""
 
         $chosen = $null
         # Read when the frame is COMPLETE, never half way through it. A frame taller
@@ -7140,10 +7150,10 @@ function Invoke-BuildPreflight {
 
     if ($errors.Count -eq 0) {
         if ($warnings.Count -eq 0) {
-            Write-Log "Preflight OK ($($ok.Count) checks)" -Tag "Ok"
+            Write-Log "Preflight: $($ok.Count) check(s)" -Tag "Ok"
         }
         else {
-            Write-Log "Preflight OK ($($ok.Count) checks, $($warnings.Count) warning(s))" -Tag "Ok"
+            Write-Log "Preflight: $($ok.Count) check(s), $($warnings.Count) warning(s)" -Tag "Ok"
         }
         return $true
     }
@@ -7226,7 +7236,7 @@ function Invoke-BuildServers {
             return $false
         }
 
-        Write-Log "All selected servers provisioned (slow host)" -Tag "Ok"
+        Write-Log "All selected servers provisioned - slow host" -Tag "Ok"
         return $true
     }
 
@@ -7246,7 +7256,7 @@ function Invoke-BuildServers {
         return $false
     }
 
-    Write-Log "All selected servers provisioned successfully" -Tag "Ok"
+    Write-Log "All selected servers provisioned" -Tag "Ok"
     return $true
 }
 

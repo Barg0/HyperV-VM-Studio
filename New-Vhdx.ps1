@@ -2606,16 +2606,18 @@ function Show-IsoFilePicker {
             $entry = $entries[$i]
             $selected = ($i -eq $index)
             $prefix = "    "
-            $color = "Gray"
+            # Palette keys, not ConsoleColor names. The four that were here - Cyan,
+            # Yellow, DarkGray, Gray - are not in the table, so Write-Studio fell back
+            # to `fg` for every one of them and the list has been drawn in a single
+            # colour all along.
+            $color = "fg"
 
-            if ($entry.Kind -eq "iso") {
-                $color = "Cyan"
-            }
-            elseif ($entry.Kind -eq "dir" -or $entry.Kind -eq "drive") {
-                $color = "Yellow"
+            if ($entry.Kind -eq "dir" -or $entry.Kind -eq "drive") {
+                $color = "warn"
             }
             elseif ($entry.Kind -eq "nav") {
-                $color = "DarkGray"
+                # ".." is the way out, so it takes the accent the caret takes.
+                $color = "accent"
             }
 
             if ($selected) {
@@ -5780,7 +5782,6 @@ function Start-LinuxInteractiveConfiguration {
         Write-Studio -Text "  Disk" -Key "fg"
         Write-FastfetchInfoRow -Label "gold size" -Value "$diskGB GB" -LabelWidth 24 -IndentWidth 2
         Write-FastfetchInfoRow -Label "vhdx type" -Value $vhdType -LabelWidth 24 -IndentWidth 2
-        Write-FastfetchInfoRow -Label "applies to" -Value "Every VM that differences off this gold" -LabelWidth 24 -IndentWidth 2
         Write-Host ""
 
         Write-Studio -Text "  Bake" -Key "fg"

@@ -1452,7 +1452,7 @@ function Disconnect-VmDvdMedia {
         }
     }
     catch {
-        Write-Log "DVD disconnect warning for '$Name': $($_.Exception.Message)" -Tag "Warn"
+        Write-Log "DVD disconnect '$Name': $($_.Exception.Message)" -Tag "Warn"
     }
 }
 

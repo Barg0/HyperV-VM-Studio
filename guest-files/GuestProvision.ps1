@@ -1,4 +1,4 @@
-#Requires -Version 5.1
+﻿#Requires -Version 5.1
 #Requires -RunAsAdministrator
 <#
 .SYNOPSIS
@@ -682,7 +682,7 @@ function Connect-GuestProvisionAzureArc {
                     Write-Log "azcmagent: $line" -Tag "Debug"
                 }
                 if ($exitCode -eq 0) {
-                    Write-Log "Azure Arc connect succeeded (attempt $attempt/$maxAttempts)" -Tag "Ok"
+                    Write-Log "Azure Arc connected (attempt $attempt/$maxAttempts)" -Tag "Ok"
                     $connected = $true
                     break
                 }
