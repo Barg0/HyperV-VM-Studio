@@ -122,6 +122,95 @@ if ($enableLogFile -and -not (Test-Path -Path $logFileDirectory)) {
     New-Item -ItemType Directory -Path $logFileDirectory -Force | Out-Null
 }
 
+# ---------------------------[ Studio Palette ]---------------------------
+#
+# Kaido Dark, the studio's default theme, as the console's palette.
+#
+# Every hex below is lifted verbatim from FAMILIES[kaido].dark in
+# html\hyperv-vm-studio.html - which is already this project's default theme
+# (data-theme="kaido_dark", THEME_DEFAULT = "kaido") - with one stated exception,
+# `yellow`, documented where it is defined. A run and the studio that designed it are
+# the same colours rather than two guesses at them.
+#
+# Truecolor where the console does virtual terminal processing, the nearest of the
+# sixteen named ConsoleColors where it does not. Everything that reaches the screen
+# goes through Write-Studio, which is what makes the theme one table instead of a
+# hundred scattered -ForegroundColor arguments.
+#
+# The logo is deliberately NOT part of this: the server logo keeps its own base64
+# ANSI art and the colours baked into it.
+
+$script:studioPalette = @{
+    bg       = "#16171e"; elevated  = "#1d1f28"; subtle = "#1a1c24"; hover = "#262a38"
+    fg       = "#d7dbec"; muted     = "#8b93ad"
+    border   = "#2b2f3d"; borderStrong = "#3d4356"; divider = "#23262f"
+    accent   = "#7aa2f7"; accentHover = "#93b3fa"; accentSoft = "#22304f"; accentFg = "#11141c"
+    success  = "#9ece6a"; danger    = "#f7768e"; warn = "#e0af68"
+    bandHost = "#7dcfff"; bandIdent = "#bb9af7"; bandWork = "#9ece6a"; bandDeploy = "#ff9e64"
+    # THE ONE VALUE IN THIS TABLE THAT IS NOT THE STUDIO'S.
+    #
+    # Kaido has exactly two warm colours - warn #e0af68, a gold, and deploy #ff9e64, an
+    # orange - and a log needs three warm steps, because `info` is the commonest tag
+    # there is and it has to sit below `warn` without either reading as the other.
+    #
+    # Pick it by HUE, not by eye. 30 degrees is orange, 45 gold, 60 pure yellow; this is
+    # 56, far enough from warn's 35 to separate at a glance and short of acid lemon.
+    yellow   = "#e6de78"
+}
+
+# One per key, for a console that cannot do truecolor. Chosen for the JOB the hex does,
+# not the nearest RGB: muted and borderStrong both land on DarkGray because both are
+# "quieter than the text", and that is what has to survive.
+$script:studioFallback = @{
+    bg       = "Black";    elevated  = "Black";  subtle = "Black";     hover = "Black"
+    fg       = "Gray";     muted     = "DarkGray"
+    border   = "DarkGray"; borderStrong = "DarkGray"; divider = "DarkGray"
+    accent   = "Cyan";     accentHover = "White"; accentSoft = "DarkBlue"; accentFg = "Black"
+    success  = "Green";    danger    = "Red";     warn = "DarkYellow"
+    bandHost = "Cyan";     bandIdent = "Magenta"; bandWork = "Green";   bandDeploy = "Yellow"
+    yellow   = "Yellow"
+}
+
+function ConvertFrom-HexColor {
+    param([string]$Hex)
+
+    $h = $Hex.TrimStart("#")
+    return @(
+        [Convert]::ToInt32($h.Substring(0, 2), 16),
+        [Convert]::ToInt32($h.Substring(2, 2), 16),
+        [Convert]::ToInt32($h.Substring(4, 2), 16)
+    )
+}
+
+function Write-Studio {
+    # The one write in this script, apart from the logo's own fallback. Takes a palette
+    # KEY, never a colour: a call site that names a colour is a call site the theme
+    # cannot reach.
+    param(
+        [AllowEmptyString()][string]$Text = "",
+        [string]$Key = "fg",
+        [switch]$NoNewline
+    )
+
+    $hex = [string]$script:studioPalette[$Key]
+    if ([string]::IsNullOrWhiteSpace($hex)) { $hex = [string]$script:studioPalette["fg"] }
+
+    # Cheap after the first call - Enable-MenuVtProcessing caches on $script:menuVtEnabled
+    # - and it has to be here rather than only in the menu header, because log lines print
+    # long before any header does.
+    Enable-MenuVtProcessing
+    if (Test-MenuAnsiSupported) {
+        $rgb = ConvertFrom-HexColor -Hex $hex
+        $escape = [char]27
+        Write-Host ("{0}[38;2;{1};{2};{3}m{4}{0}[0m" -f $escape, $rgb[0], $rgb[1], $rgb[2], $Text) -NoNewline:$NoNewline
+        return
+    }
+
+    $named = [string]$script:studioFallback[$Key]
+    if ([string]::IsNullOrWhiteSpace($named)) { $named = "Gray" }
+    Write-Host $Text -NoNewline:$NoNewline -ForegroundColor $named
+}
+
 function Write-Log {
     [CmdletBinding()]
     param (
@@ -166,21 +255,23 @@ function Write-Log {
     if ([string]::IsNullOrWhiteSpace($shown)) { $shown = "error" }
     $rawTag = $shown.PadRight(5)
 
+    # Palette keys, not ConsoleColor names - see Write-Studio above. The pairing this
+    # has to preserve is info BELOW warn: info is the commonest tag in any run, warn is
+    # the one that wants to be noticed, and the two sit next to each other on screen.
+    # Kaido's own two warm colours are one step apart and read as orange-on-orange, so
+    # the palette carries a third - `yellow`, the only value in it that is not the
+    # studio's. info takes it and warn keeps Kaido's gold.
     $color = switch ($shown) {
-        "start" { "Cyan" }
-        "get"   { "Blue" }
-        "run"   { "Magenta" }
-        "info"  { "Yellow" }
-        # There is no orange in ConsoleColor. DarkYellow is ANSI 3, which every current
-        # scheme renders orange-brown, against info's Yellow = ANSI 11, the pale bright
-        # one - so warn reads as the louder of the two, not the dimmer. That colour used
-        # to belong to debug, which is now DarkGray, where a diagnostic tag belongs.
-        "warn"  { "DarkYellow" }
-        "o.k."  { "Green" }
-        "error" { "Red" }
-        "debug" { "DarkGray" }
-        "end"   { "Cyan" }
-        default { "White" }
+        "start" { "accent" }
+        "get"   { "bandHost" }
+        "run"   { "bandIdent" }
+        "info"  { "yellow" }
+        "warn"  { "warn" }
+        "o.k."  { "success" }
+        "error" { "danger" }
+        "debug" { "muted" }
+        "end"   { "accent" }
+        default { "fg" }
     }
 
     $logMessage = "$timestamp [ $rawTag ] $Message"
@@ -207,11 +298,13 @@ function Write-Log {
         }
     }
 
-    Write-Host "$timestamp " -NoNewline
-    Write-Host "[ " -NoNewline -ForegroundColor White
-    Write-Host "$rawTag" -NoNewline -ForegroundColor $color
-    Write-Host " ] " -NoNewline -ForegroundColor White
-    Write-Host "$Message"
+    # The timestamp and the brackets are furniture, not content: they take `muted` so
+    # the tag and the message are what the eye lands on.
+    Write-Studio -Text "$timestamp " -Key "muted" -NoNewline
+    Write-Studio -Text "[ " -Key "muted" -NoNewline
+    Write-Studio -Text "$rawTag" -Key $color -NoNewline
+    Write-Studio -Text " ] " -Key "muted" -NoNewline
+    Write-Studio -Text "$Message" -Key "fg"
 }
 
 # ISOs this run mounted itself (Features on Demand media picked interactively).
@@ -292,7 +385,7 @@ function Resolve-ConfiguredHostPath {
                 $hint = " (e.g. $ExampleHint)"
             }
             Write-Host ""
-            Write-Host "$PromptLabel$hint" -ForegroundColor Cyan
+            Write-Studio -Text "$PromptLabel$hint" -Key "accent"
             $path = Read-Host "Path"
             if ([string]::IsNullOrWhiteSpace($path)) {
                 throw "$PromptLabel was left blank"
@@ -605,6 +698,20 @@ function Get-GoldNameParts {
     }
 }
 
+function Get-LinuxGoldIds {
+    # The gold names New-Vhdx.ps1 writes for Linux, which are also the imageIds the
+    # studio emits. Keep this in step with Get-LinuxImageCatalog over there.
+    return @("hv-ubuntu-2604", "hv-ubuntu-2404", "hv-debian-13")
+}
+
+function Test-IsLinuxImageId {
+    param([string]$ImageId)
+
+    $key = ([string]$ImageId).Trim().ToLowerInvariant()
+    if ([string]::IsNullOrWhiteSpace($key)) { return $false }
+    return @(Get-LinuxGoldIds) -contains $key
+}
+
 function Get-ConfiguredLanguageSlug {
     # defaults.locale as it appears in a gold file name: "de-DE" -> "dede". Empty when
     # the config says "default", which means the gold decides the locale - so it cannot
@@ -683,24 +790,24 @@ function Show-GoldLanguageForm {
         $cursor = 0
 
         if ($allRows.Count -gt 0) {
-            Write-Host "  Every VM" -ForegroundColor White
+            Write-Studio -Text "  Every VM" -Key "fg"
             Write-Host ""
             foreach ($language in $allRows) {
                 $label = "Build all VMs with {0}" -f (Get-LanguageTagFromSlug -Slug $language)
                 if ($cursor -eq $index) {
-                    Write-Host "    > " -NoNewline -ForegroundColor Cyan
-                    Write-Host $label -ForegroundColor White
+                    Write-Studio -Text "    > " -Key "accent" -NoNewline
+                    Write-Studio -Text $label -Key "fg"
                 }
                 else {
                     Write-Host "      " -NoNewline
-                    Write-Host $label -ForegroundColor Gray
+                    Write-Studio -Text $label -Key "muted"
                 }
                 $cursor++
             }
             Write-Host ""
         }
 
-        Write-Host "  Pick per VM" -ForegroundColor White
+        Write-Studio -Text "  Pick per VM" -Key "fg"
         Write-Host ""
         $nameWidth = 1
         foreach ($row in $Rows) {
@@ -716,20 +823,20 @@ function Show-GoldLanguageForm {
             # The arrows are a control, like the cursor, so they carry the cursor's colour
             # rather than the row's - the language between them is the value.
             if ($cursor -eq $index) {
-                Write-Host "    > " -NoNewline -ForegroundColor Cyan
+                Write-Studio -Text "    > " -Key "accent" -NoNewline
                 $tagColor = "White"
             }
             else {
                 Write-Host "      " -NoNewline
                 $tagColor = $rowColor
             }
-            Write-Host $arrows[0] -NoNewline -ForegroundColor Cyan
-            Write-Host (" {0,-5} " -f $tag) -NoNewline -ForegroundColor $tagColor
-            Write-Host $arrows[1] -NoNewline -ForegroundColor Cyan
-            Write-Host ("   {0}" -f ([string]$row.Name).PadRight($nameWidth)) -NoNewline -ForegroundColor $rowColor
-            Write-Host ("   {0}" -f [string]$row.ImageId) -NoNewline -ForegroundColor DarkGray
+            Write-Studio -Text $arrows[0] -Key "accent" -NoNewline
+            Write-Studio -Text (" {0,-5} " -f $tag) -Key $tagColor -NoNewline
+            Write-Studio -Text $arrows[1] -Key "accent" -NoNewline
+            Write-Studio -Text ("   {0}" -f ([string]$row.Name).PadRight($nameWidth)) -Key $rowColor -NoNewline
+            Write-Studio -Text ("   {0}" -f [string]$row.ImageId) -Key "muted" -NoNewline
             if ($locked) {
-                Write-Host "   only gold on disk" -ForegroundColor DarkGray
+                Write-Studio -Text "   only gold on disk" -Key "muted"
             }
             else {
                 Write-Host ""
@@ -739,12 +846,12 @@ function Show-GoldLanguageForm {
 
         Write-Host ""
         if ($cursor -eq $index) {
-            Write-Host "    > " -NoNewline -ForegroundColor Cyan
-            Write-Host "Continue" -ForegroundColor White
+            Write-Studio -Text "    > " -Key "accent" -NoNewline
+            Write-Studio -Text "Continue" -Key "fg"
         }
         else {
             Write-Host "      " -NoNewline
-            Write-Host "Continue" -ForegroundColor Gray
+            Write-Studio -Text "Continue" -Key "muted"
         }
 
         # What the highlighted row would actually do. On an "every VM" row that is worth
@@ -756,18 +863,18 @@ function Show-GoldLanguageForm {
             $tag = Get-LanguageTagFromSlug -Slug $language
             $covered = @($Rows | Where-Object { $_.Languages -contains $language })
             $kept = @($Rows | Where-Object { -not ($_.Languages -contains $language) })
-            Write-Host ("  {0} applies to {1}" -f $tag, (($covered | ForEach-Object { $_.Name }) -join ", ")) -ForegroundColor DarkGray
+            Write-Studio -Text ("  {0} applies to {1}" -f $tag, (($covered | ForEach-Object { $_.Name }) -join ", ")) -Key "muted"
             if ($kept.Count -gt 0) {
                 $keptText = (($kept | ForEach-Object {
                             "{0} stays {1}" -f $_.Name, (Get-LanguageTagFromSlug -Slug $_.Language)
                         }) -join ", ")
-                Write-Host ("  No {0} gold for the rest - {1}" -f $tag, $keptText) -ForegroundColor DarkGray
+                Write-Studio -Text ("  No {0} gold for the rest - {1}" -f $tag, $keptText) -Key "muted"
             }
         }
 
         Write-Host ""
-        Write-Host ("  " + ("-" * 62)) -ForegroundColor DarkGray
-        Write-Host "  Up/Down move   Left/Right change language   Enter continue   Esc/Q cancel" -ForegroundColor DarkGray
+        Write-Studio -Text ("  " + ("-" * 62)) -Key "muted"
+        Write-Studio -Text "  Up/Down move   Left/Right change language   Enter continue   Esc/Q cancel" -Key "muted"
         Write-Host ""
 
         $key = $Host.UI.RawUI.ReadKey("NoEcho,IncludeKeyDown")
@@ -902,6 +1009,10 @@ function Resolve-GoldLanguagePlan {
         if ([string]::IsNullOrWhiteSpace($imageId) -or [string]::IsNullOrWhiteSpace($name)) { continue }
         # A hand-picked file name answers the question by itself.
         if (-not [string]::IsNullOrWhiteSpace([string]$server.imageHint)) { continue }
+        # A Linux gold has no language segment to choose between - its middle segment is
+        # the distro. Asking which language of hv-ubuntu-2604 to use is a question with
+        # no answer, so these never become rows.
+        if (Test-IsLinuxImageId -ImageId $imageId) { continue }
 
         $candidates = @($GoldImages | Where-Object {
                 $parts = Get-GoldNameParts -BaseName $_.BaseName
@@ -998,8 +1109,22 @@ function Resolve-GoldVhdxPath {
         throw "Server has neither imageId nor imageHint - nothing to resolve a gold image from"
     }
 
-    $rules = Get-ImageIdMatchRules
     $key = $ImageId.ToLowerInvariant().Trim()
+
+    # A Linux gold is named hv-ubuntu-2604.vhdx, and that whole name IS the imageId.
+    # Get-GoldNameParts would read it as language "ubuntu" + imageId "2604", because the
+    # middle slot carries the distro here rather than a locale - so the parser, the
+    # language picker and the id whitelist are all bypassed for these. One gold per
+    # distro, one exact name, nothing to disambiguate.
+    if (Test-IsLinuxImageId -ImageId $key) {
+        $linuxMatches = @($GoldImages | Where-Object { $_.BaseName.ToLowerInvariant() -eq $key })
+        if ($linuxMatches.Count -eq 0) {
+            throw "No gold image for imageId='$ImageId' (expected $key.vhdx in the vhdx folder - build it with New-Vhdx.ps1)"
+        }
+        return $linuxMatches[0].FullName
+    }
+
+    $rules = Get-ImageIdMatchRules
     if (-not $rules.Contains($key)) {
         throw "Unknown imageId '$ImageId'. Expected one of: $($rules.Keys -join ', ')"
     }
@@ -2895,6 +3020,399 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%~dp0GuestProvision\Gue
     }
 }
 
+# ---------------------------[ cloud-init seed ]---------------------------
+#
+# A Linux VM is provisioned the way a Windows VM is provisioned by an unattend.xml:
+# with an answer file that first boot reads and then never looks at again. The format
+# is cloud-init's NoCloud datasource - a tiny ISO, volume label CIDATA, holding
+# user-data, meta-data and optionally network-config - and the VM gets it on a DVD
+# drive that is removed once it has booted.
+#
+# NoCloud is used for every distribution here, which is the whole reason the golds are
+# built from the GENERIC cloud images rather than the vendors' azure ones: an azure
+# image pins cloud-init to the Azure datasource and would want an ovf-env.xml and a
+# wire server that a lab does not have.
+#
+# The ISO is written with IMAPI2FS, the disc-mastering COM component that has shipped
+# in Windows since Vista. No mkisofs, no oscdimg, nothing to download.
+
+function Get-LinuxLocaleName {
+    # de-DE -> de_DE.UTF-8. A copy of the function in New-Vhdx.ps1: neither script
+    # dot-sources the other, which is why both already carry their own Write-Log.
+    param([string]$LocaleTag)
+
+    if ([string]::IsNullOrWhiteSpace($LocaleTag)) { return "en_US.UTF-8" }
+    return ($LocaleTag -replace "-", "_") + ".UTF-8"
+}
+
+function Get-LinuxKeymap {
+    # de-DE -> de, en-GB -> gb. Also a copy from New-Vhdx.ps1; keep the two in step.
+    param([string]$LocaleTag)
+
+    $overrides = @{
+        "en-US" = "us"; "en-GB" = "gb"; "ja-JP" = "jp"; "pt-BR" = "br"
+        "zh-CN" = "cn"; "zh-TW" = "tw"; "ko-KR" = "kr"; "cs-CZ" = "cz"
+        "da-DK" = "dk"; "el-GR" = "gr"; "sv-SE" = "se"; "uk-UA" = "ua"
+        "he-IL" = "il"; "sl-SI" = "si"; "et-EE" = "ee"
+    }
+    if ($overrides.ContainsKey($LocaleTag)) { return $overrides[$LocaleTag] }
+
+    $parts = $LocaleTag -split "-"
+    if ($parts.Count -ge 2) { return $parts[$parts.Count - 1].ToLowerInvariant() }
+    return "us"
+}
+
+function Test-IsLinuxServer {
+    # A row is Linux because the studio said so. The gold's sidecar manifest says the
+    # same thing, but the row is what this script was handed and it is checked first.
+    param([object]$Server)
+
+    if ($null -eq $Server) { return $false }
+    return ([string]$Server.osFamily).Trim().ToLowerInvariant() -eq "linux"
+}
+
+function ConvertTo-YamlSingleQuoted {
+    # YAML single-quoted scalars escape one character - the quote itself, by doubling
+    # it - and interpret nothing else. That makes them the right container for a
+    # generated password, which may hold anything the generator produced.
+    param([string]$Value)
+
+    if ($null -eq $Value) { return "''" }
+    return "'" + ($Value -replace "'", "''") + "'"
+}
+
+function Format-MacWithColons {
+    # Hyper-V hands a MAC over as 00155D0A0B0C; netplan matches on 00:15:5d:0a:0b:0c.
+    param([string]$MacAddress)
+
+    $clean = ([string]$MacAddress) -replace "[^0-9A-Fa-f]", ""
+    if ($clean.Length -ne 12) { return "" }
+    $pairs = @()
+    for ($i = 0; $i -lt 12; $i += 2) { $pairs += $clean.Substring($i, 2).ToLowerInvariant() }
+    return ($pairs -join ":")
+}
+
+function Get-CloudInitMetaData {
+    <#
+        meta-data is the smaller half of a NoCloud seed and it has one job that matters:
+        instance-id. cloud-init re-runs its per-instance modules when that value changes
+        and skips them when it does not, so a rebuilt VM with a recycled instance-id
+        would come up unprovisioned. It carries the build time for exactly that reason.
+    #>
+    param([string]$HostName)
+
+    $stamp = [DateTime]::UtcNow.ToString("yyyyMMddHHmmss")
+    return @"
+instance-id: $HostName-$stamp
+local-hostname: $HostName
+"@
+}
+
+function Get-CloudInitUserData {
+    <#
+        The Linux answer file.
+
+        The password is written in clear. That is deliberate and it is not a new
+        exposure: the Windows path already stores its password as base64(UTF-16LE) in
+        the unattend, which is reversible, and this seed is ejected and deleted after
+        first boot the same way. Hashing it properly would need crypt(3) SHA-512, which
+        Windows PowerShell 5.1 has no way to produce.
+
+        ssh_pwauth stays on so the Hyper-V console and a password are a way back in when
+        a key is wrong - on a lab VM that is worth more than the hardening.
+    #>
+    param(
+        [object]$Server,
+        [object]$Defaults,
+        [string]$HostName,
+        [string]$Locale,
+        [string]$Keymap,
+        [string]$TimeZone
+    )
+
+    $userName = ([string]$Server.localUserName).Trim()
+    if ([string]::IsNullOrWhiteSpace($userName)) { $userName = "admin" }
+    $password = [string]$Server.localUserPassword
+
+    $sshKey = ([string]$Server.sshAuthorizedKey).Trim()
+    if ([string]::IsNullOrWhiteSpace($sshKey) -and $Defaults) {
+        $sshKey = ([string]$Defaults.sshAuthorizedKey).Trim()
+    }
+
+    $packages = @()
+    foreach ($package in @($Server.packages)) {
+        $trimmed = ([string]$package).Trim()
+        if (-not [string]::IsNullOrWhiteSpace($trimmed)) { $packages += $trimmed }
+    }
+
+    $lines = New-Object System.Collections.Generic.List[string]
+    [void]$lines.Add("#cloud-config")
+    [void]$lines.Add("hostname: $HostName")
+    [void]$lines.Add("preserve_hostname: false")
+    if (-not [string]::IsNullOrWhiteSpace($Locale))   { [void]$lines.Add("locale: $Locale") }
+    if (-not [string]::IsNullOrWhiteSpace($TimeZone)) { [void]$lines.Add("timezone: $TimeZone") }
+    if (-not [string]::IsNullOrWhiteSpace($Keymap)) {
+        [void]$lines.Add("keyboard:")
+        [void]$lines.Add("  layout: $Keymap")
+    }
+
+    [void]$lines.Add("users:")
+    [void]$lines.Add("  - name: $userName")
+    [void]$lines.Add("    groups: [sudo]")
+    [void]$lines.Add("    shell: /bin/bash")
+    [void]$lines.Add("    sudo: 'ALL=(ALL) NOPASSWD:ALL'")
+    [void]$lines.Add("    lock_passwd: false")
+    if (-not [string]::IsNullOrWhiteSpace($sshKey)) {
+        [void]$lines.Add("    ssh_authorized_keys:")
+        [void]$lines.Add("      - " + (ConvertTo-YamlSingleQuoted -Value $sshKey))
+    }
+
+    if (-not [string]::IsNullOrWhiteSpace($password)) {
+        [void]$lines.Add("chpasswd:")
+        [void]$lines.Add("  expire: false")
+        [void]$lines.Add("  users:")
+        [void]$lines.Add("    - name: $userName")
+        [void]$lines.Add("      password: " + (ConvertTo-YamlSingleQuoted -Value $password))
+        [void]$lines.Add("      type: text")
+        [void]$lines.Add("ssh_pwauth: true")
+    }
+
+    if ($packages.Count -gt 0) {
+        [void]$lines.Add("package_update: true")
+        [void]$lines.Add("packages:")
+        foreach ($package in $packages) { [void]$lines.Add("  - " + (ConvertTo-YamlSingleQuoted -Value $package)) }
+    }
+
+    # The gold is grown to its full size by New-Vhdx, but the partition and the
+    # filesystem inside it are still the cloud image's. These two modules are on by
+    # default in every image used here; naming them makes the intent explicit and
+    # survives an image that ever changes its mind.
+    [void]$lines.Add("growpart:")
+    [void]$lines.Add("  mode: auto")
+    [void]$lines.Add("  devices: ['/']")
+    [void]$lines.Add("resize_rootfs: true")
+
+    return ($lines -join "`n") + "`n"
+}
+
+function Get-CloudInitNetworkConfig {
+    <#
+        netplan v2, which NoCloud reads from a THIRD file called network-config - not
+        from inside user-data. Getting that wrong is silent: cloud-init ignores the
+        stanza and the VM comes up on DHCP.
+
+        The adapter is matched by MAC rather than by name because the kernel's name for
+        it is not knowable from here.
+
+        Returns an empty string when there is no static address to set, and no file is
+        written - the image's own DHCP default is then left alone.
+    #>
+    param(
+        [object]$Server,
+        [string]$MacAddress
+    )
+
+    $ipAddress = ([string]$Server.ipAddress).Trim()
+    if ([string]::IsNullOrWhiteSpace($ipAddress)) { return "" }
+
+    $prefix = 24
+    if ($Server.prefixLength) { $prefix = [int]$Server.prefixLength }
+    $gateway = ([string]$Server.defaultGateway).Trim()
+
+    $dns = @()
+    foreach ($server in @($Server.dnsServers)) {
+        $trimmed = ([string]$server).Trim()
+        if (-not [string]::IsNullOrWhiteSpace($trimmed)) { $dns += $trimmed }
+    }
+
+    $mac = Format-MacWithColons -MacAddress $MacAddress
+
+    $lines = New-Object System.Collections.Generic.List[string]
+    [void]$lines.Add("version: 2")
+    [void]$lines.Add("ethernets:")
+    [void]$lines.Add("  primary:")
+    if (-not [string]::IsNullOrWhiteSpace($mac)) {
+        [void]$lines.Add("    match:")
+        [void]$lines.Add("      macaddress: '$mac'")
+    }
+    [void]$lines.Add("    dhcp4: false")
+    [void]$lines.Add("    dhcp6: false")
+    [void]$lines.Add("    addresses: ['$ipAddress/$prefix']")
+    if (-not [string]::IsNullOrWhiteSpace($gateway)) {
+        # `gateway4` is deprecated and newer netplan warns on it or drops it; a default
+        # route says the same thing and keeps working.
+        [void]$lines.Add("    routes:")
+        [void]$lines.Add("      - to: default")
+        [void]$lines.Add("        via: '$gateway'")
+    }
+    if ($dns.Count -gt 0) {
+        [void]$lines.Add("    nameservers:")
+        [void]$lines.Add("      addresses: [" + (($dns | ForEach-Object { "'$_'" }) -join ", ") + "]")
+    }
+
+    return ($lines -join "`n") + "`n"
+}
+
+function New-CloudInitSeedIso {
+    <#
+        Writes the CIDATA ISO with IMAPI2FS.
+
+        The volume label has to be exactly CIDATA - upper case - or cloud-init's NoCloud
+        datasource does not recognise the disc and the VM boots unprovisioned with no
+        error anywhere.
+
+        ISO9660 + Joliet: Joliet alone is not enough for every cloud-init version, and
+        the file names here are short enough that ISO9660 costs nothing.
+    #>
+    param(
+        [Parameter(Mandatory = $true)][string]$IsoPath,
+        [Parameter(Mandatory = $true)][string]$UserData,
+        [Parameter(Mandatory = $true)][string]$MetaData,
+        [string]$NetworkConfig
+    )
+
+    $stagingDirectory = Join-Path -Path ([System.IO.Path]::GetTempPath()) -ChildPath ("cidata-" + [Guid]::NewGuid().ToString("N"))
+    New-Item -ItemType Directory -Path $stagingDirectory -Force | Out-Null
+
+    try {
+        # LF line endings and no BOM. cloud-init parses YAML, and a BOM at the top of
+        # user-data makes the first line unparseable.
+        $encoding = New-Object System.Text.UTF8Encoding($false)
+        [System.IO.File]::WriteAllText((Join-Path $stagingDirectory "user-data"), ($UserData -replace "`r`n", "`n"), $encoding)
+        [System.IO.File]::WriteAllText((Join-Path $stagingDirectory "meta-data"), ($MetaData -replace "`r`n", "`n"), $encoding)
+        if (-not [string]::IsNullOrWhiteSpace($NetworkConfig)) {
+            [System.IO.File]::WriteAllText((Join-Path $stagingDirectory "network-config"), ($NetworkConfig -replace "`r`n", "`n"), $encoding)
+        }
+
+        $image = New-Object -ComObject IMAPI2FS.MsftFileSystemImage
+        $image.FileSystemsToCreate = 3   # ISO9660 (1) + Joliet (2)
+        $image.VolumeName = "CIDATA"
+        $image.Root.AddTree($stagingDirectory, $false)
+
+        $result = $image.CreateResultImage()
+        $stream = $result.ImageStream
+
+        $directory = Split-Path -Path $IsoPath -Parent
+        if ($directory -and -not (Test-Path -LiteralPath $directory)) {
+            New-Item -ItemType Directory -Path $directory -Force | Out-Null
+        }
+        if (Test-Path -LiteralPath $IsoPath) { Remove-Item -LiteralPath $IsoPath -Force }
+
+        # CreateResultImage hands back a COM IStream, which is not a .NET Stream and has
+        # no CopyTo. Cast it to the interop interface and pump it block by block; the
+        # byte count comes back through an unmanaged int, which is what the IntPtr is
+        # for. No ADODB, no temp copy, nothing beyond what IMAPI2FS already loaded.
+        $comStream = [System.Runtime.InteropServices.ComTypes.IStream]$stream
+        $blockSize = [int]$result.BlockSize
+        if ($blockSize -le 0) { $blockSize = 2048 }
+
+        $buffer = New-Object byte[] $blockSize
+        $readPtr = [System.Runtime.InteropServices.Marshal]::AllocHGlobal(4)
+        $fileStream = [System.IO.File]::Create($IsoPath)
+        try {
+            while ($true) {
+                $comStream.Read($buffer, $blockSize, $readPtr)
+                $read = [System.Runtime.InteropServices.Marshal]::ReadInt32($readPtr)
+                if ($read -le 0) { break }
+                $fileStream.Write($buffer, 0, $read)
+            }
+            $fileStream.Flush()
+        }
+        finally {
+            $fileStream.Dispose()
+            [System.Runtime.InteropServices.Marshal]::FreeHGlobal($readPtr)
+            [void][System.Runtime.InteropServices.Marshal]::ReleaseComObject($comStream)
+        }
+
+        Write-Log "Wrote cloud-init seed '$IsoPath'" -Tag "Run"
+        return $IsoPath
+    }
+    finally {
+        if (Test-Path -LiteralPath $stagingDirectory) {
+            Remove-Item -LiteralPath $stagingDirectory -Recurse -Force -ErrorAction SilentlyContinue
+        }
+    }
+}
+
+function Set-CloudInitSeedOnVm {
+    <#
+        Attaches the seed as a DVD. Nothing else in this project has ever attached one,
+        so this is net-new rather than a variation on something.
+
+        The drive is left in place: cloud-init reads it on every boot and re-reading a
+        seed whose instance-id has not changed is a no-op, while pulling the disc out
+        from under a VM that has not finished booting is not. Removing it is a tidy-up
+        for later, once a boot has actually been watched.
+    #>
+    param(
+        [Parameter(Mandatory = $true)][string]$VmName,
+        [Parameter(Mandatory = $true)][string]$IsoPath
+    )
+
+    $existing = @(Get-VMDvdDrive -VMName $VmName -ErrorAction SilentlyContinue)
+    if ($existing.Count -gt 0) {
+        Set-VMDvdDrive -VMName $VmName -ControllerNumber $existing[0].ControllerNumber `
+            -ControllerLocation $existing[0].ControllerLocation -Path $IsoPath -ErrorAction Stop
+    }
+    else {
+        Add-VMDvdDrive -VMName $VmName -Path $IsoPath -ErrorAction Stop
+    }
+    Write-Log "Attached the cloud-init seed to '$VmName'" -Tag "Run"
+}
+
+function Set-LinuxProvisioning {
+    <#
+        The Linux replacement for Set-OfflineUnattendFile: renders the seed, writes the
+        ISO beside the VM's own files and attaches it.
+
+        Region settings come from the gold's sidecar manifest when the config does not
+        override them - the same rule the Windows path uses, for the same reason: the
+        gold was baked with a locale and a machine built from it should not silently
+        disagree with it.
+    #>
+    param(
+        [Parameter(Mandatory = $true)][object]$Server,
+        [Parameter(Mandatory = $true)][object]$Defaults,
+        [Parameter(Mandatory = $true)][string]$VmName,
+        [Parameter(Mandatory = $true)][string]$HostName,
+        [Parameter(Mandatory = $true)][string]$SeedDirectory,
+        [string]$GoldPath,
+        [string]$NicMacAddress
+    )
+
+    $locale = ""
+    $keymap = ""
+    $timeZone = ""
+
+    if (-not [string]::IsNullOrWhiteSpace($GoldPath)) {
+        $manifestPath = "$GoldPath.json"
+        if (Test-Path -LiteralPath $manifestPath) {
+            try {
+                $manifest = Get-Content -LiteralPath $manifestPath -Raw -Encoding UTF8 | ConvertFrom-Json
+                if ($manifest.locale)         { $locale   = Get-LinuxLocaleName -LocaleTag ([string]$manifest.locale) }
+                if ($manifest.keyboardLayout) { $keymap   = Get-LinuxKeymap     -LocaleTag ([string]$manifest.keyboardLayout) }
+                if ($manifest.timeZone)       { $timeZone = [string]$manifest.timeZone }
+            }
+            catch {
+                Write-Log "Could not read the gold manifest '$manifestPath': $($_.Exception.Message)" -Tag "Warn"
+            }
+        }
+    }
+
+    $userData = Get-CloudInitUserData -Server $Server -Defaults $Defaults -HostName $HostName `
+        -Locale $locale -Keymap $keymap -TimeZone $timeZone
+    $metaData = Get-CloudInitMetaData -HostName $HostName
+    $networkConfig = Get-CloudInitNetworkConfig -Server $Server -MacAddress $NicMacAddress
+
+    if ([string]::IsNullOrWhiteSpace($networkConfig)) {
+        Write-Log "No static address for '$HostName' - the guest keeps the image's DHCP default" -Tag "Info"
+    }
+
+    $isoPath = Join-Path -Path $SeedDirectory -ChildPath ("{0}-seed.iso" -f $VmName)
+    $null = New-CloudInitSeedIso -IsoPath $isoPath -UserData $userData -MetaData $metaData -NetworkConfig $networkConfig
+    Set-CloudInitSeedOnVm -VmName $VmName -IsoPath $isoPath
+}
+
 function Set-OfflineUnattendFile {
     param(
         [string]$VhdPath,
@@ -4283,7 +4801,13 @@ function New-ProvisionedVm {
         $enableSecureBoot = [bool]$Server.enableSecureBoot
     }
     if ($enableSecureBoot) {
-        Set-VMFirmware -VMName $hyperVName -EnableSecureBoot On -SecureBootTemplate "MicrosoftWindows"
+        # These cloud images are signed by Microsoft's THIRD-PARTY UEFI CA, through shim.
+        # The MicrosoftWindows template does not trust that chain, and a VM created with
+        # it does not boot - with no message that points at Secure Boot.
+        $secureBootTemplate = "MicrosoftWindows"
+        if (Test-IsLinuxServer -Server $Server) { $secureBootTemplate = "MicrosoftUEFICertificateAuthority" }
+        Set-VMFirmware -VMName $hyperVName -EnableSecureBoot On -SecureBootTemplate $secureBootTemplate
+        Write-Log "Secure Boot on with the $secureBootTemplate template" -Tag "Debug"
     }
 
     $enableVtpm = $false
@@ -4347,12 +4871,22 @@ function New-ProvisionedVm {
         }
     }
 
-    $unattend = Get-ServerUnattendContent -Server $Server -Defaults $Defaults -IsClient:$isClient `
-        -NicMacAddress ([string]$nicMac) -AdditionalNicPlan $additionalNics -GoldPath $ctx.GoldPath
-    Set-OfflineUnattendFile -VhdPath $ctx.ChildVhd -UnattendContent $unattend -VmName $ctx.ComputerName -IsClient:$isClient `
-        -Server $Server -Defaults $Defaults -NicPlan $nicPlan.ToArray()
-    if ($isClient) {
-        Write-Log "Client image - Win11 OOBE skips applied" -Tag "Info"
+    # The one place a Windows-specific action happens for every VM, and so the one place
+    # Linux has to diverge: no answer file written into the disk, a cloud-init seed
+    # attached beside it instead. Everything after this point is the same for both.
+    if (Test-IsLinuxServer -Server $Server) {
+        Set-LinuxProvisioning -Server $Server -Defaults $Defaults -VmName $hyperVName `
+            -HostName $ctx.ComputerName -SeedDirectory (Split-Path -Path $ctx.ChildVhd -Parent) `
+            -GoldPath $ctx.GoldPath -NicMacAddress ([string]$nicMac)
+    }
+    else {
+        $unattend = Get-ServerUnattendContent -Server $Server -Defaults $Defaults -IsClient:$isClient `
+            -NicMacAddress ([string]$nicMac) -AdditionalNicPlan $additionalNics -GoldPath $ctx.GoldPath
+        Set-OfflineUnattendFile -VhdPath $ctx.ChildVhd -UnattendContent $unattend -VmName $ctx.ComputerName -IsClient:$isClient `
+            -Server $Server -Defaults $Defaults -NicPlan $nicPlan.ToArray()
+        if ($isClient) {
+            Write-Log "Client image - Win11 OOBE skips applied" -Tag "Info"
+        }
     }
 
     # Nested virtualization: the per-VM flag, or the Hyper-V role landing in the guest.
@@ -4540,9 +5074,9 @@ function Write-FastfetchInfoRow {
         Write-Host (" " * $IndentWidth) -NoNewline
     }
     $paddedLabel = ("{0,-$LabelWidth}" -f $Label)
-    Write-Host $paddedLabel -NoNewline -ForegroundColor DarkCyan
-    Write-Host ": " -NoNewline -ForegroundColor DarkCyan
-    Write-Host $Value -ForegroundColor Gray
+    Write-Studio -Text $paddedLabel -Key "accent" -NoNewline
+    Write-Studio -Text ": " -Key "accent" -NoNewline
+    Write-Studio -Text $Value -Key "muted"
 }
 
 function New-MenuInfoRow {
@@ -4645,11 +5179,11 @@ function Show-MenuHeader {
             "blank" { Write-Host "" }
             "title" {
                 if ($row.Indent -gt 0) { Write-Host (" " * $row.Indent) -NoNewline }
-                Write-Host $row.Value -ForegroundColor White
+                Write-Studio -Text $row.Value -Key "fg"
             }
             "muted" {
                 if ($row.Indent -gt 0) { Write-Host (" " * $row.Indent) -NoNewline }
-                Write-Host $row.Value -ForegroundColor DarkCyan
+                Write-Studio -Text $row.Value -Key "accent"
             }
             default {
                 Write-FastfetchInfoRow -Label $row.Label -Value $row.Value `
@@ -4659,7 +5193,7 @@ function Show-MenuHeader {
     }
 
     Write-Host ""
-    Write-Host ("  " + ("-" * 62)) -ForegroundColor DarkGray
+    Write-Studio -Text ("  " + ("-" * 62)) -Key "muted"
     Write-Host ""
 }
 
@@ -4696,22 +5230,22 @@ function Show-Menu {
             $selected = ($i -eq $index)
 
             if ($selected) {
-                Write-Host "  > " -NoNewline -ForegroundColor Cyan
-                Write-Host $label -ForegroundColor White
+                Write-Studio -Text "  > " -Key "accent" -NoNewline
+                Write-Studio -Text $label -Key "fg"
             }
             else {
                 Write-Host "    " -NoNewline
-                Write-Host $label -ForegroundColor Gray
+                Write-Studio -Text $label -Key "muted"
             }
         }
 
         Write-Host ""
-        Write-Host ("  " + ("-" * 62)) -ForegroundColor DarkGray
+        Write-Studio -Text ("  " + ("-" * 62)) -Key "muted"
         if ($useRawUi) {
-            Write-Host "  Up/Down move   Enter select   Esc/Q cancel" -ForegroundColor DarkGray
+            Write-Studio -Text "  Up/Down move   Enter select   Esc/Q cancel" -Key "muted"
         }
         else {
-            Write-Host "  Enter number + Enter   (Q to cancel)" -ForegroundColor DarkGray
+            Write-Studio -Text "  Enter number + Enter   (Q to cancel)" -Key "muted"
         }
         Write-Host ""
 
@@ -4779,22 +5313,22 @@ function Show-MultiSelectMenu {
             $isSelectedRow = ($i -eq $index)
 
             if ($isSelectedRow) {
-                Write-Host "  > " -NoNewline -ForegroundColor Cyan
-                Write-Host $label -ForegroundColor White
+                Write-Studio -Text "  > " -Key "accent" -NoNewline
+                Write-Studio -Text $label -Key "fg"
             }
             else {
                 Write-Host "    " -NoNewline
-                Write-Host $label -ForegroundColor Gray
+                Write-Studio -Text $label -Key "muted"
             }
         }
 
         Write-Host ""
-        Write-Host ("  " + ("-" * 62)) -ForegroundColor DarkGray
+        Write-Studio -Text ("  " + ("-" * 62)) -Key "muted"
         if ($useRawUi) {
-            Write-Host "  Up/Down move   Space toggle   Enter done   Esc/Q cancel" -ForegroundColor DarkGray
+            Write-Studio -Text "  Up/Down move   Space toggle   Enter done   Esc/Q cancel" -Key "muted"
         }
         else {
-            Write-Host "  Number toggles, Enter alone confirms, Q cancels" -ForegroundColor DarkGray
+            Write-Studio -Text "  Number toggles, Enter alone confirms, Q cancels" -Key "muted"
         }
         Write-Host ""
 
@@ -4987,7 +5521,7 @@ function Show-IsoFilePicker {
         }
         $windowEnd = [Math]::Min(($windowStart + $maxVisible - 1), ($entries.Count - 1))
 
-        if ($windowStart -gt 0) { Write-Host "    ..." -ForegroundColor DarkGray }
+        if ($windowStart -gt 0) { Write-Studio -Text "    ..." -Key "muted" }
 
         for ($i = $windowStart; $i -le $windowEnd; $i++) {
             $entry = $entries[$i]
@@ -4997,20 +5531,20 @@ function Show-IsoFilePicker {
             elseif ($entry.Kind -eq "nav") { $color = "DarkGray" }
 
             if ($i -eq $index) {
-                Write-Host "  > " -NoNewline -ForegroundColor Cyan
-                Write-Host $entry.Label -ForegroundColor White
+                Write-Studio -Text "  > " -Key "accent" -NoNewline
+                Write-Studio -Text $entry.Label -Key "fg"
             }
             else {
                 Write-Host "    " -NoNewline
-                Write-Host $entry.Label -ForegroundColor $color
+                Write-Studio -Text $entry.Label -Key $color
             }
         }
 
-        if ($windowEnd -lt ($entries.Count - 1)) { Write-Host "    ..." -ForegroundColor DarkGray }
+        if ($windowEnd -lt ($entries.Count - 1)) { Write-Studio -Text "    ..." -Key "muted" }
 
         Write-Host ""
         if (-not $useRawUi) {
-            Write-Host "  Enter a number, or blank to cancel." -ForegroundColor DarkGray
+            Write-Studio -Text "  Enter a number, or blank to cancel." -Key "muted"
         }
 
         $chosen = $null
@@ -6388,7 +6922,7 @@ try {
 
             $renderBuildSummary = {
                 # Every section reads the same: heading, blank line, then its rows.
-                Write-Host "  Build" -ForegroundColor White
+                Write-Studio -Text "  Build" -Key "fg"
                 Write-Host ""
                 Write-FastfetchInfoRow -Label "gold folder" -Value $vhdxDirectory -LabelWidth 20 -IndentWidth 4
                 $pathLabelSuffix = if ($placementRows.Count -gt 0) { " (fallback)" } else { "" }
@@ -6403,18 +6937,18 @@ try {
                 Write-FastfetchInfoRow -Label "start after create" -Value $(if ($doStart) { "Yes" } else { "No" }) -LabelWidth 20 -IndentWidth 4
                 Write-Host ""
 
-                Write-Host "  Virtual machines ($($vmSummaries.Count))" -ForegroundColor White
+                Write-Studio -Text "  Virtual machines ($($vmSummaries.Count))" -Key "fg"
                 if ($showVmDetail) {
                     foreach ($summary in $vmSummaries) {
                         Write-Host ""
-                        Write-Host ("    " + $summary.Name) -ForegroundColor White
+                        Write-Studio -Text ("    " + $summary.Name) -Key "fg"
                         foreach ($row in $summary.Rows) {
                             Write-FastfetchInfoRow -Label $row.Name -Value $row.Value -LabelWidth 13 -IndentWidth 6
                         }
                     }
                 }
                 else {
-                    Write-Host "    condensed - the window is too short for the full blocks (it is all in the log)" -ForegroundColor DarkGray
+                    Write-Studio -Text "    condensed - the window is too short for the full blocks (it is all in the log)" -Key "muted"
                     foreach ($summary in $vmSummaries) {
                         Write-FastfetchInfoRow -Label $summary.Name -Value $summary.Line -LabelWidth 20 -IndentWidth 4
                     }
@@ -6424,7 +6958,7 @@ try {
                 # the section instead of letting a long one shove its colon out of line.
                 if ($placementRows.Count -gt 0) {
                     Write-Host ""
-                    Write-Host "  Storage placement ($($placementRows.Count))" -ForegroundColor White
+                    Write-Studio -Text "  Storage placement ($($placementRows.Count))" -Key "fg"
                     Write-Host ""
                     $placementLabelWidth = Get-SectionLabelWidth -Rows $placementRows
                     foreach ($row in $placementRows) {
@@ -6433,7 +6967,7 @@ try {
                 }
                 if ($vhdSetRows.Count -gt 0) {
                     Write-Host ""
-                    Write-Host "  VHD Sets ($($vhdSetRows.Count))" -ForegroundColor White
+                    Write-Studio -Text "  VHD Sets ($($vhdSetRows.Count))" -Key "fg"
                     Write-Host ""
                     $vhdSetLabelWidth = Get-SectionLabelWidth -Rows $vhdSetRows
                     foreach ($row in $vhdSetRows) {
@@ -6442,7 +6976,7 @@ try {
                 }
                 if ($fodRows.Count -gt 0) {
                     Write-Host ""
-                    Write-Host "  Features on Demand" -ForegroundColor White
+                    Write-Studio -Text "  Features on Demand" -Key "fg"
                     Write-Host ""
                     $fodLabelWidth = Get-SectionLabelWidth -Rows $fodRows
                     foreach ($row in $fodRows) {
@@ -6451,7 +6985,7 @@ try {
                 }
 
                 Write-Host ""
-                Write-Host ("  " + ("-" * 62)) -ForegroundColor DarkGray
+                Write-Studio -Text ("  " + ("-" * 62)) -Key "muted"
                 Write-Host ""
             }
 

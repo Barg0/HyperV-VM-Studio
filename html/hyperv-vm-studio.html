@@ -43,6 +43,7 @@
     --accent-fg: #11141c; --danger-fg: #ffffff;
     --success-text: #aeda86; --danger-text: #f98fa3;
     --role-client: #7dcfff;
+    --role-linux: #e6de78;
     /* Nested virtualization gets its own hue so the tinted extras collide with neither
        Core's amber nor Desktop's blue in the same line. */
     --flag-nested: #bb9af7;
@@ -177,7 +178,8 @@
   }
   .card-actions .pill.role.core,
   .card-actions .pill.role.desktop,
-  .card-actions .pill.role.client { color: #fff; }
+  .card-actions .pill.role.client,
+  .card-actions .pill.role.linux { color: #fff; }
   .card-actions .btn.icon.danger-text {
     width: 32px; height: 32px; color: var(--danger);
     border-color: transparent; background: transparent;
@@ -230,6 +232,7 @@
      otherwise have carried itself. */
   .section.collapsible > .section-body > .toggle:first-child { margin-top: 12px; }
 
+  .grid-1 { display: grid; grid-template-columns: 1fr; gap: 12px; }
   .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
   .grid-3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 12px; }
   label.field { display: flex; flex-direction: column; gap: 3px; color: var(--fg-muted); font-size: 12px; }
@@ -672,6 +675,7 @@
   .pill.role.core { color: var(--warn); border-color: color-mix(in srgb, var(--warn) 45%, var(--border)); background: var(--warn-soft); }
   .pill.role.desktop { color: var(--accent); border-color: color-mix(in srgb, var(--accent) 45%, var(--border)); background: color-mix(in srgb, var(--accent) 12%, var(--bg)); }
   .pill.role.client { color: var(--role-client); border-color: color-mix(in srgb, var(--role-client) 45%, var(--border)); background: color-mix(in srgb, var(--role-client) 14%, var(--bg)); }
+  .pill.role.linux { color: var(--role-linux); border-color: color-mix(in srgb, var(--role-linux) 45%, var(--border)); background: color-mix(in srgb, var(--role-linux) 14%, var(--bg)); }
 
   .pill.status {
     font-weight: 700; letter-spacing: .3px; text-transform: uppercase; line-height: 1.2;
@@ -1821,11 +1825,14 @@ function iconSrcBand(name, band) {
   return tintIconBand(name, band, currentTheme());
 }
 
-/* The band a machine's own mark takes: a custom gold is Deploy orange, a client image is
-   Host blue, and everything else is a Workloads-green VM. */
+/* The band a machine's own mark takes: a Linux VM is yellow, a custom gold is Deploy
+   orange, a client image is Host blue, and everything else is a Workloads-green VM.
+   Linux is a FOURTH case rather than a recolour of the other three - what a machine IS
+   still has to be readable from its glyph alone. */
 function serverGlyphBand(s) {
-  if (s && s.imageSource === "custom") return "deploy";
   const img = findImage(s && s.imageId);
+  if (isLinuxImage(img)) return "linux";
+  if (s && s.imageSource === "custom") return "deploy";
   if (img.iconBand) return img.iconBand;
   return img.kind === "client" ? "host" : "work";
 }
@@ -1884,14 +1891,14 @@ const FAMILIES = [
       fg: "#dcdce6", muted: "#8a8a9c", border: "#26262f", borderStrong: "#383843", divider: "#1d1d24",
       accent: "#a78bfa", accentHover: "#bba4fc", accentSoft: "#282040", accentBorder: "#4a3d78", accentFg: "#0e0c14",
       success: "#86dba0", danger: "#f4778e", warn: "#e3b366",
-      bands: { studio: "#8a8a9c", host: "#67d4e8", work: "#86dba0", ident: "#a78bfa", deploy: "#f2a26b" }
+      bands: { studio: "#8a8a9c", host: "#67d4e8", work: "#86dba0", ident: "#a78bfa", deploy: "#f2a26b", linux: "#ded27c" }
     },
     light: {
       bg: "#f4f4f8", elevated: "#ffffff", subtle: "#f9f9fc", hover: "#e9e9f1",
       fg: "#26262f", muted: "#5f5f70", border: "#dcdce6", borderStrong: "#bfbfcd", divider: "#ebebf2",
       accent: "#6d46d6", accentHover: "#5b37bb", accentSoft: "#e7e0fb", accentBorder: "#c2b0f0", accentFg: "#ffffff",
       success: "#2f7d4a", danger: "#bf3350", warn: "#8f6414",
-      bands: { studio: "#5f5f70", host: "#14738a", work: "#2f7d4a", ident: "#6d46d6", deploy: "#ad5f1c" }
+      bands: { studio: "#5f5f70", host: "#14738a", work: "#2f7d4a", ident: "#6d46d6", deploy: "#ad5f1c", linux: "#786b1f" }
     }
   },
   {
@@ -1902,14 +1909,14 @@ const FAMILIES = [
       fg: "#d7dbec", muted: "#8b93ad", border: "#2b2f3d", borderStrong: "#3d4356", divider: "#23262f",
       accent: "#7aa2f7", accentHover: "#93b3fa", accentSoft: "#22304f", accentBorder: "#3d5488", accentFg: "#11141c",
       success: "#9ece6a", danger: "#f7768e", warn: "#e0af68",
-      bands: { studio: "#8b93ad", host: "#7dcfff", work: "#9ece6a", ident: "#bb9af7", deploy: "#ff9e64" }
+      bands: { studio: "#8b93ad", host: "#7dcfff", work: "#9ece6a", ident: "#bb9af7", deploy: "#ff9e64", linux: "#e6de78" }
     },
     light: {
       bg: "#eef1f8", elevated: "#ffffff", subtle: "#f7f9fd", hover: "#e4eaf6",
       fg: "#2c3145", muted: "#626a85", border: "#d7deec", borderStrong: "#b9c3da", divider: "#e6ebf5",
       accent: "#3457c4", accentHover: "#2a49aa", accentSoft: "#dfe6f9", accentBorder: "#a9bcec", accentFg: "#ffffff",
       success: "#3f7a25", danger: "#c0344f", warn: "#9a6b12",
-      bands: { studio: "#626a85", host: "#1d7fa8", work: "#4a8b2f", ident: "#7d4fc0", deploy: "#b8641c" }
+      bands: { studio: "#626a85", host: "#1d7fa8", work: "#4a8b2f", ident: "#7d4fc0", deploy: "#b8641c", linux: "#7a6a12" }
     }
   },
   {
@@ -1920,14 +1927,14 @@ const FAMILIES = [
       fg: "#ece7e1", muted: "#a49a90", border: "#322d28", borderStrong: "#46403a", divider: "#262220",
       accent: "#e0955c", accentHover: "#eda876", accentSoft: "#3a2718", accentBorder: "#6d4a2c", accentFg: "#1a1310",
       success: "#a3b86a", danger: "#e2777c", warn: "#d9ac5e",
-      bands: { studio: "#a49a90", host: "#7fb8c4", work: "#a3b86a", ident: "#c99ad6", deploy: "#e0955c" }
+      bands: { studio: "#a49a90", host: "#7fb8c4", work: "#a3b86a", ident: "#c99ad6", deploy: "#e0955c", linux: "#ded07a" }
     },
     light: {
       bg: "#f7f4f0", elevated: "#fffdfb", subtle: "#faf7f3", hover: "#eee7df",
       fg: "#2e2a26", muted: "#6b625a", border: "#e2dad1", borderStrong: "#c9bfb3", divider: "#ece5dd",
       accent: "#a85f21", accentHover: "#8e4f18", accentSoft: "#f4e3d2", accentBorder: "#dcbf9f", accentFg: "#ffffff",
       success: "#4f7020", danger: "#b8353c", warn: "#96681a",
-      bands: { studio: "#6b625a", host: "#1d6f80", work: "#5a7524", ident: "#8a4aa0", deploy: "#a85f21" }
+      bands: { studio: "#6b625a", host: "#1d6f80", work: "#5a7524", ident: "#8a4aa0", deploy: "#a85f21", linux: "#7d6410" }
     }
   },
 ];
@@ -2375,8 +2382,72 @@ const IMAGE_CATALOG = [
     noServerRoles: true,
     requiresNestedVirt: true,
     defaults: { useDifferencingDisk: false, enableSecureBoot: true, enableVtpm: true, startAfterCreate: true, memoryGB: 16, cpuCount: 8, nestedVirtualization: true }
+  },
+  /* ---- Linux ----------------------------------------------------------------
+     Built by New-Vhdx.ps1 from a distribution cloud image rather than from an ISO,
+     and provisioned by a cloud-init NoCloud seed instead of an answer file.
+
+     Every one of them sets noServerRoles, which is what keeps the roles and features
+     machinery away from them - the same flag Azure Local already uses. They carry the
+     plain vm.svg cube and take the `linux` band, so a Linux machine is yellow on the
+     list where a Windows server is green and a client blue.
+
+     secureBootTemplate is the field that actually matters: these images are signed by
+     Microsoft's third-party UEFI CA, not by the Windows template, and a VM created
+     with the wrong one does not boot. vTPM is off - nothing here uses it, and it is
+     one more thing that can refuse. */
+  {
+    id: "hv-ubuntu-2604",
+    label: "Ubuntu 26.04 LTS",
+    icon: "vm.svg",
+    kind: "linux",
+    osFamily: "linux",
+    distro: "ubuntu",
+    edition: "",
+    experience: "",
+    noServerRoles: true,
+    secureBootTemplate: "MicrosoftUEFICertificateAuthority",
+    defaults: { useDifferencingDisk: true, enableSecureBoot: true, enableVtpm: false, startAfterCreate: true, memoryGB: 2, cpuCount: 2 }
+  },
+  {
+    id: "hv-ubuntu-2404",
+    label: "Ubuntu 24.04 LTS",
+    icon: "vm.svg",
+    kind: "linux",
+    osFamily: "linux",
+    distro: "ubuntu",
+    edition: "",
+    experience: "",
+    noServerRoles: true,
+    secureBootTemplate: "MicrosoftUEFICertificateAuthority",
+    defaults: { useDifferencingDisk: true, enableSecureBoot: true, enableVtpm: false, startAfterCreate: true, memoryGB: 2, cpuCount: 2 }
+  },
+  {
+    /* Debian ships no grub-pc in any trixie cloud variant, so it is UEFI only - there
+       is no Generation 1 fallback to offer. */
+    id: "hv-debian-13",
+    label: "Debian 13 (Trixie)",
+    icon: "vm.svg",
+    kind: "linux",
+    osFamily: "linux",
+    distro: "debian",
+    edition: "",
+    experience: "",
+    noServerRoles: true,
+    secureBootTemplate: "MicrosoftUEFICertificateAuthority",
+    defaults: { useDifferencingDisk: true, enableSecureBoot: true, enableVtpm: false, startAfterCreate: true, memoryGB: 2, cpuCount: 2 }
   }
 ];
+
+/* One predicate, used everywhere a card, a validation or an export has to decide
+   whether it is looking at a Linux machine. Reads osFamily rather than kind so a
+   custom gold can declare itself Linux later without inventing a fourth kind. */
+function isLinuxImage(img) {
+  return !!img && (img.osFamily === "linux" || img.kind === "linux");
+}
+function isLinuxServer(s) {
+  return isLinuxImage(findImage(s && s.imageId));
+}
 
 /** Curated Install-WindowsFeature catalog (roles + role services + features). */
 const ROLE_CATALOG = [
@@ -3546,12 +3617,17 @@ function azureArcAllVmsPrincipal() {
   return (state.azureArcPrincipals || []).length === 1 ? state.azureArcPrincipals[0] : null;
 }
 function effectiveDomainJoinAccount(s) {
+  // A Linux VM never joins, not even under "use for every VM". Joining one means
+  // realmd/sssd and a completely different mechanism from the answer file and the
+  // deferred SYSTEM task, and none of that exists yet.
+  if (isLinuxServer(s)) return null;
   const globalAcc = domainJoinAllVmsAccount();
   if (globalAcc) return globalAcc;
   const dj = (s && s.domainJoin) || {};
   return dj.enabled ? findDomainJoinAccount(dj.accountId) : null;
 }
 function effectiveAzureArcPrincipal(s) {
+  if (isLinuxServer(s)) return null;
   const globalPrincipal = azureArcAllVmsPrincipal();
   if (globalPrincipal) return globalPrincipal;
   const arc = (s && s.azureArc) || {};
@@ -3561,15 +3637,15 @@ function effectiveAzureArcPrincipal(s) {
 function serversForDomainJoinAccount(accountId) {
   const key = String(accountId || "").trim();
   const globalAcc = domainJoinAllVmsAccount();
-  if (globalAcc && (globalAcc.id === key || globalAcc._id === key)) return state.servers.filter(s => s.name);
-  return state.servers.filter(s => s.domainJoin && s.domainJoin.enabled && (s.domainJoin.accountId === key));
+  if (globalAcc && (globalAcc.id === key || globalAcc._id === key)) return state.servers.filter(s => s.name && !isLinuxServer(s));
+  return state.servers.filter(s => s.domainJoin && s.domainJoin.enabled && (s.domainJoin.accountId === key) && !isLinuxServer(s));
 }
 
 function serversForArcPrincipal(principalId) {
   const key = String(principalId || "").trim();
   const globalPrincipal = azureArcAllVmsPrincipal();
-  if (globalPrincipal && (globalPrincipal.id === key || globalPrincipal._id === key)) return state.servers.filter(s => s.name);
-  return state.servers.filter(s => s.azureArc && s.azureArc.enabled && (s.azureArc.principalId === key));
+  if (globalPrincipal && (globalPrincipal.id === key || globalPrincipal._id === key)) return state.servers.filter(s => s.name && !isLinuxServer(s));
+  return state.servers.filter(s => s.azureArc && s.azureArc.enabled && (s.azureArc.principalId === key) && !isLinuxServer(s));
 }
 
 /* VMs added to the host failover cluster (Add-ClusterVirtualMachineRole). Unrelated to the
@@ -4196,6 +4272,9 @@ const state = {
     locale: LOCALE_DEFAULT,
     keyboardLayout: LOCALE_DEFAULT,
     passwordLength: 32,
+    /* One public key for every Linux VM, overridable per machine. Public key only -
+       nothing secret belongs in a config.json that gets passed around. */
+    sshAuthorizedKey: "",
     imageProfiles: defaultImageProfiles()
   },
   domainJoinAccounts: [],
@@ -4713,6 +4792,7 @@ function applyTheme(themeId) {
   /* Two badge hues that predate the band system; keep them on their band so they stay
      consistent with the icon a row carries. */
   set("--role-client", bands.host);
+  set("--role-linux", bands.linux);
   set("--flag-nested", bands.ident);
   /* Secrets are reached from Deploy and the blade's own icon already sits on that band;
      the reveal control takes the same hue rather than a colour invented for it. */
@@ -4989,6 +5069,16 @@ function buildConfig() {
       // An empty custom pick exports nothing - removal that removes no apps is off.
     }
     if (supportsAppCompatFod(s) && s.appCompatFod) row.appCompatFod = true;
+    /* Linux. osFamily is the field Build-Vms.ps1 branches on - it is what tells the
+       builder to render a cloud-init seed ISO instead of writing an unattend.xml into
+       the disk, and to pick the third-party UEFI CA Secure Boot template. */
+    if (isLinuxServer(s)) {
+      row.osFamily = "linux";
+      const sshKey = String(s.sshAuthorizedKey || "").trim() || String(state.defaults.sshAuthorizedKey || "").trim();
+      if (sshKey) row.sshAuthorizedKey = sshKey;
+      const pkgs = String(s.linuxPackages || "").split(/[\s,]+/).map(x => x.trim()).filter(Boolean);
+      if (pkgs.length) row.packages = [...new Set(pkgs)];
+    }
     // "Use for every VM" resolves at export time into per-VM rows, exactly like the
     // cluster blade's addAllVms - Build-Vms.ps1 only ever sees per-VM domainJoin/azureArc.
     const globalDjAccount = domainJoinAllVmsAccount();
@@ -5302,6 +5392,9 @@ function decodeState(text) {
     locale: LOCALE_DEFAULT,
     keyboardLayout: LOCALE_DEFAULT,
     passwordLength: 32,
+    /* One public key for every Linux VM, overridable per machine. Public key only -
+       nothing secret belongs in a config.json that gets passed around. */
+    sshAuthorizedKey: "",
     imageProfiles: defaultImageProfiles()
   }, parsed.defaults || {});
   delete state.defaults.azureArc;
@@ -6060,6 +6153,11 @@ function renderGeneral() {
         </select>`)}
       </div>`, "", true)}
 
+    ${gsCard("gs-sshkey", "secret.svg", "Linux SSH key", (String(d.sshAuthorizedKey || "").trim() ? "set" : "none"), `
+      <label class="field"><span>Default SSH authorized key</span>
+        <input data-d="sshAuthorizedKey" value="${esc(d.sshAuthorizedKey || "")}" placeholder="ssh-ed25519 AAAAC3Nza... user@host" spellcheck="false">
+        <span class="hint">Public key only. Every Linux VM inherits this unless its own card overrides it. A Linux VM with no key anywhere can only be reached with its password, at the Hyper-V console.</span>
+      </label>`)}
     ${gsCard("gs-paths", "storage.svg", "Paths", "Gold VHDX, VM/VHD paths, SxS source", `
       <div class="grid-2" style="align-items:start">
         ${field(fieldLabel("vm.svg", "VM path"), pathField("vmPath", d.vmPath, "blank = Hyper-V host default", `class="keep-border ${inv("d:vmPath")}"${invAria("d:vmPath")}`))}
@@ -6456,6 +6554,10 @@ function supportsAppRemoval(imageId) {
 
 function renderServerRolesSection(s) {
   const img = findImage(s.imageId);
+  // Azure Local gets a section explaining why it has no roles. A Linux machine gets
+  // nothing at all: "no Windows roles here" is not news on a Debian box, it is just a
+  // Windows-shaped hole in the card.
+  if (isLinuxImage(img)) return "";
   if (img.noServerRoles) {
     const open = isNestedOpen(s._id + "-roles", false);
     return `
@@ -6570,6 +6672,7 @@ function renderServerRolesSection(s) {
 function renderServerArcSection(s) { return ""; }
 
 function renderServerAppsSection(s) {
+  if (isLinuxServer(s)) return "";
   if (!supportsAppRemoval(s.imageId)) return "";
   const open = isNestedOpen(s._id + "-apps", false);
   const total = APP_REMOVAL_CATALOG.length;
@@ -6883,7 +6986,8 @@ function renderServerCard(s) {
   const djAccount = effectiveDomainJoinAccount(s);
   const arcPrincipal = effectiveAzureArcPrincipal(s);
   const isvc = Object.assign(defaultIntegrationServices(), s.integrationServices || {});
-  const pillClass = img.kind === "core" ? "core" : img.kind === "client" ? "client" : "desktop";
+  const pillClass = img.kind === "core" ? "core" : img.kind === "client" ? "client" : img.kind === "linux" ? "linux" : "desktop";
+  const isLinux = isLinuxImage(img);
   const isOpen = isNestedOpen(s._id + "-is", false);
   const templateOpen = isNestedOpen(s._id + "-template", false);
   const appliedTemplate = VM_TEMPLATES[s.templateId] || null;
@@ -7054,18 +7158,19 @@ function renderServerCard(s) {
       <div class="section collapsible ${localOpen ? "" : "collapsed"}">
         <div class="section-head" data-nested="${esc(s._id)}-local">
           <span class="section-chevron">${chevron()}</span>
-          <img src="${iconSrc("users.svg")}"> Local admin
-          <span class="section-meta">${adminOnly ? "built-in Administrator only" : esc(s.localUserName || "no user")}</span>
+          <img src="${iconSrc("users.svg")}"> ${isLinux ? "Login" : "Local admin"}
+          <span class="section-meta">${isLinux ? esc(s.localUserName || "no user") : (adminOnly ? "built-in Administrator only" : esc(s.localUserName || "no user"))}</span>
         </div>
         <div class="section-body">
           <div style="margin-top:12px">
-            ${toggle(`data-s="${esc(s._id)}" data-k="builtInAdminOnly"`, "Built-in Administrator only (no second local account)", adminOnly, isDc || adminOnlyLocked, isDc
+            ${isLinux ? "" : toggle(`data-s="${esc(s._id)}" data-k="builtInAdminOnly"`, "Built-in Administrator only (no second local account)", adminOnly, isDc || adminOnlyLocked, isDc
               ? "Forced on — this VM installs AD DS. Promoting a domain controller destroys the local SAM, so any extra local admin is deleted on promotion anyway."
               : adminOnlyLocked
               ? `Locked off — ${esc(displayImageLabel)} is a client image. Its OOBE needs a provisioned <code>&lt;LocalAccounts&gt;</code> user; with only the built-in Administrator setup stalls on the account screen and the deployment breaks.`
               : adminOnly
               ? `${findImage(s.imageId).kind === "client" ? "On — an AVD session host run like a server." : "Default for Windows Server."} The answer file provisions no <code>&lt;LocalAccounts&gt;</code> — the password below lands on <code>Built-in\\Administrator</code>, which becomes the only way in.`
               : "Off — a second local admin is provisioned next to the built-in Administrator, and both end up with the password below.")}
+            ${isLinux ? `<p class="hint">cloud-init provisions this user with passwordless sudo. The password is kept for the Hyper-V console — an SSH key is the way in over the network.</p>` : ""}
           </div>
           <div class="grid-2" style="margin-top:12px">
               ${field("Local user", (() => {
@@ -7099,6 +7204,15 @@ function renderServerCard(s) {
                 <span class="hint">${passwordLength()} chars · length set in General Settings</span>`;
               })())}
           </div>
+          ${!isLinux ? "" : `
+          <div class="grid-1" style="margin-top:12px">
+            ${field("SSH authorized key", `<input data-s="${esc(s._id)}" data-k="sshAuthorizedKey" value="${esc(s.sshAuthorizedKey || "")}" placeholder="ssh-ed25519 AAAAC3Nza... user@host" spellcheck="false">
+              <span class="hint">Public key only. Blank falls back to the key in General Settings; with neither, the password is the only way in.</span>`)}
+          </div>
+          <div class="grid-1" style="margin-top:12px">
+            ${field("Extra packages", `<input data-s="${esc(s._id)}" data-k="linuxPackages" value="${esc(s.linuxPackages || "")}" placeholder="htop qemu-guest-agent nginx" spellcheck="false">
+              <span class="hint">Space or comma separated, installed by cloud-init on first boot. The VM needs a network path to the distribution mirrors.</span>`)}
+          </div>`}
         </div>
       </div>
 
@@ -7249,15 +7363,16 @@ function renderServerCard(s) {
         <div class="section-head" data-nested="${esc(s._id)}-boot">
           <span class="section-chevron">${chevron()}</span>
           <img src="${iconSrc("secure-boot.svg")}"> Boot / disk
-          <span class="section-meta">${s.useDifferencingDisk ? "Differencing" : "Full copy"}${s.enableSecureBoot ? " · Secure Boot" : ""}${s.enableVtpm ? " · vTPM" : ""}</span>
+          <span class="section-meta">${s.useDifferencingDisk ? "Differencing" : "Full copy"}${s.enableSecureBoot ? " · Secure Boot" : ""}${!isLinux && s.enableVtpm ? " · vTPM" : ""}</span>
         </div>
         <div class="section-body">
           <div class="toggle-grid" style="margin-top:12px">
             ${toggleWithWarn(`data-s="${esc(s._id)}" data-k="useDifferencingDisk"`, "Differencing disk", s.useDifferencingDisk, DIFF_DISK_TIP)}
             ${toggle(`data-s="${esc(s._id)}" data-k="enableSecureBoot"`, "Secure Boot", s.enableSecureBoot)}
-            ${toggle(`data-s="${esc(s._id)}" data-k="enableVtpm"`, "vTPM (Win11)", s.enableVtpm)}
+            ${isLinux ? "" : toggle(`data-s="${esc(s._id)}" data-k="enableVtpm"`, "vTPM (Win11)", s.enableVtpm)}
             ${toggle(`data-s="${esc(s._id)}" data-k="startAfterCreate"`, "Start after create", s.startAfterCreate)}
           </div>
+          ${isLinux && s.enableSecureBoot ? `<p class="hint" style="margin-top:8px">Secure Boot uses the <code>MicrosoftUEFICertificateAuthority</code> template — these images are signed by the third-party UEFI CA, not by the Windows one. The Windows template does not boot them.</p>` : ""}
           <p class="hint" style="margin-top:8px">Default copies the gold image to an independent disk — enable Differencing only for labs (see tooltip).</p>
         </div>
       </div>
@@ -10581,7 +10696,10 @@ function closeMemberPicker() {
 function renderMemberPickerList() {
   const ctx = state.memberPicker;
   const filter = (document.getElementById("memberPickerFilter").value || "").toLowerCase().trim();
-  const names = state.servers.map(s => s.name).filter(Boolean);
+  // The domain-join and Arc pickers must not offer a Linux VM; the VHD Set picker may,
+  // because a shared disk does not care what boots off it.
+  const excludeLinux = (ctx.mode === "domainJoin" || ctx.mode === "azureArc");
+  const names = state.servers.filter(s => s.name && !(excludeLinux && isLinuxServer(s))).map(s => s.name);
   const list = document.getElementById("memberPickerList");
   const filtered = names.filter(n => !filter || n.includes(filter));
   list.innerHTML = filtered.length ? filtered.map(n => {
