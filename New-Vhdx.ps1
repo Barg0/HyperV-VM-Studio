@@ -231,6 +231,95 @@ if ($enableLogFile -and -not (Test-Path -Path $logFileDirectory)) {
     New-Item -ItemType Directory -Path $logFileDirectory -Force | Out-Null
 }
 
+# ---------------------------[ Studio Palette ]---------------------------
+#
+# Kaido Dark, the studio's default theme, as the console's palette.
+#
+# Every hex below is lifted verbatim from FAMILIES[kaido].dark in
+# html\hyperv-vm-studio.html - which is already this project's default theme
+# (data-theme="kaido_dark", THEME_DEFAULT = "kaido") - with one stated exception,
+# `yellow`, documented where it is defined. A run and the studio that designed it are
+# the same colours rather than two guesses at them.
+#
+# Truecolor where the console does virtual terminal processing, the nearest of the
+# sixteen named ConsoleColors where it does not. Everything that reaches the screen
+# goes through Write-Studio, which is what makes the theme one table instead of a
+# hundred scattered -ForegroundColor arguments.
+#
+# The logo is deliberately NOT part of this: Get-ServerLogoLines keeps its own
+# base64 ANSI art and the colours baked into it.
+
+$script:studioPalette = @{
+    bg       = "#16171e"; elevated  = "#1d1f28"; subtle = "#1a1c24"; hover = "#262a38"
+    fg       = "#d7dbec"; muted     = "#8b93ad"
+    border   = "#2b2f3d"; borderStrong = "#3d4356"; divider = "#23262f"
+    accent   = "#7aa2f7"; accentHover = "#93b3fa"; accentSoft = "#22304f"; accentFg = "#11141c"
+    success  = "#9ece6a"; danger    = "#f7768e"; warn = "#e0af68"
+    bandHost = "#7dcfff"; bandIdent = "#bb9af7"; bandWork = "#9ece6a"; bandDeploy = "#ff9e64"
+    # THE ONE VALUE IN THIS TABLE THAT IS NOT THE STUDIO'S.
+    #
+    # Kaido has exactly two warm colours - warn #e0af68, a gold, and deploy #ff9e64, an
+    # orange - and a log needs three warm steps, because `info` is the commonest tag
+    # there is and it has to sit below `warn` without either reading as the other.
+    #
+    # Pick it by HUE, not by eye. 30 degrees is orange, 45 gold, 60 pure yellow; this is
+    # 56, far enough from warn's 35 to separate at a glance and short of acid lemon.
+    yellow   = "#e6de78"
+}
+
+# One per key, for a console that cannot do truecolor. Chosen for the JOB the hex does,
+# not the nearest RGB: muted and borderStrong both land on DarkGray because both are
+# "quieter than the text", and that is what has to survive.
+$script:studioFallback = @{
+    bg       = "Black";    elevated  = "Black";  subtle = "Black";     hover = "Black"
+    fg       = "Gray";     muted     = "DarkGray"
+    border   = "DarkGray"; borderStrong = "DarkGray"; divider = "DarkGray"
+    accent   = "Cyan";     accentHover = "White"; accentSoft = "DarkBlue"; accentFg = "Black"
+    success  = "Green";    danger    = "Red";     warn = "DarkYellow"
+    bandHost = "Cyan";     bandIdent = "Magenta"; bandWork = "Green";   bandDeploy = "Yellow"
+    yellow   = "Yellow"
+}
+
+function ConvertFrom-HexColor {
+    param([string]$Hex)
+
+    $h = $Hex.TrimStart("#")
+    return @(
+        [Convert]::ToInt32($h.Substring(0, 2), 16),
+        [Convert]::ToInt32($h.Substring(2, 2), 16),
+        [Convert]::ToInt32($h.Substring(4, 2), 16)
+    )
+}
+
+function Write-Studio {
+    # The one write in this script, apart from the logo's own fallback. Takes a palette
+    # KEY, never a colour: a call site that names a colour is a call site the theme
+    # cannot reach.
+    param(
+        [AllowEmptyString()][string]$Text = "",
+        [string]$Key = "fg",
+        [switch]$NoNewline
+    )
+
+    $hex = [string]$script:studioPalette[$Key]
+    if ([string]::IsNullOrWhiteSpace($hex)) { $hex = [string]$script:studioPalette["fg"] }
+
+    # Cheap after the first call - Enable-MenuVtProcessing caches on $script:menuVtEnabled
+    # - and it has to be here rather than only in the menu header, because log lines print
+    # long before any header does.
+    Enable-MenuVtProcessing
+    if (Test-MenuAnsiSupported) {
+        $rgb = ConvertFrom-HexColor -Hex $hex
+        $escape = [char]27
+        Write-Host ("{0}[38;2;{1};{2};{3}m{4}{0}[0m" -f $escape, $rgb[0], $rgb[1], $rgb[2], $Text) -NoNewline:$NoNewline
+        return
+    }
+
+    $named = [string]$script:studioFallback[$Key]
+    if ([string]::IsNullOrWhiteSpace($named)) { $named = "Gray" }
+    Write-Host $Text -NoNewline:$NoNewline -ForegroundColor $named
+}
+
 # ---------------------------[ Logging Function ]---------------------------
 function Write-Log {
     [CmdletBinding()]
@@ -276,21 +365,23 @@ function Write-Log {
     if ([string]::IsNullOrWhiteSpace($shown)) { $shown = "error" }
     $rawTag = $shown.PadRight(5)
 
+    # Palette keys, not ConsoleColor names - see Write-Studio above. The pairing this
+    # has to preserve is info BELOW warn: info is the commonest tag in any run, warn is
+    # the one that wants to be noticed, and the two sit next to each other on screen.
+    # Kaido's own two warm colours are one step apart and read as orange-on-orange, so
+    # the palette carries a third - `yellow`, the only value in it that is not the
+    # studio's. info takes it and warn keeps Kaido's gold.
     $color = switch ($shown) {
-        "start" { "Cyan" }
-        "get"   { "Blue" }
-        "run"   { "Magenta" }
-        "info"  { "Yellow" }
-        # There is no orange in ConsoleColor. DarkYellow is ANSI 3, which every current
-        # scheme renders orange-brown, against info's Yellow = ANSI 11, the pale bright
-        # one - so warn reads as the louder of the two, not the dimmer. That colour used
-        # to belong to debug, which is now DarkGray, where a diagnostic tag belongs.
-        "warn"  { "DarkYellow" }
-        "o.k."  { "Green" }
-        "error" { "Red" }
-        "debug" { "DarkGray" }
-        "end"   { "Cyan" }
-        default { "White" }
+        "start" { "accent" }
+        "get"   { "bandHost" }
+        "run"   { "bandIdent" }
+        "info"  { "yellow" }
+        "warn"  { "warn" }
+        "o.k."  { "success" }
+        "error" { "danger" }
+        "debug" { "muted" }
+        "end"   { "accent" }
+        default { "fg" }
     }
 
     $logMessage = "$timestamp [ $rawTag ] $Message"
@@ -317,11 +408,13 @@ function Write-Log {
         }
     }
 
-    Write-Host "$timestamp " -NoNewline
-    Write-Host "[ " -NoNewline -ForegroundColor White
-    Write-Host "$rawTag" -NoNewline -ForegroundColor $color
-    Write-Host " ] " -NoNewline -ForegroundColor White
-    Write-Host "$Message"
+    # The timestamp and the brackets are furniture, not content: they take `muted` so
+    # the tag and the message are what the eye lands on.
+    Write-Studio -Text "$timestamp " -Key "muted" -NoNewline
+    Write-Studio -Text "[ " -Key "muted" -NoNewline
+    Write-Studio -Text "$rawTag" -Key $color -NoNewline
+    Write-Studio -Text " ] " -Key "muted" -NoNewline
+    Write-Studio -Text "$Message" -Key "fg"
 }
 
 # ---------------------------[ Exit Function ]---------------------------
@@ -1247,9 +1340,9 @@ function Write-FastfetchInfoRow {
         Write-Host (" " * $IndentWidth) -NoNewline
     }
     $paddedLabel = ("{0,-$LabelWidth}" -f $Label)
-    Write-Host $paddedLabel -NoNewline -ForegroundColor DarkCyan
-    Write-Host ": " -NoNewline -ForegroundColor DarkCyan
-    Write-Host $Value -ForegroundColor Gray
+    Write-Studio -Text $paddedLabel -Key "accent" -NoNewline
+    Write-Studio -Text ": " -Key "accent" -NoNewline
+    Write-Studio -Text $Value -Key "fg"
 }
 
 function Show-MenuHeader {
@@ -1329,7 +1422,7 @@ function Show-MenuHeader {
                 continue
             }
             if ($row.Accent) {
-                Write-Host $row.Value -ForegroundColor White
+                Write-Studio -Text $row.Value -Key "fg"
             }
             else {
                 Write-FastfetchInfoRow -Label $row.Label -Value $row.Value -LabelWidth $labelWidth
@@ -1341,7 +1434,7 @@ function Show-MenuHeader {
     }
 
     Write-Host ""
-    Write-Host ("  " + ("-" * 62)) -ForegroundColor DarkGray
+    Write-Studio -Text ("  " + ("-" * 62)) -Key "muted"
     Write-Host ""
 }
 
@@ -1379,9 +1472,9 @@ function Show-Menu {
         }
 
         if (-not [string]::IsNullOrWhiteSpace($Heading)) {
-            Write-Host "  $Heading" -ForegroundColor White
+            Write-Studio -Text "  $Heading" -Key "fg"
             if (-not [string]::IsNullOrWhiteSpace($HeadingHint)) {
-                Write-Host "  $HeadingHint" -ForegroundColor DarkGray
+                Write-Studio -Text "  $HeadingHint" -Key "muted"
             }
             Write-Host ""
         }
@@ -1397,7 +1490,7 @@ function Show-Menu {
         $windowEnd = [Math]::Min(($windowStart + $maxVisible - 1), ($Items.Count - 1))
 
         if ($windowStart -gt 0) {
-            Write-Host "    ..." -ForegroundColor DarkGray
+            Write-Studio -Text "    ..." -Key "muted"
         }
 
         for ($i = $windowStart; $i -le $windowEnd; $i++) {
@@ -1406,26 +1499,26 @@ function Show-Menu {
             $selected = ($i -eq $index)
 
             if ($selected) {
-                Write-Host "  > " -NoNewline -ForegroundColor Cyan
-                Write-Host $label -ForegroundColor White
+                Write-Studio -Text "  > " -Key "accent" -NoNewline
+                Write-Studio -Text $label -Key "fg"
             }
             else {
                 Write-Host "    " -NoNewline
-                Write-Host $label -ForegroundColor Gray
+                Write-Studio -Text $label -Key "muted"
             }
         }
 
         if ($windowEnd -lt ($Items.Count - 1)) {
-            Write-Host "    ..." -ForegroundColor DarkGray
+            Write-Studio -Text "    ..." -Key "muted"
         }
 
         Write-Host ""
-        Write-Host ("  " + ("-" * 62)) -ForegroundColor DarkGray
+        Write-Studio -Text ("  " + ("-" * 62)) -Key "muted"
         if ($useRawUi) {
-            Write-Host "  Up/Down move   PgUp/PgDn/Home/End jump   Enter select   Esc/Q cancel" -ForegroundColor DarkGray
+            Write-Studio -Text "  Up/Down move   PgUp/PgDn/Home/End jump   Enter select   Esc/Q cancel" -Key "muted"
         }
         else {
-            Write-Host "  Enter number + Enter   (Q to cancel)" -ForegroundColor DarkGray
+            Write-Studio -Text "  Enter number + Enter   (Q to cancel)" -Key "muted"
         }
         Write-Host ""
 
@@ -1528,10 +1621,10 @@ function Show-MultiSelectMenu {
         if (-not [string]::IsNullOrWhiteSpace($NoteHeadline)) {
             if (Test-MenuAnsiSupported) {
                 $esc = [char]27
-                Write-Host "  $esc[1m$NoteHeadline$esc[0m" -ForegroundColor White
+                Write-Studio -Text "  $esc[1m$NoteHeadline$esc[0m" -Key "fg"
             }
             else {
-                Write-Host "  $NoteHeadline" -ForegroundColor White
+                Write-Studio -Text "  $NoteHeadline" -Key "fg"
             }
             Write-Host ""
         }
@@ -1540,7 +1633,7 @@ function Show-MultiSelectMenu {
             foreach ($line in $Note) {
                 # A blank entry is a paragraph break, not two spaces of trailing whitespace.
                 if ([string]::IsNullOrWhiteSpace($line)) { Write-Host "" }
-                else { Write-Host "  $line" -ForegroundColor DarkGray }
+                else { Write-Studio -Text "  $line" -Key "muted" }
             }
             Write-Host ""
         }
@@ -1554,12 +1647,12 @@ function Show-MultiSelectMenu {
             if ($item.IsContinue) {
                 Write-Host ""
                 if ($isSelectedRow) {
-                    Write-Host "  $indent> " -NoNewline -ForegroundColor Cyan
-                    Write-Host $item.Label -ForegroundColor White
+                    Write-Studio -Text "  $indent> " -Key "accent" -NoNewline
+                    Write-Studio -Text $item.Label -Key "fg"
                 }
                 else {
                     Write-Host "    $indent" -NoNewline
-                    Write-Host $item.Label -ForegroundColor Gray
+                    Write-Studio -Text $item.Label -Key "muted"
                 }
                 continue
             }
@@ -1567,12 +1660,12 @@ function Show-MultiSelectMenu {
             $section = [string]$item.Section
             if (-not [string]::IsNullOrWhiteSpace($section) -and $section -ne $lastSection) {
                 if ($null -ne $lastSection) { Write-Host "" }
-                Write-Host "  $section" -ForegroundColor White
+                Write-Studio -Text "  $section" -Key "fg"
                 if ($SectionNotes.ContainsKey($section)) {
                     Write-Host ""
                     foreach ($line in @($SectionNotes[$section])) {
                         if ([string]::IsNullOrWhiteSpace($line)) { Write-Host "" }
-                        else { Write-Host "  $line" -ForegroundColor DarkGray }
+                        else { Write-Studio -Text "  $line" -Key "muted" }
                     }
                 }
                 Write-Host ""
@@ -1584,22 +1677,22 @@ function Show-MultiSelectMenu {
             $label = "$mark  $($item.Label)"
 
             if ($isSelectedRow) {
-                Write-Host "  $indent> " -NoNewline -ForegroundColor Cyan
-                Write-Host $label -ForegroundColor White
+                Write-Studio -Text "  $indent> " -Key "accent" -NoNewline
+                Write-Studio -Text $label -Key "fg"
             }
             else {
                 Write-Host "    $indent" -NoNewline
-                Write-Host $label -ForegroundColor Gray
+                Write-Studio -Text $label -Key "muted"
             }
         }
 
         Write-Host ""
-        Write-Host ("  " + ("-" * 62)) -ForegroundColor DarkGray
+        Write-Studio -Text ("  " + ("-" * 62)) -Key "muted"
         if ($useRawUi) {
-            Write-Host "  Up/Down move   Space toggle   Enter continue   Esc/Q cancel" -ForegroundColor DarkGray
+            Write-Studio -Text "  Up/Down move   Space toggle   Enter continue   Esc/Q cancel" -Key "muted"
         }
         else {
-            Write-Host "  Number toggles, Enter continues, Q cancels" -ForegroundColor DarkGray
+            Write-Studio -Text "  Number toggles, Enter continues, Q cancels" -Key "muted"
         }
         Write-Host ""
 
@@ -1709,44 +1802,44 @@ function Show-VhdxConfigForm {
     while ($true) {
         Show-MenuHeader -Title $Title -Subtitle $Subtitle -StatusLines $StatusLines
 
-        Write-Host "  Disk size (GB)" -ForegroundColor White
-        Write-Host "  Editable - type digits to change it, Backspace deletes." -ForegroundColor DarkGray
+        Write-Studio -Text "  Disk size (GB)" -Key "fg"
+        Write-Studio -Text "  Editable - type digits to change it, Backspace deletes." -Key "muted"
         Write-Host ""
         if ($cursor -eq 0) {
-            Write-Host "    > " -NoNewline -ForegroundColor Cyan
-            Write-Host "$($sizeText)_" -NoNewline -ForegroundColor White
-            Write-Host "   (default $DefaultSizeGB, range $MinSizeGB-$MaxSizeGB)" -ForegroundColor DarkGray
+            Write-Studio -Text "    > " -Key "accent" -NoNewline
+            Write-Studio -Text "$($sizeText)_" -Key "fg" -NoNewline
+            Write-Studio -Text "   (default $DefaultSizeGB, range $MinSizeGB-$MaxSizeGB)" -Key "muted"
         }
         else {
             Write-Host "      " -NoNewline
             $shownSize = if ([string]::IsNullOrWhiteSpace($sizeText)) { "$DefaultSizeGB" } else { $sizeText }
-            Write-Host $shownSize -ForegroundColor Gray
+            Write-Studio -Text $shownSize -Key "muted"
         }
         Write-Host ""
-        Write-Host "  Type" -ForegroundColor White
+        Write-Studio -Text "  Type" -Key "fg"
         for ($i = 0; $i -lt $typeOptions.Count; $i++) {
             $opt = $typeOptions[$i]
             $rowIndex = $i + 1
             $mark = if ($opt.Id -eq $selectedType) { "(*)" } else { "( )" }
             $label = "$mark $($opt.Label)  - $($opt.Description)"
             if ($cursor -eq $rowIndex) {
-                Write-Host "    > " -NoNewline -ForegroundColor Cyan
-                Write-Host $label -ForegroundColor White
+                Write-Studio -Text "    > " -Key "accent" -NoNewline
+                Write-Studio -Text $label -Key "fg"
             }
             else {
                 Write-Host "      " -NoNewline
-                Write-Host $label -ForegroundColor Gray
+                Write-Studio -Text $label -Key "muted"
             }
         }
 
         if ($errorMessage) {
             Write-Host ""
-            Write-Host "  $errorMessage" -ForegroundColor Yellow
+            Write-Studio -Text "  $errorMessage" -Key "warn"
         }
 
         Write-Host ""
-        Write-Host ("  " + ("-" * 62)) -ForegroundColor DarkGray
-        Write-Host "  Up/Down move   Space select type   Type digits for size   Enter confirm   Esc cancel" -ForegroundColor DarkGray
+        Write-Studio -Text ("  " + ("-" * 62)) -Key "muted"
+        Write-Studio -Text "  Up/Down move   Space select type   Type digits for size   Enter confirm   Esc cancel" -Key "muted"
         Write-Host ""
 
         $key = $Host.UI.RawUI.ReadKey("NoEcho,IncludeKeyDown")
@@ -1868,12 +1961,12 @@ function Read-ConsolePath {
         [string]$DefaultPath
     )
 
-    Write-Host "  $Prompt" -ForegroundColor White
+    Write-Studio -Text "  $Prompt" -Key "fg"
     if (-not [string]::IsNullOrWhiteSpace($DefaultPath)) {
-        Write-Host "    (blank keeps default: $DefaultPath)" -ForegroundColor DarkGray
+        Write-Studio -Text "    (blank keeps default: $DefaultPath)" -Key "muted"
     }
     Write-Host ""
-    Write-Host "    > " -NoNewline -ForegroundColor Cyan
+    Write-Studio -Text "    > " -Key "accent" -NoNewline
 
     # Capture the input row so it can be re-drawn on after the footer prints
     # below it - console output is linear, so drawing order isn't display order.
@@ -1889,8 +1982,8 @@ function Read-ConsolePath {
     # is the same breathing room every menu leaves above its footer divider.
     Write-Host ""
     Write-Host ""
-    Write-Host ("  " + ("-" * 62)) -ForegroundColor DarkGray
-    Write-Host "  Type a path, then Enter   (blank keeps default)" -ForegroundColor DarkGray
+    Write-Studio -Text ("  " + ("-" * 62)) -Key "muted"
+    Write-Studio -Text "  Type a path, then Enter   (blank keeps default)" -Key "muted"
     Write-Host ""
 
     if ($null -ne $inputPosition) {
@@ -1924,7 +2017,7 @@ function Read-BoundedInt {
                 return $value
             }
         }
-        Write-Host "  Enter a whole number between $MinValue and $MaxValue." -ForegroundColor Yellow
+        Write-Studio -Text "  Enter a whole number between $MinValue and $MaxValue." -Key "warn"
     }
 }
 
@@ -2100,7 +2193,7 @@ function Show-IsoFilePicker {
         $windowEnd = [Math]::Min(($windowStart + $maxVisible - 1), ($entries.Count - 1))
 
         if ($windowStart -gt 0) {
-            Write-Host "    ..." -ForegroundColor DarkGray
+            Write-Studio -Text "    ..." -Key "muted"
         }
 
         for ($i = $windowStart; $i -le $windowEnd; $i++) {
@@ -2120,26 +2213,26 @@ function Show-IsoFilePicker {
             }
 
             if ($selected) {
-                Write-Host "  > " -NoNewline -ForegroundColor Cyan
-                Write-Host $entry.Label -ForegroundColor White
+                Write-Studio -Text "  > " -Key "accent" -NoNewline
+                Write-Studio -Text $entry.Label -Key "fg"
             }
             else {
                 Write-Host $prefix -NoNewline
-                Write-Host $entry.Label -ForegroundColor $color
+                Write-Studio -Text $entry.Label -Key $color
             }
         }
 
         if ($windowEnd -lt ($entries.Count - 1)) {
-            Write-Host "    ..." -ForegroundColor DarkGray
+            Write-Studio -Text "    ..." -Key "muted"
         }
 
         Write-Host ""
-        Write-Host ("  " + ("-" * 62)) -ForegroundColor DarkGray
+        Write-Studio -Text ("  " + ("-" * 62)) -Key "muted"
         if ($useRawUi) {
-            Write-Host "  Up/Down move   Enter open/select   Backspace up   Esc cancel" -ForegroundColor DarkGray
+            Write-Studio -Text "  Up/Down move   Enter open/select   Backspace up   Esc cancel" -Key "muted"
         }
         else {
-            Write-Host "  Number + Enter selects   B = up   Q = cancel" -ForegroundColor DarkGray
+            Write-Studio -Text "  Number + Enter selects   B = up   Q = cancel" -Key "muted"
         }
         Write-Host ""
 
@@ -2313,6 +2406,21 @@ function Start-InteractiveConfiguration {
         [int[]]$CurrentMultiSessionImageIndexes = @(),
         [int[]]$CurrentAzureEditionImageIndexes = @()
     )
+
+    # The first blade. Everything below this point is the Windows path; Linux returns
+    # its own configuration object and the caller branches on OsFamily.
+    $familyItems = @(
+        [PSCustomObject]@{ Id = "Windows"; Label = "Windows  - from installation media (ISO)" }
+        [PSCustomObject]@{ Id = "Linux";   Label = "Linux    - from a distribution cloud image (downloaded)" }
+    )
+    $familyId = Show-Menu -Title "What kind of gold is this?" -Items $familyItems `
+        -Heading "Operating system" -HeadingHint "Windows builds from an ISO; Linux fetches a cloud image"
+    if ($null -eq $familyId) { return $null }
+
+    if ($familyId -eq "Linux") {
+        return Start-LinuxInteractiveConfiguration -CurrentLocale $CurrentLocale `
+            -CurrentKeyboard $CurrentKeyboard -CurrentOutputDirectory $CurrentOutputDirectory
+    }
 
     $isoCandidates = @(Get-MountedIsoDriveCandidates)
     $pickerItems = @()
@@ -2585,7 +2693,7 @@ function Start-InteractiveConfiguration {
 
     # Final confirmation screen - every selected setting, then Continue/Cancel.
     $renderSummary = {
-        Write-Host "  Source" -ForegroundColor White
+        Write-Studio -Text "  Source" -Key "fg"
         Write-FastfetchInfoRow -Label "iso"      -Value $isoStatus -LabelWidth 24 -IndentWidth 2
         Write-FastfetchInfoRow -Label "target"   -Value $targetId -LabelWidth 24 -IndentWidth 2
         Write-FastfetchInfoRow -Label "editions" -Value $editionsSummary -LabelWidth 24 -IndentWidth 2
@@ -2603,14 +2711,14 @@ function Start-InteractiveConfiguration {
         }
         Write-FastfetchInfoRow -Label "output"   -Value $outputDirectory -LabelWidth 24 -IndentWidth 2
         Write-Host ""
-        Write-Host "  Region" -ForegroundColor White
+        Write-Studio -Text "  Region" -Key "fg"
         Write-FastfetchInfoRow -Label "locale"    -Value $localeSummary -LabelWidth 24 -IndentWidth 2
         Write-FastfetchInfoRow -Label "time zone" -Value $timeZoneSummary -LabelWidth 24 -IndentWidth 2
         Write-FastfetchInfoRow -Label "applied" -Value $(if ($targetId -eq "AzureLocal") {
             "At the VM's first boot - Azure Local overwrites a baked locale"
         } else { "Baked into the image offline" }) -LabelWidth 24 -IndentWidth 2
         Write-Host ""
-        Write-Host "  Features" -ForegroundColor White
+        Write-Studio -Text "  Features" -Key "fg"
         Write-FastfetchInfoRow -Label "remote desktop (rdp)" -Value $(if ($enableRdp) { "Enabled" } else { "Disabled" }) -LabelWidth 24 -IndentWidth 2
         Write-FastfetchInfoRow -Label "icmp echo (ping)"     -Value $(if ($enablePing) { "Enabled" } else { "Disabled" }) -LabelWidth 24 -IndentWidth 2
         Write-FastfetchInfoRow -Label "block sign-in imes"   -Value $(if ($blockSignIn) { "Enabled" } else { "Disabled" }) -LabelWidth 24 -IndentWidth 2
@@ -2627,11 +2735,11 @@ function Start-InteractiveConfiguration {
             Write-FastfetchInfoRow -Label "power plan" -Value $(if ($setVmPowerPlan) { "High performance, display/sleep never, no hibernation" } else { "Windows default (Balanced)" }) -LabelWidth 24 -IndentWidth 2
         }
         Write-Host ""
-        Write-Host "  Disk" -ForegroundColor White
+        Write-Studio -Text "  Disk" -Key "fg"
         Write-FastfetchInfoRow -Label "vhdx size" -Value "$vhdSizeGB GB" -LabelWidth 24 -IndentWidth 2
         Write-FastfetchInfoRow -Label "vhdx type" -Value $vhdType -LabelWidth 24 -IndentWidth 2
         Write-Host ""
-        Write-Host ("  " + ("-" * 62)) -ForegroundColor DarkGray
+        Write-Studio -Text ("  " + ("-" * 62)) -Key "muted"
         Write-Host ""
     }
 
@@ -2669,6 +2777,1635 @@ function Start-InteractiveConfiguration {
         MultiSessionImageIndexes     = @($multiSessionIndexes)
         AzureEditionImageIndexes     = @($azureEditionIndexes)
     }
+}
+
+# ---------------------------[ Image Download ]---------------------------
+#
+# Cloud images are fetched by this script rather than by hand, which means a progress
+# bar, which on Windows PowerShell 5.1 means NOT using Invoke-WebRequest.
+#
+# The reason is written down in guest-files\GuestProvision.ps1 as well: IWR repaints
+# its Write-Progress bar per chunk and the console I/O dominates, so a large download
+# runs many times slower than the link. Setting $ProgressPreference alone fixes the
+# speed and leaves no progress at all. 5.1's IWR also has no -Resume and no retry.
+#
+# So the bytes are moved by hand with HttpWebRequest. Owning the read loop is what
+# makes every number on the bar available - bytes, rate, ETA - and it lets the SHA256
+# run over the same buffers on the way past, which saves a second pass over a file
+# that can be 3 GB.
+
+function Format-ByteSize {
+    param([int64]$Bytes)
+
+    if ($Bytes -ge 1073741824) { return ("{0:N1} GiB" -f ($Bytes / 1073741824)) }
+    if ($Bytes -ge 1048576)    { return ("{0:N1} MiB" -f ($Bytes / 1048576)) }
+    if ($Bytes -ge 1024)       { return ("{0:N1} KiB" -f ($Bytes / 1024)) }
+    return "$Bytes B"
+}
+
+function Format-Duration {
+    param([double]$Seconds)
+
+    if ($Seconds -lt 0 -or [double]::IsInfinity($Seconds) -or [double]::IsNaN($Seconds)) { return "--:--" }
+    if ($Seconds -gt 359999) { return "99:59:59" }
+
+    $span = [System.TimeSpan]::FromSeconds([Math]::Round($Seconds))
+    if ($span.TotalHours -ge 1) { return ("{0}:{1:00}:{2:00}" -f [int]$span.TotalHours, $span.Minutes, $span.Seconds) }
+    return ("{0}:{1:00}" -f $span.Minutes, $span.Seconds)
+}
+
+function Get-ConsoleWidth {
+    try {
+        $width = $Host.UI.RawUI.WindowSize.Width
+        if ($width -gt 20) { return [int]$width }
+    }
+    catch {
+        # No RawUI at all - a redirected host, or ISE. 80 is the safe assumption.
+    }
+    return 80
+}
+
+function Write-DownloadProgressLine {
+    <#
+        One line, redrawn in place with a carriage return.
+
+        Deliberately 7-bit ASCII. Block-drawing characters look better but depend on
+        the console font having them, and this is the one piece of output that runs
+        for minutes on a machine nobody has configured yet. Colour still applies -
+        the bar takes the accent, its track the border, the numbers muted - so the
+        line is Kaido without needing a single Unicode glyph:
+
+          [##################------------]  58%  478.2/824.6 MiB  12.4 MiB/s  ETA 0:28
+    #>
+    param(
+        [int64]$BytesRead,
+        [int64]$TotalBytes,
+        [double]$BytesPerSecond,
+        [switch]$Final
+    )
+
+    $rate = ""
+    if ($BytesPerSecond -gt 0) { $rate = "  " + (Format-ByteSize -Bytes ([int64]$BytesPerSecond)) + "/s" }
+
+    if ($TotalBytes -gt 0) {
+        $percent = [int][Math]::Floor(($BytesRead * 100.0) / $TotalBytes)
+        if ($percent -gt 100) { $percent = 100 }
+
+        # EVERY field here is a fixed width, and that is the whole point. The bar takes
+        # whatever the stats leave, so a stats string that grows by a character - 9.9
+        # MiB becoming 10.1 MiB, an ETA gaining a digit - steals a cell from the track
+        # and the bar visibly twitches between redraws several times a second.
+        # Right-aligned numbers, left-aligned units, blanks where a value is absent.
+        $counts = "{0,9}/{1,-9}" -f (Format-ByteSize -Bytes $BytesRead), (Format-ByteSize -Bytes $TotalBytes)
+
+        if ($BytesPerSecond -gt 0) { $rate = "{0,9}/s" -f (Format-ByteSize -Bytes ([int64]$BytesPerSecond)) }
+        else                       { $rate = " " * 11 }
+
+        if ($Final)                     { $eta = " " * 11 }
+        elseif ($BytesPerSecond -gt 0)  { $eta = "ETA {0,-7}" -f (Format-Duration -Seconds (($TotalBytes - $BytesRead) / $BytesPerSecond)) }
+        else                            { $eta = "ETA {0,-7}" -f "--:--" }
+
+        $stats = ("{0,4}%  " -f $percent) + $counts + "  " + $rate + "  " + $eta
+
+        # The bar gets whatever is left. Two for the brackets, two for the leading
+        # indent, one so the line never lands in the last cell - writing there wraps
+        # the console and scrolls the bar out of sight.
+        $barWidth = (Get-ConsoleWidth) - $stats.Length - 7
+        if ($barWidth -lt 10) { $barWidth = 10 }
+        if ($barWidth -gt 60) { $barWidth = 60 }
+
+        $filled = [int][Math]::Floor(($BytesRead * [double]$barWidth) / $TotalBytes)
+        if ($filled -gt $barWidth) { $filled = $barWidth }
+        if ($filled -lt 0) { $filled = 0 }
+
+        Write-Host "`r" -NoNewline
+        Write-Studio -Text "  [" -Key "border" -NoNewline
+        Write-Studio -Text ("#" * $filled) -Key "accent" -NoNewline
+        Write-Studio -Text ("-" * ($barWidth - $filled)) -Key "border" -NoNewline
+        Write-Studio -Text "]" -Key "border" -NoNewline
+        Write-Studio -Text $stats -Key "muted" -NoNewline
+        $drawn = 3 + $barWidth + $stats.Length
+    }
+    else {
+        # No Content-Length: a chunked response, or a proxy that stripped it. There is
+        # no percentage to show and no end to predict, so the line says what it knows.
+        $stats = "  " + (Format-ByteSize -Bytes $BytesRead) + $rate
+        Write-Host "`r" -NoNewline
+        Write-Studio -Text "  [ downloading ]" -Key "border" -NoNewline
+        Write-Studio -Text $stats -Key "muted" -NoNewline
+        $drawn = 16 + $stats.Length
+    }
+
+    # Pad out whatever the previous, longer line left behind.
+    $slack = (Get-ConsoleWidth) - 1 - $drawn
+    if ($slack -gt 0) { Write-Host (" " * $slack) -NoNewline }
+
+    if ($Final) { Write-Host "" }
+}
+
+function Invoke-ImageDownload {
+    <#
+        Downloads one file, draws the bar, and returns the checksum it computed on
+        the way past.
+
+        The algorithm is a parameter because the distributions do not agree: Ubuntu
+        publishes SHA256SUMS and Debian publishes SHA512SUMS, with no SHA256 listing
+        anywhere beside it.
+
+        Writes to <name>.part and renames only after the stream has closed cleanly, so
+        an interrupted download can never be mistaken for a finished one - which for a
+        gold image input is the failure that actually costs something.
+
+        Returns a PSCustomObject with Path, Bytes, Checksum, Algorithm and Seconds.
+    #>
+    param(
+        [Parameter(Mandatory = $true)][string]$Uri,
+        [Parameter(Mandatory = $true)][string]$Destination,
+        [string]$ExpectedChecksum,
+        [ValidateSet("SHA256", "SHA512")][string]$Algorithm = "SHA256",
+        [int]$BufferSize = 262144
+    )
+
+    # .NET Framework 4.x can still negotiate TLS 1.0 by default, and the distribution
+    # mirrors are 1.2 or better. Without this the failure is a bare "connection closed"
+    # that says nothing about why.
+    try {
+        [System.Net.ServicePointManager]::SecurityProtocol = `
+            [System.Net.SecurityProtocolType]::Tls12 -bor `
+            [System.Net.SecurityProtocolType]::Tls11 -bor `
+            [System.Net.SecurityProtocolType]::Tls
+    }
+    catch {
+        Write-Log "Could not raise the TLS version - the download may fail against a modern mirror" -Tag "Debug"
+    }
+
+    $partPath = "$Destination.part"
+    if (Test-Path -LiteralPath $partPath) { Remove-Item -LiteralPath $partPath -Force }
+
+    $directory = Split-Path -Path $Destination -Parent
+    if ($directory -and -not (Test-Path -LiteralPath $directory)) {
+        New-Item -ItemType Directory -Path $directory -Force | Out-Null
+    }
+
+    Write-Log "Downloading $Uri" -Tag "Get"
+
+    $request = [System.Net.HttpWebRequest]::Create($Uri)
+    $request.Method = "GET"
+    # Some mirrors answer a bare .NET user agent with a 403.
+    $request.UserAgent = "HyperV-VM-Studio/1.0 (PowerShell)"
+    $request.AllowAutoRedirect = $true
+    $request.Timeout = 60000
+    # .Timeout only covers getting the first response. A mirror that accepts the
+    # connection and then goes quiet is caught by this one instead of hanging forever.
+    $request.ReadWriteTimeout = 120000
+
+    $response = $null
+    $responseStream = $null
+    $fileStream = $null
+    $sha = $null
+
+    try {
+        $response = $request.GetResponse()
+
+        # After redirects, which the Ubuntu 26.04 URL always takes - it answers 302 to
+        # the codename path - the length that matters is the one on the FINAL response.
+        # A HEAD against the original URL would describe the wrong thing.
+        $totalBytes = [int64]$response.ContentLength
+        if ($response.ResponseUri.AbsoluteUri -ne $Uri) {
+            Write-Log "Redirected to $($response.ResponseUri.AbsoluteUri)" -Tag "Debug"
+        }
+        if ($totalBytes -gt 0) {
+            Write-Log "$(Format-ByteSize -Bytes $totalBytes) to fetch" -Tag "Debug"
+        }
+        else {
+            Write-Log "The server did not declare a content length - progress will show bytes only" -Tag "Debug"
+        }
+
+        $responseStream = $response.GetResponseStream()
+        $fileStream = [System.IO.File]::Open($partPath, [System.IO.FileMode]::Create, [System.IO.FileAccess]::Write, [System.IO.FileShare]::None)
+        $sha = [System.Security.Cryptography.HashAlgorithm]::Create($Algorithm)
+        if ($null -eq $sha) { throw "No provider for $Algorithm on this host" }
+
+        $buffer = [byte[]]::new($BufferSize)
+        $bytesRead = [int64]0
+        $clock = [System.Diagnostics.Stopwatch]::StartNew()
+
+        # Redraw on a clock, not per buffer. Repainting per chunk is precisely what
+        # makes Invoke-WebRequest slow, and rebuilding that by hand would be a poor joke.
+        $lastDraw = [double]0
+        $drawEveryMs = 80
+
+        # Rate over a sliding window rather than since the start: a cumulative average
+        # keeps quoting a speed the transfer no longer has after a stall.
+        $sampleTimes = New-Object System.Collections.ArrayList
+        $sampleBytes = New-Object System.Collections.ArrayList
+        $windowSeconds = 3.0
+
+        Write-DownloadProgressLine -BytesRead 0 -TotalBytes $totalBytes -BytesPerSecond 0
+
+        while ($true) {
+            $got = $responseStream.Read($buffer, 0, $BufferSize)
+            if ($got -le 0) { break }
+
+            $fileStream.Write($buffer, 0, $got)
+            # Hash the same bytes on the way past. A second pass with Get-FileHash would
+            # mean re-reading up to 3 GB for a number we can have for nothing.
+            [void]$sha.TransformBlock($buffer, 0, $got, $null, 0)
+            $bytesRead += $got
+
+            $now = $clock.Elapsed.TotalSeconds
+            [void]$sampleTimes.Add($now)
+            [void]$sampleBytes.Add($bytesRead)
+            while ($sampleTimes.Count -gt 2 -and ($now - $sampleTimes[0]) -gt $windowSeconds) {
+                $sampleTimes.RemoveAt(0)
+                $sampleBytes.RemoveAt(0)
+            }
+
+            if ((($now - $lastDraw) * 1000) -ge $drawEveryMs) {
+                $lastDraw = $now
+                $rate = 0.0
+                $span = $now - $sampleTimes[0]
+                if ($span -gt 0.2) { $rate = ($bytesRead - $sampleBytes[0]) / $span }
+                Write-DownloadProgressLine -BytesRead $bytesRead -TotalBytes $totalBytes -BytesPerSecond $rate
+            }
+        }
+
+        $clock.Stop()
+        [void]$sha.TransformFinalBlock((New-Object byte[] 0), 0, 0)
+        $hash = ($sha.Hash | ForEach-Object { $_.ToString("x2") }) -join ""
+
+        $average = 0.0
+        if ($clock.Elapsed.TotalSeconds -gt 0) { $average = $bytesRead / $clock.Elapsed.TotalSeconds }
+        Write-DownloadProgressLine -BytesRead $bytesRead -TotalBytes $totalBytes -BytesPerSecond $average -Final
+
+        $fileStream.Dispose(); $fileStream = $null
+
+        if ($totalBytes -gt 0 -and $bytesRead -ne $totalBytes) {
+            throw "The server promised $totalBytes bytes and sent $bytesRead"
+        }
+
+        if (-not [string]::IsNullOrWhiteSpace($ExpectedChecksum)) {
+            if ($hash -ne $ExpectedChecksum.Trim().ToLowerInvariant()) {
+                throw "$Algorithm mismatch - expected $ExpectedChecksum but the download hashes to $hash"
+            }
+            # Worth being exact about what this proves: the checksum came over the same
+            # TLS connection as the file, from the same mirror. It catches corruption,
+            # not a compromised mirror, and must never be logged as a verified signature.
+            Write-Log "$Algorithm matches the published checksum" -Tag "ok"
+        }
+
+        if (Test-Path -LiteralPath $Destination) { Remove-Item -LiteralPath $Destination -Force }
+        Move-Item -LiteralPath $partPath -Destination $Destination -Force
+
+        Write-Log "Downloaded $(Format-ByteSize -Bytes $bytesRead) in $(Format-Duration -Seconds $clock.Elapsed.TotalSeconds) ($(Format-ByteSize -Bytes ([int64]$average))/s)" -Tag "ok"
+
+        return [PSCustomObject]@{
+            Path      = $Destination
+            Bytes     = $bytesRead
+            Checksum  = $hash
+            Algorithm = $Algorithm
+            Seconds   = $clock.Elapsed.TotalSeconds
+        }
+    }
+    finally {
+        if ($fileStream) { $fileStream.Dispose() }
+        if ($responseStream) { $responseStream.Dispose() }
+        if ($response) { $response.Close() }
+        if ($sha) { $sha.Dispose() }
+        # A .part left behind is a failed attempt, and leaving it would let a later run
+        # mistake it for something. The finished file has already been renamed by here.
+        if (Test-Path -LiteralPath $partPath) { Remove-Item -LiteralPath $partPath -Force -ErrorAction SilentlyContinue }
+    }
+}
+
+# ---------------------------[ Cloud Image Conversion ]---------------------------
+#
+# Linux golds start life as a cloud image: Ubuntu publishes qcow2, Debian publishes
+# both qcow2 and a bare raw. Hyper-V reads neither, and Convert-VHD only converts
+# between disk formats it already understands - so the qcow2 has to become a raw
+# disk first, and the raw disk has to be given the 512-byte footer that makes it a
+# fixed VHD before Convert-VHD will touch it.
+#
+# Doing that in PowerShell rather than with qemu-img is a deliberate choice. A
+# standalone qemu-img.exe does not exist: the current Windows build is a 197 MB
+# installer whose qemu-img links about twenty MinGW DLLs, and the only true
+# standalone zip is frozen at QEMU 2.3.0 from 2015. On a public repo, "download this
+# exe from a third party" is a worse story than a few hundred auditable lines, and
+# the decode below runs within a factor of two of qemu-img's own speed anyway.
+
+function Get-BigEndianUInt32 {
+    # qcow2 is big-endian throughout. These read from a byte[] rather than a stream
+    # because every structure here - the header, the L1 table, an L2 table - is
+    # slurped once and then indexed.
+    param([byte[]]$Buffer, [int]$Offset)
+
+    return ([uint32]$Buffer[$Offset] * 16777216) + `
+           ([uint32]$Buffer[$Offset + 1] * 65536) + `
+           ([uint32]$Buffer[$Offset + 2] * 256) + `
+           ([uint32]$Buffer[$Offset + 3])
+}
+
+function Get-BigEndianInt64 {
+    # For header fields whose top bit cannot be set - sizes and offsets. A table
+    # entry carries flag bits up there and is read inline in the decode loop, which
+    # masks them off first.
+    param([byte[]]$Buffer, [int]$Offset)
+
+    $value = [int64]0
+    for ($i = 0; $i -lt 8; $i++) {
+        $value = ($value * 256) + [int64]$Buffer[$Offset + $i]
+    }
+    return $value
+}
+
+function Set-BigEndianUInt32 {
+    param([byte[]]$Buffer, [int]$Offset, [uint32]$Value)
+
+    $Buffer[$Offset]     = [byte](($Value -shr 24) -band 0xFF)
+    $Buffer[$Offset + 1] = [byte](($Value -shr 16) -band 0xFF)
+    $Buffer[$Offset + 2] = [byte](($Value -shr 8) -band 0xFF)
+    $Buffer[$Offset + 3] = [byte]($Value -band 0xFF)
+}
+
+function Set-BigEndianInt64 {
+    param([byte[]]$Buffer, [int]$Offset, [int64]$Value)
+
+    for ($i = 7; $i -ge 0; $i--) {
+        $Buffer[$Offset + $i] = [byte]($Value -band 0xFF)
+        $Value = $Value -shr 8
+    }
+}
+
+function Convert-Qcow2ToRawImage {
+    <#
+        qcow2 -> raw, in place of qemu-img convert -O raw.
+
+        Scope is the qcow2 the distributions actually publish: version 2 or 3, one
+        file, no backing file, no encryption, no snapshots, incompatible_features
+        of zero. That last field is the one that matters - it declares external data
+        files, extended L2 entries and zstd compression, and Ubuntu's and Debian's
+        cloud images have all three off, which is what makes a short decoder
+        possible. Every one of those conditions is asserted below rather than
+        assumed: an image that breaks one throws instead of producing a disk that is
+        quietly wrong.
+
+        Only non-zero clusters are written. The output is created at full virtual
+        size and unallocated clusters are left as holes, which on a measured Ubuntu
+        26.04 image is 1.4 GiB of the 3.5 GiB that never has to be written at all.
+    #>
+    param(
+        [Parameter(Mandatory = $true)][string]$Qcow2Path,
+        [Parameter(Mandatory = $true)][string]$RawPath
+    )
+
+    $inStream = [System.IO.File]::Open($Qcow2Path, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Read, [System.IO.FileShare]::Read)
+    try {
+        $header = [byte[]]::new(104)
+        $read = 0
+        while ($read -lt 104) {
+            $got = $inStream.Read($header, $read, 104 - $read)
+            if ($got -le 0) { throw "'$Qcow2Path' is too short to be a qcow2 image" }
+            $read += $got
+        }
+
+        if ($header[0] -ne 0x51 -or $header[1] -ne 0x46 -or $header[2] -ne 0x49 -or $header[3] -ne 0xFB) {
+            throw "'$Qcow2Path' is not a qcow2 image - the magic is not QFI\xfb"
+        }
+
+        $version           = Get-BigEndianUInt32 -Buffer $header -Offset 4
+        $backingFileOffset = Get-BigEndianInt64  -Buffer $header -Offset 8
+        $clusterBits       = Get-BigEndianUInt32 -Buffer $header -Offset 20
+        $virtualSize       = Get-BigEndianInt64  -Buffer $header -Offset 24
+        $cryptMethod       = Get-BigEndianUInt32 -Buffer $header -Offset 32
+        $l1Size            = Get-BigEndianUInt32 -Buffer $header -Offset 36
+        $l1TableOffset     = Get-BigEndianInt64  -Buffer $header -Offset 40
+        $snapshotCount     = Get-BigEndianUInt32 -Buffer $header -Offset 60
+
+        # Version 2 has no incompatible_features field - its header stops at 72.
+        $incompatible = [int64]0
+        if ($version -ge 3) { $incompatible = Get-BigEndianInt64 -Buffer $header -Offset 72 }
+
+        if ($version -lt 2 -or $version -gt 3) { throw "Unsupported qcow2 version $version in '$Qcow2Path'" }
+        if ($backingFileOffset -ne 0)          { throw "'$Qcow2Path' has a backing file, which is not supported" }
+        if ($cryptMethod -ne 0)                { throw "'$Qcow2Path' is encrypted, which is not supported" }
+        if ($snapshotCount -ne 0)              { throw "'$Qcow2Path' carries $snapshotCount snapshot(s), which is not supported" }
+        if ($incompatible -ne 0)               { throw "'$Qcow2Path' sets incompatible_features = $incompatible (external data file, extended L2 entries or zstd compression) - none of which are supported" }
+        if ($clusterBits -lt 9 -or $clusterBits -gt 21) { throw "'$Qcow2Path' has an out-of-range cluster size of 2^$clusterBits bytes" }
+        if (($virtualSize % 512) -ne 0)        { throw "'$Qcow2Path' has a virtual size of $virtualSize bytes, which is not a whole number of sectors" }
+
+        $clusterSize = [int]1 -shl [int]$clusterBits
+        $l2Entries   = [int]($clusterSize / 8)
+        $l2Bits      = [int]$clusterBits - 3
+
+        # Where a compressed cluster's host offset stops and its length begins, per
+        # the spec: x = 62 - (cluster_bits - 8), offset in bits 0..x-1 and the
+        # 512-byte sector count in the bits above it up to 61.
+        $csizeShift = 62 - ([int]$clusterBits - 8)
+        $offsetMask = ([int64]1 -shl $csizeShift) - 1
+        $csizeMask  = ([int64]1 -shl (62 - $csizeShift)) - 1
+
+        Write-Log "qcow2 v$version - $clusterSize byte clusters, $virtualSize bytes virtual, $l1Size L1 entries" -Tag "Debug"
+
+        $l1Bytes = [int]$l1Size * 8
+        $l1Table = [byte[]]::new($l1Bytes)
+        [void]$inStream.Seek($l1TableOffset, [System.IO.SeekOrigin]::Begin)
+        $read = 0
+        while ($read -lt $l1Bytes) {
+            $got = $inStream.Read($l1Table, $read, $l1Bytes - $read)
+            if ($got -le 0) { throw "Unexpected end of file reading the L1 table of '$Qcow2Path'" }
+            $read += $got
+        }
+
+        # Ask NTFS for a sparse file so the holes cost nothing on disk as well as
+        # nothing to write - on a measured Ubuntu image that is 1.4 GiB of the 3.5 GiB.
+        # It has to happen BEFORE the write handle exists: fsutil opens the file
+        # itself, and it cannot while this script holds it unshared. Best effort only,
+        # because a volume that will not do it still produces a correct image.
+        $created = [System.IO.File]::Create($RawPath)
+        $created.Dispose()
+        try {
+            $null = & fsutil.exe sparse setflag "$RawPath" 2>&1
+        }
+        catch {
+            Write-Log "Could not set the sparse flag on '$RawPath' - the image will be written in full" -Tag "Debug"
+        }
+
+        $outStream = [System.IO.File]::Open($RawPath, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Write, [System.IO.FileShare]::None)
+        try {
+            $outStream.SetLength($virtualSize)
+
+            # Two buffers, allocated once. Allocating per cluster is what made an
+            # early version of this take six minutes instead of four seconds: on an
+            # image with 32813 compressed clusters the allocations and the per-cluster
+            # function calls cost far more than the inflate does.
+            $plainBuffer = [byte[]]::new($clusterSize)
+            $compressedBuffer = [byte[]]::new(([int]$csizeMask + 1) * 512)
+
+            $plainCount = 0; $compressedCount = 0; $zeroCount = 0; $unallocatedCount = 0
+            $totalClusters = [int64][Math]::Ceiling($virtualSize / [double]$clusterSize)
+
+            for ($l1Index = 0; $l1Index -lt $l1Size; $l1Index++) {
+                $l1At = $l1Index * 8
+                $l1Entry = [int64]($l1Table[$l1At] -band 0x3F)
+                for ($i = 1; $i -lt 8; $i++) { $l1Entry = ($l1Entry * 256) + [int64]$l1Table[$l1At + $i] }
+                $l2Offset = $l1Entry -band 0x00FFFFFFFFFFFE00
+
+                if ($l2Offset -eq 0) {
+                    # No L2 table: every guest cluster it would have covered is a hole.
+                    $unallocatedCount += $l2Entries
+                    continue
+                }
+
+                $l2Table = [byte[]]::new($clusterSize)
+                [void]$inStream.Seek($l2Offset, [System.IO.SeekOrigin]::Begin)
+                $read = 0
+                while ($read -lt $clusterSize) {
+                    $got = $inStream.Read($l2Table, $read, $clusterSize - $read)
+                    if ($got -le 0) { throw "Unexpected end of file reading an L2 table of '$Qcow2Path'" }
+                    $read += $got
+                }
+
+                for ($l2Index = 0; $l2Index -lt $l2Entries; $l2Index++) {
+                    $guestCluster = ([int64]$l1Index -shl $l2Bits) + $l2Index
+                    if ($guestCluster -ge $totalClusters) { break }
+
+                    $entryAt = $l2Index * 8
+                    $flagByte = $l2Table[$entryAt]
+
+                    # The entry with its two flag bits - 63 copied, 62 compressed -
+                    # masked off, so it stays a positive Int64. Read inline rather
+                    # than through a function: this runs once per cluster.
+                    $entry = [int64]($flagByte -band 0x3F)
+                    $entry = ($entry * 4294967296) + `
+                             ([int64]$l2Table[$entryAt + 1] * 16777216) + `
+                             ([int64]$l2Table[$entryAt + 2] * 65536) + `
+                             ([int64]$l2Table[$entryAt + 3] * 256) + `
+                             [int64]$l2Table[$entryAt + 4]
+                    $entry = ($entry * 16777216) + `
+                             ([int64]$l2Table[$entryAt + 5] * 65536) + `
+                             ([int64]$l2Table[$entryAt + 6] * 256) + `
+                             [int64]$l2Table[$entryAt + 7]
+
+                    # An unallocated entry is eight zero bytes, which after masking is
+                    # an entry of zero with no compressed flag.
+                    if ($entry -eq 0 -and ($flagByte -band 0x40) -eq 0) { $unallocatedCount++; continue }
+
+                    $guestOffset = $guestCluster * [int64]$clusterSize
+
+                    if (($flagByte -band 0x40) -ne 0) {
+                        # Compressed. The run starts mid-sector as often as not, so
+                        # its length is the sector-rounded span less that leading slack.
+                        $coffset = $entry -band $offsetMask
+                        $sectors = (($entry -shr $csizeShift) -band $csizeMask) + 1
+                        $csize = [int](($sectors * 512) - ($coffset -band 511))
+
+                        [void]$inStream.Seek($coffset, [System.IO.SeekOrigin]::Begin)
+                        $read = 0
+                        while ($read -lt $csize) {
+                            $got = $inStream.Read($compressedBuffer, $read, $csize - $read)
+                            if ($got -le 0) { throw "Unexpected end of file reading a compressed cluster of '$Qcow2Path'" }
+                            $read += $got
+                        }
+
+                        # The buffer still holds the previous cluster. A deflate run is
+                        # allowed to end before it has filled a whole cluster - the rest
+                        # is zero - so without this clear, a short one would inherit the
+                        # bytes behind it.
+                        [array]::Clear($plainBuffer, 0, $clusterSize)
+
+                        # qcow2 compresses with RAW deflate, no zlib header and no
+                        # trailer, which is exactly what DeflateStream reads. ZLibStream
+                        # is .NET 6 and would be the wrong reader even if it were here.
+                        $memory = [System.IO.MemoryStream]::new($compressedBuffer, 0, $csize, $false)
+                        $deflate = [System.IO.Compression.DeflateStream]::new($memory, [System.IO.Compression.CompressionMode]::Decompress)
+                        try {
+                            $filled = 0
+                            while ($filled -lt $clusterSize) {
+                                $got = $deflate.Read($plainBuffer, $filled, $clusterSize - $filled)
+                                if ($got -le 0) { break }
+                                $filled += $got
+                            }
+                        }
+                        finally {
+                            $deflate.Dispose()
+                            $memory.Dispose()
+                        }
+
+                        [void]$outStream.Seek($guestOffset, [System.IO.SeekOrigin]::Begin)
+                        $outStream.Write($plainBuffer, 0, $clusterSize)
+                        $compressedCount++
+                        continue
+                    }
+
+                    # Version 3 marks a read-as-zero cluster with bit 0. Version 2 has
+                    # no such flag, so it is only honoured for v3.
+                    if ($version -ge 3 -and ($l2Table[$entryAt + 7] -band 0x01) -ne 0) {
+                        $zeroCount++
+                        continue
+                    }
+
+                    $hostOffset = $entry -band 0x00FFFFFFFFFFFE00
+                    if ($hostOffset -eq 0) { $unallocatedCount++; continue }
+
+                    [void]$inStream.Seek($hostOffset, [System.IO.SeekOrigin]::Begin)
+                    $read = 0
+                    while ($read -lt $clusterSize) {
+                        $got = $inStream.Read($plainBuffer, $read, $clusterSize - $read)
+                        if ($got -le 0) { throw "Unexpected end of file reading a cluster of '$Qcow2Path'" }
+                        $read += $got
+                    }
+                    [void]$outStream.Seek($guestOffset, [System.IO.SeekOrigin]::Begin)
+                    $outStream.Write($plainBuffer, 0, $clusterSize)
+                    $plainCount++
+                }
+            }
+
+            $outStream.Flush()
+            Write-Log "Decoded $compressedCount compressed, $plainCount plain, $zeroCount zero and $unallocatedCount unallocated clusters" -Tag "Debug"
+        }
+        finally {
+            $outStream.Dispose()
+        }
+    }
+    finally {
+        $inStream.Dispose()
+    }
+
+    return $virtualSize
+}
+
+function Get-VhdDiskGeometry {
+    # The CHS geometry a VHD footer carries, straight out of the VHD specification's
+    # own pseudo-code. It stopped describing real hardware decades ago, but the
+    # footer has the field and a parser may check it against the size, so it is
+    # calculated rather than invented.
+    param([Parameter(Mandatory = $true)][int64]$DiskSize)
+
+    # PowerShell has no integer division operator, and a cast ROUNDS rather than
+    # truncates - [int](116508 / 16) is 7282, not 7281. Every division in this
+    # function is meant to be integer division, and a geometry that rounds up
+    # describes more sectors than the disk has. Subtracting the remainder first
+    # makes the division exact, so the cast has nothing left to round.
+    $divide = {
+        param([int64]$Numerator, [int64]$Denominator)
+        return [int64](($Numerator - ($Numerator % $Denominator)) / $Denominator)
+    }
+
+    $totalSectors = & $divide $DiskSize 512
+
+    # The format tops out at 65535 x 16 x 255 sectors, a little over 127 GB.
+    $maxSectors = [int64]65535 * 16 * 255
+    if ($totalSectors -gt $maxSectors) { $totalSectors = $maxSectors }
+
+    if ($totalSectors -ge ([int64]65535 * 16 * 63)) {
+        $sectorsPerTrack = 255
+        $heads = 16
+        $cylinderTimesHeads = & $divide $totalSectors $sectorsPerTrack
+    }
+    else {
+        $sectorsPerTrack = 17
+        $cylinderTimesHeads = & $divide $totalSectors $sectorsPerTrack
+        $heads = & $divide ($cylinderTimesHeads + 1023) 1024
+        if ($heads -lt 4) { $heads = 4 }
+
+        if ($cylinderTimesHeads -ge ($heads * 1024) -or $heads -gt 16) {
+            $sectorsPerTrack = 31
+            $heads = 16
+            $cylinderTimesHeads = & $divide $totalSectors $sectorsPerTrack
+        }
+        if ($cylinderTimesHeads -ge ($heads * 1024)) {
+            $sectorsPerTrack = 63
+            $heads = 16
+            $cylinderTimesHeads = & $divide $totalSectors $sectorsPerTrack
+        }
+    }
+
+    return [PSCustomObject]@{
+        Cylinders       = [int](& $divide $cylinderTimesHeads $heads)
+        Heads           = [int]$heads
+        SectorsPerTrack = [int]$sectorsPerTrack
+    }
+}
+
+function Add-FixedVhdFooter {
+    <#
+        Appends the 512-byte footer that turns a raw disk image into a fixed VHD,
+        which is the one image format Convert-VHD will read that can be produced
+        without a Hyper-V API.
+
+        The checksum is the part worth getting right: it is the one's complement of
+        the sum of all 512 footer bytes with the checksum field itself zeroed. A
+        footer with a wrong checksum is rejected outright, and the error says
+        nothing about which field was wrong.
+    #>
+    param(
+        [Parameter(Mandatory = $true)][string]$RawPath,
+        [Parameter(Mandatory = $true)][int64]$DiskSize
+    )
+
+    if (($DiskSize % 512) -ne 0) {
+        throw "A VHD must be a whole number of sectors - $DiskSize bytes is not"
+    }
+
+    $footer = [byte[]]::new(512)
+
+    [System.Text.Encoding]::ASCII.GetBytes("conectix").CopyTo($footer, 0)
+    Set-BigEndianUInt32 -Buffer $footer -Offset 8  -Value ([uint32]2)          # features: the reserved bit, which must be set
+    Set-BigEndianUInt32 -Buffer $footer -Offset 12 -Value ([uint32]0x00010000) # file format version 1.0
+
+    # A fixed disk has no dynamic header to point at, and the spec spells that as
+    # every bit set rather than zero.
+    for ($i = 16; $i -lt 24; $i++) { $footer[$i] = 0xFF }
+
+    # The VHD epoch is 2000-01-01, not 1970.
+    $epoch = New-Object System.DateTime(2000, 1, 1, 0, 0, 0, [System.DateTimeKind]::Utc)
+    $stamp = [int64]([System.DateTime]::UtcNow - $epoch).TotalSeconds
+    Set-BigEndianUInt32 -Buffer $footer -Offset 24 -Value ([uint32]$stamp)
+
+    [System.Text.Encoding]::ASCII.GetBytes("win ").CopyTo($footer, 28)         # creator application
+    Set-BigEndianUInt32 -Buffer $footer -Offset 32 -Value ([uint32]0x000A0000) # creator version 10.0
+    [System.Text.Encoding]::ASCII.GetBytes("Wi2k").CopyTo($footer, 36)         # creator host OS: Windows
+
+    Set-BigEndianInt64 -Buffer $footer -Offset 40 -Value $DiskSize             # original size
+    Set-BigEndianInt64 -Buffer $footer -Offset 48 -Value $DiskSize             # current size
+
+    $geometry = Get-VhdDiskGeometry -DiskSize $DiskSize
+    $footer[56] = [byte](($geometry.Cylinders -shr 8) -band 0xFF)
+    $footer[57] = [byte]($geometry.Cylinders -band 0xFF)
+    $footer[58] = [byte]$geometry.Heads
+    $footer[59] = [byte]$geometry.SectorsPerTrack
+
+    Set-BigEndianUInt32 -Buffer $footer -Offset 60 -Value ([uint32]2)          # disk type: fixed
+    (New-Object System.Guid((New-Guid).ToString())).ToByteArray().CopyTo($footer, 68)
+    $footer[84] = 0                                                            # not in saved state
+
+    # Checksum last, over the footer as it now stands with bytes 64..67 still zero.
+    # 0xFFFFFFFF written as a literal is Int32 -1 in PowerShell, not UInt32
+    # 4294967295, and the subtraction then lands somewhere below zero. The mask has
+    # to be spelled in decimal to stay unsigned.
+    $sum = [uint32]0
+    foreach ($byte in $footer) { $sum = [uint32]($sum + $byte) }
+    Set-BigEndianUInt32 -Buffer $footer -Offset 64 -Value ([uint32]([uint32]4294967295 - $sum))
+
+    $stream = [System.IO.File]::Open($RawPath, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Write, [System.IO.FileShare]::None)
+    try {
+        if ($stream.Length -ne $DiskSize) {
+            throw "'$RawPath' is $($stream.Length) bytes but the footer declares $DiskSize - refusing to write a footer that does not describe the file"
+        }
+        [void]$stream.Seek(0, [System.IO.SeekOrigin]::End)
+        $stream.Write($footer, 0, 512)
+        $stream.Flush()
+    }
+    finally {
+        $stream.Dispose()
+    }
+
+    Write-Log "Wrote a fixed VHD footer describing $DiskSize bytes ($($geometry.Cylinders)/$($geometry.Heads)/$($geometry.SectorsPerTrack))" -Tag "Debug"
+}
+
+# ---------------------------[ Linux Golds ]---------------------------
+#
+# A Linux gold is built from a distribution cloud image rather than from installation
+# media: there is no unattended setup to run, because a cloud image is already
+# installed. What it needs instead is a format conversion and, later, one boot with a
+# cloud-init seed attached.
+#
+# The images used here are the GENERIC ones, not the vendor's azure builds. Ubuntu
+# only publishes an azure variant for 24.04, and that variant pins cloud-init to the
+# Azure datasource, which would mean provisioning through an ovf-env.xml and a wire
+# server this lab does not have. The generic route costs a decode and a bake boot and
+# buys every release, Debian as well, and one seed format for all of them.
+
+function Get-LinuxImageCatalog {
+    <#
+        One entry per gold this script can build.
+
+        The three distributions do not publish alike and the catalog says so rather
+        than pretending they do: Ubuntu republishes a release directory in place,
+        while Debian cuts dated snapshots and keeps a `latest/` alias beside them.
+        The download URL is therefore per-entry, never a template with the version
+        substituted in.
+
+        DiskGB is what the gold - and so every VM differencing off it - will be. The
+        cloud images themselves are 3 GiB or so and grow on first boot; the number
+        here is the size the disk is expanded to before that ever happens.
+    #>
+
+    return @(
+        [PSCustomObject]@{
+            Id            = "ubuntu-2604"
+            Name          = "Ubuntu 26.04 LTS (Resolute)"
+            GoldName      = "hv-ubuntu-2604"
+            Distro        = "ubuntu"
+            Version       = "26.04"
+            Url           = "https://cloud-images.ubuntu.com/releases/26.04/release/ubuntu-26.04-server-cloudimg-amd64.img"
+            ChecksumUrl   = "https://cloud-images.ubuntu.com/releases/26.04/release/SHA256SUMS"
+            Algorithm     = "SHA256"
+            SourceFormat  = "qcow2"
+            DefaultDiskGB = 64
+            # Ubuntu's cloud image carries grub-efi-amd64-signed AND grub-pc, so it
+            # boots either generation. Gen2 is the default anyway.
+            Generation    = 2
+            BakePackages  = @("linux-azure", "linux-cloud-tools-azure")
+        }
+        [PSCustomObject]@{
+            Id            = "ubuntu-2404"
+            Name          = "Ubuntu 24.04 LTS (Noble)"
+            GoldName      = "hv-ubuntu-2404"
+            Distro        = "ubuntu"
+            Version       = "24.04"
+            Url           = "https://cloud-images.ubuntu.com/releases/24.04/release/ubuntu-24.04-server-cloudimg-amd64.img"
+            ChecksumUrl   = "https://cloud-images.ubuntu.com/releases/24.04/release/SHA256SUMS"
+            Algorithm     = "SHA256"
+            SourceFormat  = "qcow2"
+            DefaultDiskGB = 64
+            Generation    = 2
+            BakePackages  = @("linux-azure", "linux-cloud-tools-azure")
+        }
+        [PSCustomObject]@{
+            Id            = "debian-13"
+            Name          = "Debian 13 (Trixie)"
+            GoldName      = "hv-debian-13"
+            Distro        = "debian"
+            Version       = "13"
+            # genericcloud, NOT the variant Debian calls `nocloud`. That one contains no
+            # cloud-init at all and boots to a passwordless root console - a pure naming
+            # collision with cloud-init's NoCloud datasource, which is what we do use.
+            Url           = "https://cloud.debian.org/images/cloud/trixie/latest/debian-13-genericcloud-amd64.qcow2"
+            # Debian publishes SHA512SUMS and no SHA256SUMS, and no signature beside
+            # either - checked again on 2026-09-21.
+            ChecksumUrl   = "https://cloud.debian.org/images/cloud/trixie/latest/SHA512SUMS"
+            Algorithm     = "SHA512"
+            SourceFormat  = "qcow2"
+            DefaultDiskGB = 64
+            # Debian ships no grub-pc in ANY trixie cloud variant, so it is UEFI only.
+            Generation    = 2
+            BakePackages  = @("hyperv-daemons")
+        }
+    )
+}
+
+function Get-WebText {
+    # For the small text files beside an image - a SHA256SUMS is a few kilobytes. The
+    # image itself goes through Invoke-ImageDownload, which draws a bar; drawing one
+    # for four kilobytes would be silly.
+    param([Parameter(Mandatory = $true)][string]$Uri)
+
+    try {
+        [System.Net.ServicePointManager]::SecurityProtocol = `
+            [System.Net.SecurityProtocolType]::Tls12 -bor `
+            [System.Net.SecurityProtocolType]::Tls11 -bor `
+            [System.Net.SecurityProtocolType]::Tls
+    }
+    catch { }
+
+    $request = [System.Net.HttpWebRequest]::Create($Uri)
+    $request.Method = "GET"
+    $request.UserAgent = "HyperV-VM-Studio/1.0 (PowerShell)"
+    $request.Timeout = 30000
+    $request.ReadWriteTimeout = 30000
+
+    $response = $null
+    $reader = $null
+    try {
+        $response = $request.GetResponse()
+        $reader = New-Object System.IO.StreamReader($response.GetResponseStream())
+        return $reader.ReadToEnd()
+    }
+    finally {
+        if ($reader) { $reader.Dispose() }
+        if ($response) { $response.Close() }
+    }
+}
+
+function Get-PublishedChecksum {
+    <#
+        Pulls one file's checksum out of a SHA256SUMS / SHA512SUMS listing.
+
+        Returns an empty string when the listing cannot be fetched or the file is not
+        in it. That is not fatal on purpose: a mirror being briefly unreachable should
+        not stop a build, it should mean the download is unverified and says so.
+    #>
+    param(
+        [Parameter(Mandatory = $true)][string]$ChecksumUrl,
+        [Parameter(Mandatory = $true)][string]$FileName
+    )
+
+    try {
+        $text = Get-WebText -Uri $ChecksumUrl
+    }
+    catch {
+        Write-Log "Could not fetch '$ChecksumUrl': $($_.Exception.Message)" -Tag "Warn"
+        return ""
+    }
+
+    foreach ($line in ($text -split "`n")) {
+        $trimmed = $line.Trim()
+        if ([string]::IsNullOrWhiteSpace($trimmed)) { continue }
+        # "<hash> *<name>" or "<hash>  <name>" - the star marks binary mode and is not
+        # part of the name.
+        $parts = $trimmed -split "\s+", 2
+        if ($parts.Count -lt 2) { continue }
+        $name = $parts[1].TrimStart("*").Trim()
+        if ($name -eq $FileName) { return $parts[0].Trim().ToLowerInvariant() }
+    }
+
+    Write-Log "'$FileName' is not listed in $ChecksumUrl" -Tag "Warn"
+    return ""
+}
+
+function Get-CachedLinuxImage {
+    <#
+        Returns the path to a usable copy of the image, downloading it only when there
+        is not one already. A cached file counts as usable when it hashes to the
+        published checksum; with no published checksum to compare against, a cached
+        file is re-used on the strength of its existence and the run says so.
+    #>
+    param(
+        [Parameter(Mandatory = $true)][object]$Entry,
+        [Parameter(Mandatory = $true)][string]$CacheDirectory
+    )
+
+    if (-not (Test-Path -LiteralPath $CacheDirectory)) {
+        Write-Log "Creating image cache directory '$CacheDirectory'" -Tag "Run"
+        New-Item -ItemType Directory -Path $CacheDirectory -Force | Out-Null
+    }
+
+    $fileName = [System.IO.Path]::GetFileName(([System.Uri]$Entry.Url).AbsolutePath)
+    $imagePath = Join-Path -Path $CacheDirectory -ChildPath $fileName
+
+    Write-Log "Looking up the published checksum for $fileName" -Tag "Get"
+    $expected = Get-PublishedChecksum -ChecksumUrl $Entry.ChecksumUrl -FileName $fileName
+
+    if (Test-Path -LiteralPath $imagePath) {
+        if ([string]::IsNullOrWhiteSpace($expected)) {
+            Write-Log "Re-using the cached '$fileName' - there is no published checksum to check it against" -Tag "Warn"
+            return $imagePath
+        }
+        Write-Log "Hashing the cached '$fileName' to see whether it is still current" -Tag "Run"
+        $actual = (Get-FileHash -LiteralPath $imagePath -Algorithm $Entry.Algorithm).Hash.ToLowerInvariant()
+        if ($actual -eq $expected) {
+            Write-Log "Cached '$fileName' matches the published $($Entry.Algorithm) - not downloading it again" -Tag "ok"
+            return $imagePath
+        }
+        # Debian re-cuts its images a few times a month and `latest/` moves with them,
+        # so a stale cache is expected rather than suspicious.
+        Write-Log "Cached '$fileName' no longer matches the published $($Entry.Algorithm) - fetching the current image" -Tag "Info"
+    }
+
+    $null = Invoke-ImageDownload -Uri $Entry.Url -Destination $imagePath `
+        -ExpectedChecksum $expected -Algorithm $Entry.Algorithm
+    return $imagePath
+}
+
+function Write-LinuxGoldManifest {
+    # The Linux counterpart to Write-GoldImageManifest. Build-Vms.ps1 reads the sidecar
+    # beside a gold to learn what it is; for a Linux gold the decisive field is
+    # osFamily, which is what tells the builder not to go looking for a language slug
+    # in the file name or an unattend.xml to write into the disk.
+    param(
+        [Parameter(Mandatory = $true)][string]$VhdPath,
+        [Parameter(Mandatory = $true)][object]$Entry,
+        [string]$Locale,
+        [string]$KeyboardLayout,
+        [string]$TimeZone,
+        [string]$SourceChecksum
+    )
+
+    $manifestPath = "$VhdPath.json"
+    $manifest = [ordered]@{
+        osFamily       = "linux"
+        distro         = $Entry.Distro
+        distroVersion  = $Entry.Version
+        imageName      = $Entry.Name
+        target         = "HyperV"
+        generation     = $Entry.Generation
+        locale         = $Locale
+        keyboardLayout = $KeyboardLayout
+        timeZone       = $TimeZone
+        localeMode     = "cloud-init"
+        sourceUrl      = $Entry.Url
+        sourceFormat   = $Entry.SourceFormat
+        sourceChecksum = $SourceChecksum
+        checksumAlgorithm = $Entry.Algorithm
+        createdUtc     = [DateTime]::UtcNow.ToString("yyyy-MM-ddTHH:mm:ssZ")
+    }
+
+    try {
+        $json = $manifest | ConvertTo-Json
+        [System.IO.File]::WriteAllText($manifestPath, $json + "`n", (New-Object System.Text.UTF8Encoding($false)))
+        Write-Log "Wrote gold image manifest '$manifestPath'" -Tag "Info"
+        return $true
+    }
+    catch {
+        Write-Log "Failed to write gold image manifest '$manifestPath': $($_.Exception.Message)" -Tag "Error"
+        return $false
+    }
+}
+
+function New-LinuxGoldImage {
+    <#
+        cloud image -> gold VHDX.
+
+        Four steps, and the middle two are the ones that do not exist anywhere else in
+        this project: decode the qcow2 to a raw disk, give the raw disk a fixed-VHD
+        footer, hand the result to Convert-VHD, then grow it.
+
+        Convert-VHD reads a fixed VHD and writes a dynamic VHDX, which is why the
+        footer is worth the trouble - it is the one image format that can be produced
+        from PowerShell alone and that Hyper-V will then take seriously.
+    #>
+    param(
+        [Parameter(Mandatory = $true)][object]$Entry,
+        [Parameter(Mandatory = $true)][string]$ImagePath,
+        [Parameter(Mandatory = $true)][string]$OutputDirectory,
+        [Parameter(Mandatory = $true)][int]$DiskSizeGB,
+        [string]$WorkDirectory
+    )
+
+    if ([string]::IsNullOrWhiteSpace($WorkDirectory)) { $WorkDirectory = $OutputDirectory }
+    if (-not (Test-Path -LiteralPath $OutputDirectory)) {
+        New-Item -ItemType Directory -Path $OutputDirectory -Force | Out-Null
+    }
+
+    $vhdxPath = Join-Path -Path $OutputDirectory -ChildPath ("{0}.vhdx" -f $Entry.GoldName)
+    $intermediateVhd = Join-Path -Path $WorkDirectory -ChildPath ("{0}.tmp.vhd" -f $Entry.GoldName)
+
+    if (Test-Path -LiteralPath $vhdxPath) {
+        Write-Log "Replacing the existing gold '$vhdxPath'" -Tag "Info"
+        Remove-Item -LiteralPath $vhdxPath -Force
+    }
+    if (Test-Path -LiteralPath $intermediateVhd) { Remove-Item -LiteralPath $intermediateVhd -Force }
+
+    try {
+        if ($Entry.SourceFormat -eq "qcow2") {
+            Write-Log "Decoding $($Entry.SourceFormat) to a raw disk" -Tag "Run"
+            $clock = [System.Diagnostics.Stopwatch]::StartNew()
+            $virtualSize = Convert-Qcow2ToRawImage -Qcow2Path $ImagePath -RawPath $intermediateVhd
+            $clock.Stop()
+            Write-Log "Decoded $(Format-ByteSize -Bytes $virtualSize) in $(Format-Duration -Seconds $clock.Elapsed.TotalSeconds)" -Tag "ok"
+        }
+        else {
+            # Debian also publishes a bare .raw. Nothing to decode - it only needs the
+            # footer, so it takes the same path from here on.
+            Write-Log "Copying the raw disk image" -Tag "Run"
+            Copy-Item -LiteralPath $ImagePath -Destination $intermediateVhd -Force
+            $virtualSize = (Get-Item -LiteralPath $intermediateVhd).Length
+        }
+
+        Add-FixedVhdFooter -RawPath $intermediateVhd -DiskSize $virtualSize
+
+        Write-Log "Converting to a dynamic VHDX" -Tag "Run"
+        Convert-VHD -Path $intermediateVhd -DestinationPath $vhdxPath -VHDType Dynamic -ErrorAction Stop
+
+        $targetBytes = [int64]$DiskSizeGB * 1GB
+        if ($targetBytes -gt $virtualSize) {
+            Write-Log "Growing the gold to $DiskSizeGB GB" -Tag "Run"
+            # Only the disk grows here. The partition and the filesystem inside it are
+            # grown by the guest on first boot - cloud-init's growpart and resizefs,
+            # which every one of these images ships with enabled.
+            Resize-VHD -Path $vhdxPath -SizeBytes $targetBytes -ErrorAction Stop
+        }
+        else {
+            Write-Log "The image is already $(Format-ByteSize -Bytes $virtualSize) - not shrinking it to $DiskSizeGB GB" -Tag "Warn"
+        }
+
+        Write-Log "Built '$vhdxPath'" -Tag "ok"
+        return $vhdxPath
+    }
+    finally {
+        if (Test-Path -LiteralPath $intermediateVhd) {
+            Remove-Item -LiteralPath $intermediateVhd -Force -ErrorAction SilentlyContinue
+        }
+    }
+}
+
+function Import-LinuxTimeZoneCatalog {
+    <#
+        The IANA zone list, from data\linux-timezones.json.
+
+        It is a separate catalog from the Windows one on purpose. Windows names a zone
+        "W. Europe Standard Time"; cloud-init wants "Europe/Berlin", and the two are
+        not mechanically convertible on this host - TimeZoneInfo.TryConvertWindowsIdToIanaId
+        is .NET 6 and up, so Windows PowerShell 5.1 cannot do it. The alternative was
+        shipping a CLDR windowsZones mapping of some 450 rows; a native list is smaller,
+        exact, and never goes stale against a Windows ID that was renamed.
+
+        The cost, stated: an IANA list carries no offsets, so it sorts by region and
+        city rather than by UTC offset the way the Windows picker does.
+    #>
+    if ($script:LinuxTimeZones -and $script:LinuxTimeZones.Count -gt 0) { return }
+
+    $script:LinuxTimeZones = @()
+    $catalogPath = Join-Path -Path $PSScriptRoot -ChildPath "data\linux-timezones.json"
+
+    if (-not (Test-Path -LiteralPath $catalogPath)) {
+        Write-Log "No data\linux-timezones.json - falling back to UTC only" -Tag "Warn"
+        $script:LinuxTimeZones = @([PSCustomObject]@{ Id = "UTC"; Label = "UTC" })
+        return
+    }
+
+    try {
+        $doc = Get-Content -LiteralPath $catalogPath -Raw -Encoding UTF8 | ConvertFrom-Json
+    }
+    catch {
+        Write-Log "data\linux-timezones.json is not valid JSON ($($_.Exception.Message)) - falling back to UTC only" -Tag "Warn"
+        $script:LinuxTimeZones = @([PSCustomObject]@{ Id = "UTC"; Label = "UTC" })
+        return
+    }
+
+    $zones = @()
+    foreach ($zone in @($doc.zones)) {
+        $offset = [int]$zone.offsetMinutes
+        $sign = "+"
+        if ($offset -lt 0) { $sign = "-"; $offset = -$offset }
+        # [Math]::Floor, not a cast: [int](330 / 60) is 6, because a PowerShell cast
+        # rounds. India would read UTC+06:30 instead of +05:30, and every half-hour and
+        # three-quarter-hour zone with it.
+        $label = "{0,-32} UTC{1}{2:00}:{3:00}" -f $zone.id, $sign, [int][Math]::Floor($offset / 60), ($offset % 60)
+        $zones += [PSCustomObject]@{ Id = [string]$zone.id; Label = $label }
+    }
+
+    $script:LinuxTimeZones = @($zones)
+    Write-Log "Loaded $($zones.Count) IANA time zones" -Tag "Debug"
+}
+
+function Get-LinuxLocaleName {
+    # de-DE -> de_DE.UTF-8. The locale catalog is keyed by the Windows tag, and glibc
+    # spells the same thing with an underscore and an explicit charset.
+    param([string]$LocaleTag)
+
+    if ([string]::IsNullOrWhiteSpace($LocaleTag)) { return "en_US.UTF-8" }
+    return ($LocaleTag -replace "-", "_") + ".UTF-8"
+}
+
+function Get-LinuxKeymap {
+    <#
+        de-DE -> de, en-GB -> gb, en-US -> us.
+
+        A console keymap is named after the LAYOUT, which usually - not always -
+        matches the region half of the tag lowercased. The exceptions that matter are
+        listed; anything not listed falls back to the region half, and a wrong keymap
+        is a cosmetic problem on a machine reached over SSH.
+    #>
+    param([string]$LocaleTag)
+
+    $overrides = @{
+        "en-US" = "us"; "en-GB" = "gb"; "ja-JP" = "jp"; "pt-BR" = "br"
+        "zh-CN" = "cn"; "zh-TW" = "tw"; "ko-KR" = "kr"; "cs-CZ" = "cz"
+        "da-DK" = "dk"; "el-GR" = "gr"; "sv-SE" = "se"; "uk-UA" = "ua"
+        "he-IL" = "il"; "sl-SI" = "si"; "et-EE" = "ee"
+    }
+    if ($overrides.ContainsKey($LocaleTag)) { return $overrides[$LocaleTag] }
+
+    $parts = $LocaleTag -split "-"
+    if ($parts.Count -ge 2) { return $parts[$parts.Count - 1].ToLowerInvariant() }
+    return "us"
+}
+
+function New-CidataIsoFile {
+    <#
+        The CIDATA seed ISO, written with IMAPI2FS - the disc-mastering COM component
+        that has shipped in Windows since Vista. No mkisofs, no oscdimg.
+
+        The volume label must be exactly CIDATA or cloud-init's NoCloud datasource does
+        not recognise the disc, and the VM then boots unprovisioned with nothing said
+        about why.
+
+        A near-copy of the function in Build-Vms.ps1. Neither script dot-sources the
+        other - they already each carry their own Write-Log - so the two travel
+        together and have to be kept in step.
+    #>
+    param(
+        [Parameter(Mandatory = $true)][string]$IsoPath,
+        [Parameter(Mandatory = $true)][string]$UserData,
+        [Parameter(Mandatory = $true)][string]$MetaData,
+        [string]$NetworkConfig
+    )
+
+    $stagingDirectory = Join-Path -Path ([System.IO.Path]::GetTempPath()) -ChildPath ("cidata-" + [Guid]::NewGuid().ToString("N"))
+    New-Item -ItemType Directory -Path $stagingDirectory -Force | Out-Null
+
+    try {
+        # LF endings and no BOM: cloud-init parses YAML, and a BOM makes the first line
+        # unparseable.
+        $encoding = New-Object System.Text.UTF8Encoding($false)
+        [System.IO.File]::WriteAllText((Join-Path $stagingDirectory "user-data"), ($UserData -replace "`r`n", "`n"), $encoding)
+        [System.IO.File]::WriteAllText((Join-Path $stagingDirectory "meta-data"), ($MetaData -replace "`r`n", "`n"), $encoding)
+        if (-not [string]::IsNullOrWhiteSpace($NetworkConfig)) {
+            [System.IO.File]::WriteAllText((Join-Path $stagingDirectory "network-config"), ($NetworkConfig -replace "`r`n", "`n"), $encoding)
+        }
+
+        $image = New-Object -ComObject IMAPI2FS.MsftFileSystemImage
+        $image.FileSystemsToCreate = 3   # ISO9660 (1) + Joliet (2)
+        $image.VolumeName = "CIDATA"
+        $image.Root.AddTree($stagingDirectory, $false)
+
+        $result = $image.CreateResultImage()
+
+        $directory = Split-Path -Path $IsoPath -Parent
+        if ($directory -and -not (Test-Path -LiteralPath $directory)) {
+            New-Item -ItemType Directory -Path $directory -Force | Out-Null
+        }
+        if (Test-Path -LiteralPath $IsoPath) { Remove-Item -LiteralPath $IsoPath -Force }
+
+        # CreateResultImage returns a COM IStream, which is not a .NET Stream and has no
+        # CopyTo. Cast it to the interop interface and pump it block by block; the byte
+        # count comes back through unmanaged memory, which is what the IntPtr is for.
+        $comStream = [System.Runtime.InteropServices.ComTypes.IStream]$result.ImageStream
+        $blockSize = [int]$result.BlockSize
+        if ($blockSize -le 0) { $blockSize = 2048 }
+
+        $buffer = New-Object byte[] $blockSize
+        $readPtr = [System.Runtime.InteropServices.Marshal]::AllocHGlobal(4)
+        $fileStream = [System.IO.File]::Create($IsoPath)
+        try {
+            while ($true) {
+                $comStream.Read($buffer, $blockSize, $readPtr)
+                $read = [System.Runtime.InteropServices.Marshal]::ReadInt32($readPtr)
+                if ($read -le 0) { break }
+                $fileStream.Write($buffer, 0, $read)
+            }
+            $fileStream.Flush()
+        }
+        finally {
+            $fileStream.Dispose()
+            [System.Runtime.InteropServices.Marshal]::FreeHGlobal($readPtr)
+            [void][System.Runtime.InteropServices.Marshal]::ReleaseComObject($comStream)
+        }
+
+        Write-Log "Wrote seed ISO '$IsoPath'" -Tag "Run"
+        return $IsoPath
+    }
+    finally {
+        if (Test-Path -LiteralPath $stagingDirectory) {
+            Remove-Item -LiteralPath $stagingDirectory -Recurse -Force -ErrorAction SilentlyContinue
+        }
+    }
+}
+
+function Get-BakeUserData {
+    <#
+        The bake boot's cloud-config.
+
+        This is where a generic cloud image gets what the vendor's azure image would
+        have come with: the azure kernel on Ubuntu, hyperv-daemons on Debian. Then it
+        erases its own first-boot identity - cloud-init state, machine-id, SSH host keys
+        - so that every VM cloned from this gold generates its own rather than sharing
+        the gold's. That is the Linux half of what sysprep /generalize does for Windows.
+
+        walinuxagent is deliberately NOT installed. That package is what pins cloud-init
+        to the Azure datasource, and the whole point of the generic route is to keep
+        NoCloud working.
+
+        BAKE-OK is the sentinel the host greps the serial console for. It is echoed only
+        after the installs have returned, so its absence means the bake did not finish -
+        which is the difference between shipping a gold and shipping a broken one.
+    #>
+    param(
+        [object]$Entry,
+        [bool]$ApplyUpdates,
+        [string[]]$ExtraPackages
+    )
+
+    $packages = @()
+    foreach ($package in @($Entry.BakePackages)) {
+        if (-not [string]::IsNullOrWhiteSpace([string]$package)) { $packages += [string]$package }
+    }
+    foreach ($package in @($ExtraPackages)) {
+        if (-not [string]::IsNullOrWhiteSpace([string]$package)) { $packages += ([string]$package).Trim() }
+    }
+    $packages = @($packages | Select-Object -Unique)
+
+    $lines = New-Object System.Collections.Generic.List[string]
+    [void]$lines.Add("#cloud-config")
+    [void]$lines.Add("package_update: true")
+    if ($ApplyUpdates) { [void]$lines.Add("package_upgrade: true") }
+    if ($packages.Count -gt 0) {
+        [void]$lines.Add("packages:")
+        foreach ($package in $packages) { [void]$lines.Add("  - '$package'") }
+    }
+    [void]$lines.Add("runcmd:")
+    # Everything below prints to the console, which is ttyS0 on these images, which is
+    # the pipe the host is reading.
+    # SINGLE quotes. In a double-quoted PowerShell string $(uname -r) is a subexpression
+    # and expands HERE, stamping the build host's own kernel into the guest's config -
+    # which on a Windows host is not even a sensible string. It has to reach the guest
+    # shell literally.
+    [void]$lines.Add('  - [ sh, -c, ''echo BAKE-KERNEL $(uname -r)'' ]')
+    [void]$lines.Add("  - [ sh, -c, 'dpkg -l | grep -c hyperv || true' ]")
+    # Generalize: the gold must carry no identity of its own.
+    [void]$lines.Add("  - [ cloud-init, clean, '--logs', '--machine-id' ]")
+    [void]$lines.Add("  - [ sh, -c, 'rm -f /etc/ssh/ssh_host_*' ]")
+    [void]$lines.Add("  - [ sh, -c, 'rm -f /etc/netplan/50-cloud-init.yaml' ]")
+    [void]$lines.Add("  - [ sh, -c, 'truncate -s 0 /etc/machine-id' ]")
+    [void]$lines.Add("  - [ sh, -c, 'echo BAKE-OK > /dev/console' ]")
+    [void]$lines.Add("power_state:")
+    [void]$lines.Add("  mode: poweroff")
+    [void]$lines.Add("  timeout: 30")
+    [void]$lines.Add("  condition: true")
+
+    return ($lines -join "`n") + "`n"
+}
+
+function Read-VmSerialConsole {
+    <#
+        Reads the guest's serial console from the named pipe a VM's COM1 is bound to,
+        and returns everything it saw.
+
+        This exists because the bake boot is otherwise BLIND. cloud-init powers the VM
+        off whether it succeeded or apt could not reach a mirror; the host sees `Off`
+        either way and would ship the gold regardless. Ubuntu and Debian cloud kernels
+        already carry console=ttyS0, so the whole boot log arrives here for nothing.
+
+        Returns the transcript. The caller decides what the absence of a sentinel means.
+    #>
+    param(
+        [Parameter(Mandatory = $true)][string]$PipeName,
+        [Parameter(Mandatory = $true)][string]$VmName,
+        [int]$TimeoutMinutes = 30
+    )
+
+    $transcript = New-Object System.Text.StringBuilder
+    $deadline = (Get-Date).AddMinutes($TimeoutMinutes)
+    $pipe = $null
+
+    try {
+        $pipe = New-Object System.IO.Pipes.NamedPipeClientStream(".", $PipeName, [System.IO.Pipes.PipeDirection]::In)
+        # The VM creates the pipe when it starts, so the first connect can lose the race.
+        $pipe.Connect(120000)
+
+        $buffer = New-Object byte[] 4096
+        while ((Get-Date) -lt $deadline) {
+            # The VM powering off closes the pipe, which is what ends this loop - a read
+            # returning zero is the normal exit, not a failure.
+            $read = $pipe.Read($buffer, 0, $buffer.Length)
+            if ($read -le 0) { break }
+            [void]$transcript.Append([System.Text.Encoding]::UTF8.GetString($buffer, 0, $read))
+        }
+    }
+    catch {
+        # A serial transcript is diagnostics. Losing it must not fail a bake that the
+        # power state can still speak for.
+        Write-Log "Could not read the serial console of '$VmName': $($_.Exception.Message)" -Tag "Debug"
+    }
+    finally {
+        if ($pipe) { $pipe.Dispose() }
+    }
+
+    return $transcript.ToString()
+}
+
+function Invoke-LinuxBakeBoot {
+    <#
+        Boots the gold once with a throwaway seed attached, so it can install what the
+        generic cloud image does not ship, and then erase its own identity.
+
+        The VM is temporary in every sense: it is created here, it is removed in the
+        finally block whatever happens, and it exists only to give the image a kernel
+        and a CPU for a few minutes.
+
+        Needs a vSwitch with a route to the distribution mirrors. There is no way to
+        install a kernel without one, so a missing switch fails loudly here rather than
+        producing a gold that looks finished and is not.
+    #>
+    param(
+        [Parameter(Mandatory = $true)][object]$Entry,
+        [Parameter(Mandatory = $true)][string]$VhdxPath,
+        [Parameter(Mandatory = $true)][string]$SwitchName,
+        [bool]$ApplyUpdates = $false,
+        [string[]]$ExtraPackages = @(),
+        [int]$TimeoutMinutes = 30
+    )
+
+    $vmName = "bake-" + $Entry.GoldName + "-" + ([Guid]::NewGuid().ToString("N").Substring(0, 6))
+    $pipeName = "bake-" + [Guid]::NewGuid().ToString("N").Substring(0, 12)
+    $isoPath = [System.IO.Path]::ChangeExtension($VhdxPath, ".bake.iso")
+    $created = $false
+
+    try {
+        $userData = Get-BakeUserData -Entry $Entry -ApplyUpdates $ApplyUpdates -ExtraPackages $ExtraPackages
+        $metaData = "instance-id: bake-" + [DateTime]::UtcNow.ToString("yyyyMMddHHmmss") + "`nlocal-hostname: bake`n"
+        $null = New-CidataIsoFile -IsoPath $isoPath -UserData $userData -MetaData $metaData
+
+        Write-Log "Creating the temporary bake VM '$vmName'" -Tag "Run"
+        New-VM -Name $vmName -Generation 2 -MemoryStartupBytes 2GB -VHDPath $VhdxPath -SwitchName $SwitchName -ErrorAction Stop | Out-Null
+        $created = $true
+
+        Set-VMProcessor -VMName $vmName -Count 2 -ErrorAction Stop
+        Set-VMMemory -VMName $vmName -DynamicMemoryEnabled $false -ErrorAction Stop
+
+        # The third-party UEFI CA, not the Windows template - these images are signed
+        # through shim, and the Windows template simply does not boot them.
+        Set-VMFirmware -VMName $vmName -EnableSecureBoot On -SecureBootTemplate "MicrosoftUEFICertificateAuthority" -ErrorAction Stop
+
+        Add-VMDvdDrive -VMName $vmName -Path $isoPath -ErrorAction Stop
+
+        # The boot order has to name the disk: a Generation 2 VM offered a DVD will try
+        # it first, and a CIDATA disc is not bootable.
+        $bootDisk = Get-VMHardDiskDrive -VMName $vmName -ErrorAction Stop | Select-Object -First 1
+        Set-VMFirmware -VMName $vmName -FirstBootDevice $bootDisk -ErrorAction Stop
+
+        Set-VMComPort -VMName $vmName -Number 1 -Path "\\.\pipe\$pipeName" -ErrorAction Stop
+
+        Write-Log "Starting the bake boot - installing $($Entry.BakePackages -join ', ')" -Tag "Run"
+        Start-VM -Name $vmName -ErrorAction Stop
+
+        $transcript = Read-VmSerialConsole -PipeName $pipeName -VmName $vmName -TimeoutMinutes $TimeoutMinutes
+
+        # The pipe closing usually means the guest went down, but wait on the power state
+        # as well: that is the thing that actually says the disk is no longer in use.
+        $deadline = (Get-Date).AddMinutes(5)
+        while ((Get-Date) -lt $deadline) {
+            $vm = Get-VM -Name $vmName -ErrorAction SilentlyContinue
+            if ($null -eq $vm -or $vm.State -eq "Off") { break }
+            Start-Sleep -Seconds 5
+        }
+
+        $vm = Get-VM -Name $vmName -ErrorAction SilentlyContinue
+        if ($vm -and $vm.State -ne "Off") {
+            Write-Log "The bake VM did not power off within the timeout - stopping it" -Tag "Warn"
+            Stop-VM -Name $vmName -TurnOff -Force -ErrorAction SilentlyContinue
+            Write-Log "The gold may be incomplete: cloud-init never reported finishing" -Tag "Error"
+            return $false
+        }
+
+        $logPath = [System.IO.Path]::ChangeExtension($VhdxPath, ".bake.log")
+        try {
+            [System.IO.File]::WriteAllText($logPath, $transcript, (New-Object System.Text.UTF8Encoding($false)))
+            Write-Log "Bake console transcript written to '$logPath'" -Tag "Info"
+        }
+        catch {
+            Write-Log "Could not write the bake transcript: $($_.Exception.Message)" -Tag "Debug"
+        }
+
+        if ($transcript -match "BAKE-OK") {
+            $kernel = ""
+            if ($transcript -match "BAKE-KERNEL\s+(\S+)") { $kernel = $Matches[1] }
+            if ($kernel) { Write-Log "Bake finished - guest kernel $kernel" -Tag "ok" }
+            else { Write-Log "Bake finished" -Tag "ok" }
+            return $true
+        }
+
+        # Powered off without the sentinel: cloud-init ran and something in it failed,
+        # most often apt with no route to a mirror.
+        Write-Log "The bake VM powered off without reporting BAKE-OK - the gold is NOT baked. See '$logPath'" -Tag "Error"
+        return $false
+    }
+    catch {
+        Write-Log "Bake boot failed: $($_.Exception.Message)" -Tag "Error"
+        return $false
+    }
+    finally {
+        if ($created) {
+            # The VM must go before anything else touches the VHDX, and it must go even
+            # when the bake threw - a bake VM left attached to a gold quietly locks it.
+            try {
+                $vm = Get-VM -Name $vmName -ErrorAction SilentlyContinue
+                if ($vm) {
+                    if ($vm.State -ne "Off") { Stop-VM -Name $vmName -TurnOff -Force -ErrorAction SilentlyContinue }
+                    # -RemoveVHD is NOT passed: the VHDX is the gold, not a scratch disk.
+                    Remove-VM -Name $vmName -Force -ErrorAction Stop
+                    Write-Log "Removed the temporary bake VM '$vmName'" -Tag "Run"
+                }
+            }
+            catch {
+                Write-Log "Could not remove the bake VM '$vmName': $($_.Exception.Message) - remove it by hand before using this gold" -Tag "Error"
+            }
+        }
+        if (Test-Path -LiteralPath $isoPath) {
+            Remove-Item -LiteralPath $isoPath -Force -ErrorAction SilentlyContinue
+        }
+    }
+}
+
+function Start-LinuxInteractiveConfiguration {
+    <#
+        The Linux half of the first blade.
+
+        Deliberately much shorter than the Windows form, because most of what that one
+        asks does not exist here: there is no UI language to choose (a cloud image
+        carries one locale and no MUI packs), no RDP or ping toggle (ufw is inactive on
+        these images, so there is nothing to open), no Server Manager, Welcome screen,
+        first-sign-in or sign-in-keyboard policy, no device encryption, no AVMA key, no
+        Edge policy and no virtual edition hop. What is left is the machine's region
+        settings and its disk.
+    #>
+    param(
+        [string]$CurrentLocale,
+        [string]$CurrentKeyboard,
+        [string]$CurrentOutputDirectory
+    )
+
+    Import-LinuxTimeZoneCatalog
+
+    $catalog = @(Get-LinuxImageCatalog)
+    $distroItems = @()
+    foreach ($entry in $catalog) {
+        $distroItems += [PSCustomObject]@{ Id = $entry.Id; Label = "$($entry.Name)  ->  $($entry.GoldName)" }
+    }
+
+    $distroId = Show-Menu -Title "Select a Linux distribution" -Items $distroItems `
+        -Heading "Distribution" -HeadingHint "The cloud image this gold is built from"
+    if ($null -eq $distroId) { return $null }
+    $entry = $catalog | Where-Object { $_.Id -eq $distroId } | Select-Object -First 1
+
+    # Locale. The same catalog the Windows path uses - the tag is translated to a glibc
+    # name at the point it is written into the seed, not here.
+    $localeItems = @()
+    foreach ($tag in (Get-OrderedLocaleTags)) {
+        $localeItems += [PSCustomObject]@{ Id = $tag; Label = "$tag - $(Get-LocaleDisplayName -LocaleTag $tag)" }
+    }
+    $localeDefault = [array]::IndexOf(@($localeItems.Id), $CurrentLocale)
+    if ($localeDefault -lt 0) { $localeDefault = 0 }
+    $locale = Show-Menu -Title "Select the system locale" -Items $localeItems -SelectedIndex $localeDefault `
+        -Heading "Locale" -HeadingHint "Written into the gold as LANG" `
+        -StatusLines ([ordered]@{ distro = $entry.Name })
+    if ($null -eq $locale) { return $null }
+
+    $keyboardDefault = [array]::IndexOf(@($localeItems.Id), $CurrentKeyboard)
+    if ($keyboardDefault -lt 0) { $keyboardDefault = $localeDefault }
+    $keyboard = Show-Menu -Title "Select the console keyboard layout" -Items $localeItems -SelectedIndex $keyboardDefault `
+        -Heading "Keyboard" -HeadingHint "The console keymap - irrelevant over SSH, it matters at the Hyper-V console" `
+        -StatusLines ([ordered]@{ distro = $entry.Name; locale = (Get-LinuxLocaleName -LocaleTag $locale) })
+    if ($null -eq $keyboard) { return $null }
+
+    $timeZoneDefault = [array]::IndexOf(@($script:LinuxTimeZones.Id), "UTC")
+    if ($timeZoneDefault -lt 0) { $timeZoneDefault = 0 }
+    $timeZone = Show-Menu -Title "Select the time zone" -Items $script:LinuxTimeZones -SelectedIndex $timeZoneDefault `
+        -Heading "Time zone" -HeadingHint "IANA name, as cloud-init and systemd want it" `
+        -StatusLines ([ordered]@{ distro = $entry.Name; locale = (Get-LinuxLocaleName -LocaleTag $locale) })
+    if ($null -eq $timeZone) { return $null }
+
+    Show-MenuHeader -Title "Disk" -StatusLines ([ordered]@{
+        distro   = $entry.Name
+        locale   = (Get-LinuxLocaleName -LocaleTag $locale)
+        keyboard = (Get-LinuxKeymap -LocaleTag $keyboard)
+        timezone = $timeZone
+    })
+    Write-Studio -Text "" -Key "fg"
+    # Every VM differences off this gold and a differencing child cannot be resized
+    # independently of its parent, so this number is the size of every machine built
+    # from it - not a default a VM may override later.
+    Write-Studio -Text "  The gold's disk size is the disk size of every VM built from it." -Key "muted"
+    Write-Studio -Text "  A differencing child cannot be resized away from its parent." -Key "muted"
+    Write-Studio -Text "" -Key "fg"
+    $diskGB = Read-BoundedInt -Prompt "  Disk size (GB)" -DefaultValue $entry.DefaultDiskGB -MinValue 8 -MaxValue 2048
+
+    # The bake boot needs a switch with a route to the distribution mirrors. There is no
+    # way to install a kernel without one, so the question is asked rather than guessed,
+    # and "skip" is an explicit answer rather than something that happens by accident.
+    $switchItems = @()
+    foreach ($switch in @(Get-VMSwitch -ErrorAction SilentlyContinue)) {
+        $switchItems += [PSCustomObject]@{ Id = $switch.Name; Label = "$($switch.Name)  ($($switch.SwitchType))" }
+    }
+    $switchItems += [PSCustomObject]@{ Id = "__skip__"; Label = "Skip the bake boot - leave the stock kernel and no hyperv-daemons" }
+
+    $switchName = Show-Menu -Title "Select a virtual switch for the bake boot" -Items $switchItems `
+        -Heading "Bake network" -HeadingHint "The gold boots once to install $($entry.BakePackages -join ', ') - it needs to reach the mirrors" `
+        -StatusLines ([ordered]@{ distro = $entry.Name; disk = "$diskGB GB" })
+    if ($null -eq $switchName) { return $null }
+
+    $applyUpdates = $false
+    $bakeExtraPackages = @()
+    if ($switchName -ne "__skip__") {
+        $updateItems = @(
+            [PSCustomObject]@{ Id = "no";  Label = "No - install only what the image is missing" }
+            [PSCustomObject]@{ Id = "yes"; Label = "Yes - full package upgrade (slower, and the gold ages the moment it is built)" }
+        )
+        $updateChoice = Show-Menu -Title "Apply all available updates during the bake?" -Items $updateItems `
+            -Heading "Updates" -HeadingHint "A full upgrade can add a lot of minutes to the bake"
+        if ($null -eq $updateChoice) { return $null }
+        $applyUpdates = ($updateChoice -eq "yes")
+
+        Show-MenuHeader -Title "Extra packages" -StatusLines ([ordered]@{ distro = $entry.Name; switch = $switchName })
+        Write-Studio -Text "" -Key "fg"
+        Write-Studio -Text "  Anything every VM from this gold should already have." -Key "muted"
+        Write-Studio -Text "  Space separated. Blank for none." -Key "muted"
+        Write-Studio -Text "" -Key "fg"
+        $extraRaw = Read-Host "  Extra packages"
+        if (-not [string]::IsNullOrWhiteSpace($extraRaw)) {
+            $bakeExtraPackages = @($extraRaw -split "[\s,]+" | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+        }
+    }
+
+    $outputDirectory = $CurrentOutputDirectory
+    if ([string]::IsNullOrWhiteSpace($outputDirectory)) {
+        $outputDirectory = Join-Path -Path $PSScriptRoot -ChildPath "vhdx"
+    }
+
+    return [PSCustomObject]@{
+        OsFamily        = "Linux"
+        Entry           = $entry
+        Locale          = $locale
+        KeyboardLayout  = $keyboard
+        TimeZone        = $timeZone
+        DiskSizeGB      = $diskGB
+        OutputDirectory = $outputDirectory
+        CacheDirectory  = (Join-Path -Path $PSScriptRoot -ChildPath "lnx-images")
+        BakeSwitchName  = $(if ($switchName -eq "__skip__") { "" } else { $switchName })
+        BakeApplyUpdates = $applyUpdates
+        BakeExtraPackages = $bakeExtraPackages
+    }
+}
+
+function Invoke-LinuxGoldRun {
+    # The whole Linux path, from a finished configuration to a gold on disk. Kept apart
+    # from the Windows body rather than threaded through it: the two share the output
+    # directory and nothing else.
+    param([Parameter(Mandatory = $true)][object]$Config)
+
+    $entry = $Config.Entry
+
+    Write-Log "Building $($entry.Name) as '$($entry.GoldName)'" -Tag "Info"
+    Write-Log "Locale: $(Get-LinuxLocaleName -LocaleTag $Config.Locale) | Keymap: $(Get-LinuxKeymap -LocaleTag $Config.KeyboardLayout) | Time zone: $($Config.TimeZone)" -Tag "Info"
+    Write-Log "Disk: $($Config.DiskSizeGB) GB | Output: $($Config.OutputDirectory)" -Tag "Info"
+
+    foreach ($command in @("Convert-VHD", "Resize-VHD")) {
+        if (-not (Get-Command -Name $command -ErrorAction SilentlyContinue)) {
+            Write-Log "'$command' is not available - the Hyper-V PowerShell module is required to build a gold" -Tag "Error"
+            return $false
+        }
+    }
+
+    try {
+        $imagePath = Get-CachedLinuxImage -Entry $entry -CacheDirectory $Config.CacheDirectory
+    }
+    catch {
+        Write-Log "Could not obtain the cloud image: $($_.Exception.Message)" -Tag "Error"
+        return $false
+    }
+
+    try {
+        $checksum = (Get-FileHash -LiteralPath $imagePath -Algorithm $entry.Algorithm).Hash.ToLowerInvariant()
+        $vhdxPath = New-LinuxGoldImage -Entry $entry -ImagePath $imagePath `
+            -OutputDirectory $Config.OutputDirectory -DiskSizeGB $Config.DiskSizeGB
+    }
+    catch {
+        Write-Log "Failed to build the gold: $($_.Exception.Message)" -Tag "Error"
+        return $false
+    }
+
+    $null = Write-LinuxGoldManifest -VhdPath $vhdxPath -Entry $entry `
+        -Locale $Config.Locale -KeyboardLayout $Config.KeyboardLayout `
+        -TimeZone $Config.TimeZone -SourceChecksum $checksum
+
+    if ([string]::IsNullOrWhiteSpace([string]$Config.BakeSwitchName)) {
+        # Said plainly rather than left for a puzzled reader: without the bake the gold
+        # still carries the distribution's stock kernel and no Hyper-V integration
+        # daemons, so no heartbeat, no shutdown integration and no KVP from its VMs.
+        Write-Log "Bake skipped - this gold keeps the stock kernel and has no hyperv-daemons" -Tag "Warn"
+        return $true
+    }
+
+    $baked = Invoke-LinuxBakeBoot -Entry $entry -VhdxPath $vhdxPath -SwitchName ([string]$Config.BakeSwitchName) `
+        -ApplyUpdates ([bool]$Config.BakeApplyUpdates) -ExtraPackages @($Config.BakeExtraPackages)
+    if (-not $baked) {
+        Write-Log "'$vhdxPath' was built but the bake did not finish - do not deploy it as it stands" -Tag "Error"
+        return $false
+    }
+
+    return $true
 }
 
 # ---------------------------[ Disk Helpers ]---------------------------
@@ -4368,6 +6105,13 @@ if ($needsInteractive) {
 
     if ($null -eq $config) {
         Write-Log "Cancelled at the configuration menu - nothing was built" -Tag "Info"
+        Complete-Script -ExitCode 1
+    }
+
+    # A Linux gold shares the output directory with the Windows path and nothing else -
+    # no WIM, no image index, no unattend, no sysprep. It runs here and the script ends.
+    if ($config.OsFamily -eq "Linux") {
+        if (Invoke-LinuxGoldRun -Config $config) { Complete-Script -ExitCode 0 }
         Complete-Script -ExitCode 1
     }
 

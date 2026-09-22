@@ -1,0 +1,5 @@
+# Keep the folder, never the contents - cloud images are hundreds of MB and must not end up in git.
+*
+!.gitignore
+!.gitkeep
+!README.md
