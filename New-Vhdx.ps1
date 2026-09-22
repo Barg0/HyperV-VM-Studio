@@ -2879,10 +2879,12 @@ function Write-DownloadProgressLine {
         if ($filled -lt 0) { $filled = 0 }
 
         Write-Host "`r" -NoNewline
-        Write-Studio -Text "  [" -Key "border" -NoNewline
+        # The brackets take `fg`, not `border`: they are what gives the bar its ends, and
+        # at border they sank into the background beside the track they are meant to bound.
+        Write-Studio -Text "  [" -Key "fg" -NoNewline
         Write-Studio -Text ("#" * $filled) -Key "accent" -NoNewline
         Write-Studio -Text ("-" * ($barWidth - $filled)) -Key "border" -NoNewline
-        Write-Studio -Text "]" -Key "border" -NoNewline
+        Write-Studio -Text "]" -Key "fg" -NoNewline
         Write-Studio -Text $stats -Key "muted" -NoNewline
         $drawn = 3 + $barWidth + $stats.Length
     }
@@ -2891,7 +2893,7 @@ function Write-DownloadProgressLine {
         # no percentage to show and no end to predict, so the line says what it knows.
         $stats = "  " + (Format-ByteSize -Bytes $BytesRead) + $rate
         Write-Host "`r" -NoNewline
-        Write-Studio -Text "  [ downloading ]" -Key "border" -NoNewline
+        Write-Studio -Text "  [ downloading ]" -Key "fg" -NoNewline
         Write-Studio -Text $stats -Key "muted" -NoNewline
         $drawn = 16 + $stats.Length
     }
@@ -3542,7 +3544,7 @@ function Get-LinuxImageCatalog {
             ChecksumUrl   = "https://cloud-images.ubuntu.com/releases/26.04/release/SHA256SUMS"
             Algorithm     = "SHA256"
             SourceFormat  = "qcow2"
-            DefaultDiskGB = 64
+            DefaultDiskGB = 32
             # Ubuntu's cloud image carries grub-efi-amd64-signed AND grub-pc, so it
             # boots either generation. Gen2 is the default anyway.
             Generation    = 2
@@ -3558,7 +3560,7 @@ function Get-LinuxImageCatalog {
             ChecksumUrl   = "https://cloud-images.ubuntu.com/releases/24.04/release/SHA256SUMS"
             Algorithm     = "SHA256"
             SourceFormat  = "qcow2"
-            DefaultDiskGB = 64
+            DefaultDiskGB = 32
             Generation    = 2
             BakePackages  = @("linux-azure", "linux-cloud-tools-azure")
         }
@@ -3577,7 +3579,7 @@ function Get-LinuxImageCatalog {
             ChecksumUrl   = "https://cloud.debian.org/images/cloud/trixie/latest/SHA512SUMS"
             Algorithm     = "SHA512"
             SourceFormat  = "qcow2"
-            DefaultDiskGB = 64
+            DefaultDiskGB = 32
             # Debian ships no grub-pc in ANY trixie cloud variant, so it is UEFI only.
             Generation    = 2
             # hyperv-daemons for the integration services, and the keyboard machinery
@@ -4401,13 +4403,17 @@ function Start-LinuxInteractiveConfiguration {
         keyboard = (Get-LinuxKeymap -LocaleTag $keyboard)
         timezone = $timeZone
     })
-    Write-Studio -Text "" -Key "fg"
+    # Show-MenuHeader already ends on a blank line - adding another gave the block two.
     # Every VM differences off this gold and a differencing child cannot be resized
     # independently of its parent, so this number is the size of every machine built
     # from it - not a default a VM may override later.
     Write-Studio -Text "  The gold's disk size is the disk size of every VM built from it." -Key "muted"
     Write-Studio -Text "  A differencing child cannot be resized away from its parent." -Key "muted"
-    Write-Studio -Text "" -Key "fg"
+    Write-Host ""
+    # Closing rule, the same one Show-Menu draws under its options, so a blade that
+    # takes typed input is framed like a blade that takes a keypress.
+    Write-Studio -Text ("  " + ("-" * 62)) -Key "muted"
+    Write-Host ""
     $diskGB = Read-BoundedInt -Prompt "  Disk size (GB)" -DefaultValue $entry.DefaultDiskGB -MinValue 8 -MaxValue 2048
 
     # The bake boot needs a switch with a route to the distribution mirrors. There is no
@@ -4437,10 +4443,11 @@ function Start-LinuxInteractiveConfiguration {
         $applyUpdates = ($updateChoice -eq "yes")
 
         Show-MenuHeader -Title "Extra packages" -StatusLines ([ordered]@{ distro = $entry.Name; switch = $switchName })
-        Write-Studio -Text "" -Key "fg"
         Write-Studio -Text "  Anything every VM from this gold should already have." -Key "muted"
         Write-Studio -Text "  Space separated. Blank for none." -Key "muted"
-        Write-Studio -Text "" -Key "fg"
+        Write-Host ""
+        Write-Studio -Text ("  " + ("-" * 62)) -Key "muted"
+        Write-Host ""
         $extraRaw = Read-Host "  Extra packages"
         if (-not [string]::IsNullOrWhiteSpace($extraRaw)) {
             $bakeExtraPackages = @($extraRaw -split "[\s,]+" | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
