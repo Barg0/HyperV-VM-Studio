@@ -109,7 +109,14 @@ $enableLogFile = $true
 #
 # Replacing it with this project's own bar was researched and dropped; the findings
 # are in .claude\progress-panel-research.md rather than in code.
-$ProgressPreference = "SilentlyContinue"
+#
+# GLOBAL, not script scope. Most cmdlets resolve a preference variable by walking the
+# caller's scope and would see either, but the Storage module's cmdlets are CDXML -
+# generated wrappers over CIM - and Format-Volume was still painting its band with the
+# script-scoped form. The global is the scope every lookup ends at, so it is the one
+# that reaches all of them. These scripts own their process and exit at the end, so
+# there is nothing to restore it for.
+$global:ProgressPreference = "SilentlyContinue"
 
 $logFileDirectory = Join-Path -Path $PSScriptRoot -ChildPath "logs\build-vms"
 $logFile          = Join-Path -Path $logFileDirectory -ChildPath $logFileName
@@ -389,7 +396,8 @@ function Write-Log {
     # what went wrong, and a reason with its tail missing is not a reason. They wrap
     # instead - two rows for the lines that earn them.
     if ($shown -ne "warn" -and $shown -ne "error") {
-        $furniture = $clock.Length + 1 + 2 + $rawTag.Length + 3
+        # The leading space counts too - it is a real column.
+    $furniture = 1 + $clock.Length + 1 + 2 + $rawTag.Length + 3
         $available = (Get-ConsoleWidth) - 1 - $furniture
         if ($available -lt 12) { $available = 12 }
         if ($shownMessage.Length -gt $available) {
@@ -399,7 +407,10 @@ function Write-Log {
 
     # The clock and the brackets are furniture, not content: they take `muted` so the
     # tag and the message are what the eye lands on.
-    Write-Studio -Text "$clock " -Key "muted" -NoNewline
+    # One space in front, so the timestamp does not sit flush against the window
+    # border. Console only: the log FILE has no border to clear and its lines stay
+    # unindented, which keeps them greppable from column one.
+    Write-Studio -Text " $clock " -Key "muted" -NoNewline
     Write-Studio -Text "[ " -Key "muted" -NoNewline
     Write-Studio -Text "$rawTag" -Key $color -NoNewline
     Write-Studio -Text " ] " -Key "muted" -NoNewline
@@ -421,6 +432,11 @@ function Complete-Script {
     Write-Log "Runtime $($duration.ToString('hh\:mm\:ss\.ff'))" -Tag "Info"
     Write-Log "Exit $ExitCode" -Tag "Info"
     Write-Log "==================== End ====================" -Tag "End"
+
+    # One blank line before the prompt comes back, so the shell's own line does not sit
+    # flush against the end banner.
+    Write-Host ""
+
     exit $ExitCode
 }
 
@@ -462,6 +478,179 @@ function Get-ConfigObject {
 
     $raw = Get-Content -LiteralPath $Path -Raw -Encoding UTF8
     return ($raw | ConvertFrom-Json)
+}
+
+function Get-BuildConfigCandidates {
+    <#
+        Every config this run could be built from: config.json beside the script, plus
+        whatever is in configs\.
+
+        Each one is opened and looked at rather than trusted by extension - a file that
+        does not parse, or that carries no servers, is still RETURNED but marked
+        invalid with the reason. A config somebody meant to use and mistyped is more
+        useful on screen, greyed out and explained, than silently absent from a list
+        they are staring at.
+    #>
+    param([string]$ScriptRoot)
+
+    $found = New-Object System.Collections.Generic.List[object]
+    $paths = New-Object System.Collections.Generic.List[string]
+
+    $beside = Join-Path -Path $ScriptRoot -ChildPath "config.json"
+    if (Test-Path -LiteralPath $beside) { $paths.Add($beside) | Out-Null }
+
+    $folder = Join-Path -Path $ScriptRoot -ChildPath "configs"
+    if (Test-Path -LiteralPath $folder) {
+        foreach ($file in @(Get-ChildItem -LiteralPath $folder -Filter "*.json" -File -ErrorAction SilentlyContinue | Sort-Object Name)) {
+            # A config.json symlinked or copied into configs\ as well should not be
+            # offered twice.
+            if ($paths -contains $file.FullName) { continue }
+            $paths.Add($file.FullName) | Out-Null
+        }
+    }
+
+    foreach ($path in $paths) {
+        $entry = [pscustomobject]@{
+            Path    = $path
+            Name    = (Split-Path -Leaf $path)
+            InRoot  = ($path -eq $beside)
+            Valid   = $false
+            Reason  = ""
+            Servers = 0
+            Linux   = 0
+            Windows = 0
+        }
+
+        try {
+            $doc = Get-ConfigObject -Path $path
+            $servers = @($doc.servers)
+            if ($servers.Count -eq 0) {
+                $entry.Reason = "no servers"
+            }
+            else {
+                $entry.Valid = $true
+                $entry.Servers = $servers.Count
+                foreach ($server in $servers) {
+                    if (Test-IsLinuxServer -Server $server) { $entry.Linux++ } else { $entry.Windows++ }
+                }
+            }
+        }
+        catch {
+            # The parser's own words, trimmed to something that fits a menu row.
+            $reason = ($_.Exception.Message -replace "\s+", " ").Trim()
+            if ($reason.Length -gt 48) { $reason = $reason.Substring(0, 45) + "..." }
+            $entry.Reason = $reason
+        }
+
+        $found.Add($entry) | Out-Null
+    }
+
+    return $found.ToArray()
+}
+
+function Get-BuildConfigSources {
+    <#
+        Every valid config, loaded, with each of its servers tagged with the source it
+        came from.
+
+        Not merged. Two configs can disagree about the gold folder, where VMs live, how
+        machines are named, which domain join accounts exist - and the right answer to
+        all of that is "whatever the config that server came from says". So the servers
+        are pooled for the MENU, and the build regroups them by source and gives each
+        group its own defaults back. Merging would have to pick a winner for every one
+        of those, and any winner is wrong for half the machines.
+
+        The tag is a note property on the server object rather than a parallel lookup,
+        because the server object is what every function downstream already receives.
+    #>
+    param([string]$ScriptRoot)
+
+    $sources = New-Object System.Collections.Generic.List[object]
+
+    foreach ($entry in @(Get-BuildConfigCandidates -ScriptRoot $ScriptRoot)) {
+        if (-not $entry.Valid) {
+            Write-Log "Ignoring '$($entry.Name)' - $($entry.Reason)" -Tag "Warn"
+            continue
+        }
+
+        $config = Get-ConfigObject -Path $entry.Path
+        if (-not $config.defaults) {
+            Write-Log "Ignoring '$($entry.Name)' - no defaults section" -Tag "Warn"
+            continue
+        }
+
+        $source = [pscustomobject]@{
+            Path     = $entry.Path
+            Name     = $entry.Name
+            Config   = $config
+            Defaults = $config.defaults
+            Servers  = @($config.servers)
+        }
+
+        foreach ($server in $source.Servers) {
+            # Added, never replaced: re-running discovery on the same objects must not
+            # throw on the second pass.
+            if ($server.PSObject.Properties.Match("_source").Count -eq 0) {
+                $server | Add-Member -NotePropertyName "_source" -NotePropertyValue $source
+            }
+            else {
+                $server._source = $source
+            }
+        }
+
+        $sources.Add($source) | Out-Null
+    }
+
+    return $sources.ToArray()
+}
+
+function Test-BuildConfigSourcesUnique {
+    <#
+        Refuses the run when two configs name the same machine.
+
+        Hyper-V would refuse the second one anyway - but late, after its gold has been
+        copied, which on a 32 GB fixed disk is minutes of work and a half-built lab to
+        clean up. Better to say it before anything is written, and to name BOTH files
+        so it is obvious which pair to fix.
+    #>
+    param([object[]]$Sources)
+
+    $seen = @{}
+    $clashes = New-Object System.Collections.Generic.List[string]
+
+    foreach ($source in $Sources) {
+        foreach ($server in @($source.Servers)) {
+            $name = ([string](Get-HyperVVmName -Server $server)).Trim().ToLowerInvariant()
+            if ([string]::IsNullOrWhiteSpace($name)) { continue }
+            if ($seen.ContainsKey($name)) {
+                $clashes.Add(("'{0}' is in both {1} and {2}" -f $name, $seen[$name], $source.Name)) | Out-Null
+            }
+            else {
+                $seen[$name] = $source.Name
+            }
+        }
+    }
+
+    if ($clashes.Count -eq 0) { return $true }
+
+    Write-Log "The same VM name appears in more than one config:" -Tag "Error"
+    foreach ($clash in $clashes) { Write-Log "  $clash" -Tag "Error" }
+    Write-Log "Rename one of them, or pass -ConfigPath to build from a single config" -Tag "Error"
+    return $false
+}
+
+function Set-ActiveConfigSource {
+    <#
+        Makes one config the current one: the catalogue root every lookup resolves
+        against (domain join accounts, Arc principals, VHD Sets) and the naming rules.
+
+        Called once per source group at build time, so a run that spans two configs
+        gives each group the settings its own file asked for.
+    #>
+    param([object]$Source)
+
+    $script:ConfigRoot = $Source.Config
+    Set-NamingOptionsFromDefaults -Defaults $Source.Defaults
 }
 
 function Resolve-ConfiguredHostPath {
@@ -937,13 +1126,20 @@ function Show-GoldLanguageForm {
             $tag = Get-LanguageTagFromSlug -Slug $row.Language
             $locked = (@($row.Languages).Count -le 1)
             $arrows = if ($locked) { @(" ", " ") } else { @("<", ">") }
-            $rowColor = if ($locked) { "DarkGray" } else { "Gray" }
+            # Palette keys, not ConsoleColor names. "DarkGray" and "Gray" are not in
+            # the table, so Write-Studio fell back to `fg` for both and a locked row -
+            # one with a single gold on disk, which the arrows cannot move - was drawn
+            # exactly as brightly as a row you can actually change.
+            $rowColor = if ($locked) { "muted" } else { "fg" }
 
             # The arrows are a control, like the cursor, so they carry the cursor's colour
             # rather than the row's - the language between them is the value.
             if ($cursor -eq $index) {
                 Write-Studio -Text "    > " -Key "accent" -NoNewline
-                $tagColor = "White"
+                # The row under the cursor is already marked by the accent caret, so
+                # the tag only needs full foreground - and a locked row stays muted
+                # even under the cursor, because it still cannot be changed.
+                $tagColor = if ($locked) { "muted" } else { "fg" }
             }
             else {
                 Write-Host "      " -NoNewline
@@ -3272,13 +3468,22 @@ function ConvertTo-YamlDoubleQuoted {
 }
 
 function Get-LinuxDomainJoinPackages {
-    # realmd does the join and writes the sssd, krb5, nsswitch and PAM configuration;
-    # the rest is what has to be installed for it to be able to. oddjob-mkhomedir is
-    # not optional in practice - without it a domain user logs in with no home
-    # directory at all.
+    <#
+        realmd does the join and writes the sssd, krb5, nsswitch and PAM configuration;
+        the rest is what has to be installed for it to be able to.
+
+        oddjob and oddjob-mkhomedir USED to be in this list, on the belief that a
+        domain user would otherwise log in with no home directory. That is RHEL
+        thinking and it is wrong here. Checked on a joined Ubuntu 26.04 box: both
+        packages install, oddjobd runs - and does nothing, because Debian and Ubuntu
+        ship no pam-configs profile for it, so pam_oddjob_mkhomedir.so sits on disk
+        unreferenced. What these distributions use is the plain kernel-side
+        pam_mkhomedir.so, wired up by pam-auth-update. See the mkhomedir command in
+        Get-LinuxDomainJoinCommands.
+    #>
     return @(
         "realmd", "sssd", "sssd-tools", "adcli", "krb5-user",
-        "libnss-sss", "libpam-sss", "oddjob", "oddjob-mkhomedir", "samba-common-bin"
+        "libnss-sss", "libpam-sss", "samba-common-bin"
     )
 }
 
@@ -3327,6 +3532,114 @@ function ConvertTo-SudoersGroupToken {
     return "%" + ($name -replace " ", "\ ")
 }
 
+function ConvertTo-RealmLoginUser {
+    <#
+        The join account as `realm join --user=` needs it: the BARE name, with any
+        domain stripped off either end.
+
+        This is not cosmetics. realm hands the value to `adcli --login-user`, and when
+        it contains an @, Kerberos reads everything after it as the REALM - literally,
+        and case-sensitively. A Kerberos realm is upper case, so "administrator@ad.example"
+        asks for a ticket in the realm "ad.example" while the KDC answers for
+        "AD.EXAMPLE", and the library rejects the reply it did not expect:
+
+            ! Couldn't get kerberos ticket for: administrator@ad.example:
+              KDC reply did not match expectations
+
+        Observed on a real join, 2026-09-22. Nothing about it says "wrong user name",
+        which is what made it worth this comment.
+
+        The domain is not lost by stripping it: `realm join` already takes it as its
+        final argument, and adcli derives the realm from that with the right case
+        (--domain-realm AD.EXAMPLE). The down-level form is stripped for the same
+        reason - "AD\Administrator" is a Windows spelling that means nothing to adcli.
+
+        The studio's own placeholder is "Administrator@ad.example.invalid", because
+        that IS right for the Windows path - Add-Computer takes a UPN. One field,
+        two consumers, and only one of them may keep the domain.
+    #>
+    param([string]$User)
+
+    $name = ([string]$User).Trim()
+    if ([string]::IsNullOrWhiteSpace($name)) { return "" }
+
+    $slash = $name.LastIndexOf("\")
+    if ($slash -ge 0) { $name = $name.Substring($slash + 1).Trim() }
+
+    $at = $name.IndexOf("@")
+    if ($at -ge 0) { $name = $name.Substring(0, $at).Trim() }
+
+    return $name
+}
+
+function Get-LinuxArcCommands {
+    <#
+        The runcmd lines that install the Connected Machine agent and onboard the VM.
+
+        The Windows path does this from GuestProvision.ps1, which never runs on a Linux
+        VM - Set-LinuxProvisioning writes a cloud-init seed instead - so Arc was simply
+        absent here until now.
+
+        THE SECRET DOES NOT GO ON THE COMMAND LINE. Microsoft says so in the azcmagent
+        reference, and on Linux it matters more than on Windows: cloud-init sends every
+        runcmd's output to /var/log/cloud-init-output.log, which is world readable on
+        these images, and a command line is visible in /proc while it runs. So the
+        credentials are written to a 0600 file, passed with --config, and deleted in
+        the same command whatever happens - the trap is what makes "whatever happens"
+        true, including a connect that throws.
+
+        Only servicePrincipal is supported. hostContext means "sign in with the host's
+        own Az PowerShell session and call Connect-AzConnectedMachine", which is a
+        Windows-and-PowerShell-Direct mechanism with no Linux counterpart; a config
+        asking for it is left alone rather than half-honoured.
+
+        Retries mirror the Windows path: exit 42 is most often RBAC or resource
+        provider registration still propagating, which is inherently racy against a VM
+        that boots and connects immediately.
+    #>
+    param([object]$ArcConfig)
+
+    $commands = New-Object System.Collections.Generic.List[string]
+    if ($null -eq $ArcConfig) { return $commands.ToArray() }
+    if (([string]$ArcConfig.authMode) -ne "servicePrincipal") { return $commands.ToArray() }
+
+    $secret = [string]$ArcConfig.servicePrincipalSecret
+    if ([string]::IsNullOrWhiteSpace($secret)) { return $commands.ToArray() }
+
+    # Keys are the flag names with the leading dashes removed - that is the whole
+    # contract of --config, and it is why this is hand-built rather than ConvertTo-Json
+    # over the config object, which carries fields azcmagent has never heard of.
+    $settings = [ordered]@{
+        "service-principal-id"     = [string]$ArcConfig.servicePrincipalAppId
+        "service-principal-secret" = $secret
+        "tenant-id"                = [string]$ArcConfig.tenantId
+        "subscription-id"          = [string]$ArcConfig.subscriptionId
+        "resource-group"           = [string]$ArcConfig.resourceGroup
+        "location"                 = [string]$ArcConfig.location
+    }
+    $json = ($settings | ConvertTo-Json -Compress)
+
+    $configPath = "/etc/azcmagent-connect.json"
+    $installer = "/tmp/install_linux_azcmagent.sh"
+
+    $install = "curl -sSL -o " + $installer + " https://aka.ms/azcmagent && bash " + $installer +
+               " && echo ARC-AGENT-OK || echo ARC-AGENT-FAILED"
+    [void]$commands.Add($install)
+
+    # umask before the write, not chmod after it: chmod leaves a window in which the
+    # file exists world readable, and this one holds a credential.
+    $connect = "umask 077; printf '%s' " + (ConvertTo-ShellSingleQuoted -Value $json) + " > " + $configPath + "; " +
+               "trap 'rm -f " + $configPath + "' EXIT INT TERM; " +
+               "n=0; while [ `$n -lt 3 ]; do " +
+               "/opt/azcmagent/bin/azcmagent connect --config " + $configPath + " && { echo ARC-CONNECT-OK; break; }; " +
+               "n=`$((n+1)); " +
+               "[ `$n -lt 3 ] && { echo ARC-CONNECT-RETRY; sleep `$((n*60)); } || echo ARC-CONNECT-FAILED; " +
+               "done; rm -f " + $configPath
+    [void]$commands.Add($connect)
+
+    return $commands.ToArray()
+}
+
 function Get-LinuxDomainJoinCommands {
     <#
         The shell commands that join a domain and hand out sudo. Returned as plain
@@ -3357,7 +3670,12 @@ function Get-LinuxDomainJoinCommands {
     $ouPath = ([string]$DomainJoin.ouPath).Trim()
     if ([string]::IsNullOrWhiteSpace($domain)) { return $commands.ToArray() }
 
-    $joinArgs = "--unattended --user=" + (ConvertTo-ShellSingleQuoted -Value $joinUser)
+    # Bare name only - see ConvertTo-RealmLoginUser for what an @domain does to the
+    # Kerberos realm.
+    $realmUser = ConvertTo-RealmLoginUser -User $joinUser
+    if ([string]::IsNullOrWhiteSpace($realmUser)) { return $commands.ToArray() }
+
+    $joinArgs = "--unattended --user=" + (ConvertTo-ShellSingleQuoted -Value $realmUser)
     if (-not [string]::IsNullOrWhiteSpace($ouPath)) {
         $joinArgs += " --computer-ou=" + (ConvertTo-ShellSingleQuoted -Value $ouPath)
     }
@@ -3365,6 +3683,39 @@ function Get-LinuxDomainJoinCommands {
             " | realm join $joinArgs " + (ConvertTo-ShellSingleQuoted -Value $domain) +
             " && echo DOMAIN-JOIN-OK || echo DOMAIN-JOIN-FAILED"
     [void]$commands.Add($join)
+
+    # A home directory on first login.
+    #
+    # sssd already knows WHERE it goes - realm join writes fallback_homedir into
+    # sssd.conf, /home/%u@%d - but nothing creates it, so without this a domain user
+    # logs in to a directory that is not there.
+    #
+    # Ubuntu and Debian do this with pam_mkhomedir.so through pam-auth-update rather
+    # than with oddjob, which is why the oddjob packages are no longer installed. The
+    # stock "mkhomedir" profile would work, but it leaves homes at the pam_mkhomedir
+    # default of umask 0022 - drwxr-xr-x, every domain user able to read every other
+    # one's home. So a profile of our own goes in beside it with umask=0077, matching
+    # the mode a local user's home already gets.
+    #
+    # The tab between "optional" and the module name is what pam-auth-update's parser
+    # expects; spaces there are not accepted.
+    $profileLines = @(
+        "Name: Create home directory on login (private)",
+        "Default: yes",
+        "Priority: 0",
+        "Session-Type: Additional",
+        "Session-Interactive-Only: yes",
+        "Session:",
+        "`toptional`t`t`tpam_mkhomedir.so umask=0077"
+    )
+    $profileWrite = "printf '%s\n'"
+    foreach ($line in $profileLines) { $profileWrite += " " + (ConvertTo-ShellSingleQuoted -Value $line) }
+    $profileWrite += " > /usr/share/pam-configs/mkhomedir-private"
+
+    $mkhomedir = $profileWrite + "; " +
+                 "DEBIAN_FRONTEND=noninteractive pam-auth-update --enable mkhomedir-private" +
+                 " && echo MKHOMEDIR-OK || echo MKHOMEDIR-FAILED"
+    [void]$commands.Add($mkhomedir)
 
     $sudoTokens = @()
     foreach ($group in @($DomainJoin.sudoGroups)) {
@@ -3449,7 +3800,33 @@ function Get-CloudInitUserData {
         $domainJoin = $Server.domainJoin
     }
 
+    # Resolved through the same function the Windows path uses, so the catalogue
+    # lookup, the legacy defaults block and the validation are all one implementation.
+    # It throws on an enabled-but-incomplete block, which is what we want: a VM that
+    # was meant to be Arc-enabled and silently is not is worse than a failed build.
+    $arcConfig = $null
+    try {
+        $arcConfig = Get-EffectiveAzureArcConfig -Server $Server -Defaults $Defaults
+    }
+    catch {
+        Write-Log "Azure Arc for '$HostName': $($_.Exception.Message)" -Tag "Error"
+        throw
+    }
+    if ($null -ne $arcConfig -and ([string]$arcConfig.authMode) -ne "servicePrincipal") {
+        # hostContext signs in with the HOST's Az PowerShell session and calls
+        # Connect-AzConnectedMachine over PowerShell Direct - Windows only, and there is
+        # no Linux equivalent to fall back to.
+        Write-Log "Azure Arc for '$HostName' asks for $($arcConfig.authMode) auth, which is Windows only - skipped" -Tag "Warn"
+        $arcConfig = $null
+    }
+
     $packages = @()
+    if ($null -ne $arcConfig) {
+        # The install script is fetched with curl. Ubuntu's cloud image has it, Debian's
+        # generic one does not always, and a missing curl would fail the onboarding for
+        # a reason that has nothing to do with Arc.
+        $packages += "curl"
+    }
     if ($null -ne $domainJoin) {
         # Installed per VM rather than baked, by decision: a gold stays lean and only
         # the machines that actually join pay for it. The cost is that a joining VM
@@ -3530,6 +3907,15 @@ function Get-CloudInitUserData {
     # opinion about any of it.
     if ($null -ne $domainJoin) {
         foreach ($command in @(Get-LinuxDomainJoinCommands -DomainJoin $domainJoin)) {
+            [void]$runCommands.Add($command)
+        }
+    }
+
+    # After the join, deliberately. A join can disturb name resolution and it restarts
+    # sssd; onboarding a machine whose identity has just changed underneath it is a
+    # worse order than doing it once the box has settled.
+    if ($null -ne $arcConfig) {
+        foreach ($command in @(Get-LinuxArcCommands -ArcConfig $arcConfig)) {
             [void]$runCommands.Add($command)
         }
     }
@@ -6207,6 +6593,12 @@ function Show-MultiSelectMenu {
         throw "Show-MultiSelectMenu requires at least one item."
     }
 
+    # An item may carry a Section; consecutive items sharing one are drawn under a
+    # heading. The headings are written INSIDE the row loop rather than being items of
+    # their own, so the cursor still walks one index per selectable row and nothing
+    # about navigation has to know they exist.
+    $hasSections = (@($Items | Where-Object { -not [string]::IsNullOrWhiteSpace([string]$_.Section) })).Count -gt 0
+
     $index = 0
     $selected = @{}
     foreach ($item in $Items) {
@@ -6237,6 +6629,7 @@ function Show-MultiSelectMenu {
             $anchor = Get-MenuCursorAnchor
         }
 
+        $lastSection = $null
         for ($i = 0; $i -lt $Items.Count; $i++) {
             $item  = $Items[$i]
             $id    = [string]$item.Id
@@ -6244,12 +6637,25 @@ function Show-MultiSelectMenu {
             $label = "$mark  $($item.Label)"
             $isSelectedRow = ($i -eq $index)
 
+            $section = [string]$item.Section
+            if (-not [string]::IsNullOrWhiteSpace($section) -and $section -ne $lastSection) {
+                # A blank line before every heading but the first, so the groups read as
+                # groups rather than as one list with words in it.
+                if ($null -ne $lastSection) { Write-Host "" }
+                Write-Studio -Text ("  " + $section) -Key "accent"
+                $lastSection = $section
+            }
+
+            # Rows sit one step in when there are headings above them, so the heading
+            # is what the eye lands on first.
+            $indent = if ($hasSections) { "  " } else { "" }
+
             if ($isSelectedRow) {
-                Write-Studio -Text "  > " -Key "accent" -NoNewline
+                Write-Studio -Text "  $indent> " -Key "accent" -NoNewline
                 Write-Studio -Text $label -Key "fg"
             }
             else {
-                Write-Host "    " -NoNewline
+                Write-Host "    $indent" -NoNewline
                 Write-Studio -Text $label -Key "muted"
             }
         }
@@ -7177,6 +7583,116 @@ function Invoke-BuildPreflight {
     return $false
 }
 
+function Invoke-BuildPreflightForGroups {
+    <#
+        Preflight, run once per config the selection touches, each with its own
+        defaults, gold folder and paths. Every group is checked even after one fails -
+        somebody fixing a lab wants the whole list, not the first line of it.
+    #>
+    param(
+        [object[]]$Groups,
+        [object[]]$VhdSets,
+        [object]$FallbackDefaults,
+        [string]$FallbackVhdxDirectory,
+        [string]$FallbackVmPath,
+        [string]$FallbackVhdPath
+    )
+
+    $allPassed = $true
+    foreach ($group in $Groups) {
+        $groupDefaults = $FallbackDefaults
+        $groupVhdx = $FallbackVhdxDirectory
+        $groupVmPath = $FallbackVmPath
+        $groupVhdPath = $FallbackVhdPath
+
+        if ($null -ne $group.Source) {
+            Set-ActiveConfigSource -Source $group.Source
+            $resolved = Resolve-ConfigSourcePaths -Source $group.Source `
+                -FallbackVmPath $FallbackVmPath -FallbackVhdPath $FallbackVhdPath
+            $groupDefaults = $group.Source.Defaults
+            $groupVhdx = $resolved.VhdxDirectory
+            $groupVmPath = $resolved.VmPath
+            $groupVhdPath = $resolved.VhdPath
+            if ($Groups.Count -gt 1) { Write-Log ("Preflight for '{0}'" -f $group.Source.Name) -Tag "Info" }
+        }
+
+        $goldImages = @(Get-HyperVGoldImages -VhdxDirectory $groupVhdx)
+        $passed = Invoke-BuildPreflight -Defaults $groupDefaults -Servers $group.Servers `
+            -GoldImages $goldImages -VhdxDirectory $groupVhdx -VmPath $groupVmPath -VhdPath $groupVhdPath `
+            -VhdSets $VhdSets
+        if (-not $passed) { $allPassed = $false }
+    }
+    return $allPassed
+}
+
+function Resolve-ConfigSourcePaths {
+    <#
+        The gold folder and the VM/VHD roots for one source, with the host defaults the
+        caller already resolved standing in for anything the file leaves blank.
+
+        The resolved roots are STAMPED BACK into that source's defaults, which is the
+        part that matters. New-ProvisionedVm does not receive a path - it reads
+        $Defaults.vmPath itself, several layers down. Startup has always done this for
+        the one config it loaded; with several, every source needs it, or a config that
+        leaves vmPath blank (relying on the Hyper-V host default) reaches Join-Path with
+        an empty string and every VM in it fails with
+
+            Cannot bind argument to parameter 'Path' because it is an empty string.
+
+        Idempotent on purpose: preflight and the build both call it.
+    #>
+    param([object]$Source, [string]$FallbackVmPath, [string]$FallbackVhdPath)
+
+    $vhdx = Resolve-ConfiguredHostPath -ConfiguredPath ([string]$Source.Defaults.vhdxDirectory) `
+        -PromptLabel "Gold VHDX directory" -ExampleHint "vhdx" -DefaultWhenEmpty "vhdx"
+
+    $vmPath = [string]$Source.Defaults.vmPath
+    if ([string]::IsNullOrWhiteSpace($vmPath)) { $vmPath = $FallbackVmPath }
+    $vhdPath = [string]$Source.Defaults.vhdPath
+    if ([string]::IsNullOrWhiteSpace($vhdPath)) { $vhdPath = $vmPath }
+
+    $Source.Defaults | Add-Member -NotePropertyName "vmPath" -NotePropertyValue $vmPath -Force
+    $Source.Defaults | Add-Member -NotePropertyName "vhdPath" -NotePropertyValue $vhdPath -Force
+
+    return [pscustomobject]@{ VhdxDirectory = $vhdx; VmPath = $vmPath; VhdPath = $vhdPath }
+}
+
+function Get-ServerConfigSource {
+    # The config a server came from, or $null for one that was never tagged.
+    param([object]$Server)
+
+    if ($null -eq $Server) { return $null }
+    if ($Server.PSObject.Properties.Match("_source").Count -eq 0) { return $null }
+    return $Server._source
+}
+
+function Group-ServersByConfigSource {
+    <#
+        A selection split back into the configs it came from, in the order the sources
+        were loaded so a run reads the same way twice.
+
+        Servers with no source - a caller that built a list by hand - are returned as
+        one group with a null Source, which the caller treats as "use the defaults you
+        already have".
+    #>
+    param([object[]]$Servers, [object[]]$Sources)
+
+    $groups = New-Object System.Collections.Generic.List[object]
+
+    foreach ($source in @($Sources)) {
+        $mine = @($Servers | Where-Object { (Get-ServerConfigSource -Server $_) -eq $source })
+        if ($mine.Count -eq 0) { continue }
+        $groups.Add([pscustomobject]@{ Source = $source; Servers = $mine }) | Out-Null
+    }
+
+    $orphans = @($Servers | Where-Object { $null -eq (Get-ServerConfigSource -Server $_) })
+    if ($orphans.Count -gt 0) {
+        $groups.Add([pscustomobject]@{ Source = $null; Servers = $orphans }) | Out-Null
+    }
+
+    return $groups.ToArray()
+}
+
 function Invoke-BuildServers {
     param(
         [object]$Defaults,
@@ -7184,7 +7700,12 @@ function Invoke-BuildServers {
         [object[]]$GoldImages,
         [hashtable]$VhdSetMap,
         [bool]$DoStart,
-        [switch]$SlowHost
+        [switch]$SlowHost,
+        # Set when this is one config's share of a larger run. The closing verdict is
+        # then the CALLER's to give, once, at the end - said per group it claimed every
+        # selected server was done and was immediately followed by the next config
+        # starting, which is a contradiction on two adjacent lines.
+        [switch]$PartOfLargerRun
     )
 
     $failed = 0
@@ -7217,6 +7738,7 @@ function Invoke-BuildServers {
                 $failed++
                 Write-Log "Failed to create '$(Get-HyperVVmName -Server $server)': $($_.Exception.Message)" -Tag "Error"
             }
+            Write-Host ""
         }
 
         # Always start successfully created VMs at the end (unless SkipStart),
@@ -7247,14 +7769,18 @@ function Invoke-BuildServers {
         }
 
         if ($failed -gt 0) {
-            Write-Log "$failed server(s) failed in slow-host mode" -Tag "Error"
+            if (-not $PartOfLargerRun) { Write-Log "$failed server(s) failed in slow-host mode" -Tag "Error" }
             return $false
         }
 
-        Write-Log "All selected servers provisioned - slow host" -Tag "Ok"
+        if (-not $PartOfLargerRun) { Write-Log "All selected servers provisioned - slow host" -Tag "Ok" }
         return $true
     }
 
+    # A blank line after EVERY machine, the last one included - the summary that
+    # follows it is a statement about the whole run, not about that VM, and it read as
+    # though it belonged to it when the two were flush. Written whatever the outcome,
+    # because the break is about where a machine ends, not whether it worked.
     foreach ($server in $Servers) {
         try {
             New-ProvisionedVm -Server $server -Defaults $Defaults -GoldImages $GoldImages `
@@ -7264,14 +7790,15 @@ function Invoke-BuildServers {
             $failed++
             Write-Log "Failed to provision '$(Get-HyperVVmName -Server $server)': $($_.Exception.Message)" -Tag "Error"
         }
+        Write-Host ""
     }
 
     if ($failed -gt 0) {
-        Write-Log "$failed server(s) failed" -Tag "Error"
+        if (-not $PartOfLargerRun) { Write-Log "$failed server(s) failed" -Tag "Error" }
         return $false
     }
 
-    Write-Log "All selected servers provisioned" -Tag "Ok"
+    if (-not $PartOfLargerRun) { Write-Log "All selected servers provisioned" -Tag "Ok" }
     return $true
 }
 
@@ -7526,7 +8053,8 @@ function Get-BuildMenuStatusLines {
     param(
         [object[]]$Servers,
         [object[]]$GoldImages,
-        [object]$Defaults
+        [object]$Defaults,
+        [object[]]$Sources = @()
     )
 
     $cluster = "off"
@@ -7543,9 +8071,24 @@ function Get-BuildMenuStatusLines {
         }
     }
 
+    # One config names itself; several are counted, because a header row is 24 columns
+    # wide and a list of file names would be cut to nothing.
+    $configText = if (@($Sources).Count -gt 1) {
+        "{0} loaded" -f @($Sources).Count
+    }
+    elseif (@($Sources).Count -eq 1) {
+        [string]$Sources[0].Name
+    }
+    else { "none" }
+
+    $serverText = if (@($Sources).Count -gt 1) {
+        "{0} across {1} configs" -f $Servers.Count, @($Sources).Count
+    }
+    else { "{0} in config" -f $Servers.Count }
+
     return [ordered]@{
-        "config"  = (Split-Path -Leaf $ConfigPath)
-        "servers" = ("{0} in config" -f $Servers.Count)
+        "config"  = $configText
+        "servers" = $serverText
         "gold"    = ("{0} hv-*.vhdx" -f $GoldImages.Count)
         "cluster" = $cluster
     }
@@ -7557,11 +8100,24 @@ function Read-SelectedServersInteractive {
         [System.Collections.IDictionary]$StatusLines
     )
 
+    # Grouped under the config each machine came from, and only when more than one is
+    # in play - a single-config run should look exactly as it always did. The Section
+    # header is what Show-MultiSelectMenu draws above a group; it is not selectable, so
+    # it costs nothing but the line it occupies.
+    $sourceNames = @($Servers | ForEach-Object { $s = Get-ServerConfigSource -Server $_; if ($null -ne $s) { $s.Name } } | Sort-Object -Unique)
+    $showSource = ($sourceNames.Count -gt 1)
+
     $items = @()
     for ($i = 0; $i -lt $Servers.Count; $i++) {
+        $section = ""
+        if ($showSource) {
+            $source = Get-ServerConfigSource -Server $Servers[$i]
+            $section = if ($null -ne $source) { $source.Name } else { "(no config)" }
+        }
         $items += [pscustomobject]@{
-            Id    = [string]$i
-            Label = (Get-ServerMenuLabel -Server $Servers[$i])
+            Id      = [string]$i
+            Label   = (Get-ServerMenuLabel -Server $Servers[$i])
+            Section = $section
         }
     }
 
@@ -7595,27 +8151,61 @@ try {
         Complete-Script -ExitCode 1
     }
 
+    # -ConfigPath narrows the run to one file. Without it, every config is loaded -
+    # config.json beside the script and everything in configs\ - and their machines are
+    # offered together. They are NOT merged: each server keeps a tag saying which file
+    # it came from, and the build hands every group back its own defaults.
     if ([string]::IsNullOrWhiteSpace($ConfigPath)) {
-        $ConfigPath = Join-Path -Path $PSScriptRoot -ChildPath "config.json"
+        $sources = @(Get-BuildConfigSources -ScriptRoot $PSScriptRoot)
     }
-    if (-not (Test-Path -LiteralPath $ConfigPath)) {
-        Write-Log "Config not found at '$ConfigPath'" -Tag "Error"
-        Write-Log "Export config.json from html\hyperv-vm-studio.html (Load sample / Download config.json) and place it next to Build-Vms.ps1" -Tag "Error"
+    else {
+        if (-not (Test-Path -LiteralPath $ConfigPath)) {
+            Write-Log "Config not found at '$ConfigPath'" -Tag "Error"
+            Write-Log "Export one from html\hyperv-vm-studio.html, then put it beside this script or in configs\" -Tag "Error"
+            Complete-Script -ExitCode 1
+        }
+        $only = Get-ConfigObject -Path $ConfigPath
+        if (-not $only.defaults) { throw "'$ConfigPath' is missing the defaults section" }
+        $source = [pscustomobject]@{
+            Path     = $ConfigPath
+            Name     = (Split-Path -Leaf $ConfigPath)
+            Config   = $only
+            Defaults = $only.defaults
+            Servers  = @($only.servers)
+        }
+        foreach ($server in $source.Servers) {
+            if ($server.PSObject.Properties.Match("_source").Count -eq 0) {
+                $server | Add-Member -NotePropertyName "_source" -NotePropertyValue $source
+            }
+        }
+        $sources = @($source)
+    }
+
+    if ($sources.Count -eq 0) {
+        Write-Log "No usable configuration found" -Tag "Error"
+        Write-Log "Export one from html\hyperv-vm-studio.html, then put it beside this script or in configs\" -Tag "Error"
         Complete-Script -ExitCode 1
     }
 
-    Write-Log "Loading config '$ConfigPath'" -Tag "Get"
-    $config = Get-ConfigObject -Path $ConfigPath
-    $script:ConfigRoot = $config
-    $defaults = $config.defaults
-    if (-not $defaults) {
-        throw "config.json is missing the defaults section"
+    foreach ($source in $sources) {
+        Write-Log ("Loaded '{0}' - {1} VM(s)" -f $source.Name, @($source.Servers).Count) -Tag "Get"
     }
-    Set-NamingOptionsFromDefaults -Defaults $defaults
 
-    $allServers = @($config.servers)
+    if (-not (Test-BuildConfigSourcesUnique -Sources $sources)) {
+        Complete-Script -ExitCode 1
+    }
+
+    # The first source is what anything not yet grouped falls back to - the menu header,
+    # the storage placement report, the gold folder listing. Every one of those is
+    # re-resolved per group before a machine is built.
+    $config = $sources[0].Config
+    $defaults = $sources[0].Defaults
+    Set-ActiveConfigSource -Source $sources[0]
+
+    $allServers = @()
+    foreach ($source in $sources) { $allServers += @($source.Servers) }
     if ($allServers.Count -eq 0) {
-        throw "config.json contains no servers"
+        throw "no servers in any configuration"
     }
 
     $vhdxDirectory = Resolve-ConfiguredHostPath -ConfiguredPath ([string]$defaults.vhdxDirectory) `
@@ -7670,6 +8260,17 @@ try {
 
     Write-Log "VM path: $vmPath" -Tag "Info"
     Write-Log "VHD path: $vhdPath" -Tag "Info"
+
+    # Every source, not only the one whose defaults stood in above. A config that leaves
+    # vmPath blank inherits the host default resolved just now; without this it would
+    # reach the VM builder as an empty string, because that builder reads
+    # $Defaults.vmPath itself rather than being handed a path.
+    foreach ($source in $sources) {
+        $resolvedSource = Resolve-ConfigSourcePaths -Source $source -FallbackVmPath $vmPath -FallbackVhdPath $vhdPath
+        if ($sources.Count -gt 1) {
+            Write-Log ("  {0} -> gold '{1}', VMs '{2}'" -f $source.Name, $resolvedSource.VhdxDirectory, $resolvedSource.VmPath) -Tag "Info"
+        }
+    }
     $namingSuffixSource = if ([string]::IsNullOrWhiteSpace($script:NamingFqdnOverride)) { "per-VM domain join" } else { $script:NamingFqdnOverride }
     Write-Log "Naming: VM FQDN=$($script:NamingVmIncludeFqdn), folder FQDN=$($script:NamingFolderIncludeFqdn)" -Tag "Info"
     $placementVolumes = @(Get-StoragePlacementVolumes -Defaults $defaults)
@@ -7724,20 +8325,22 @@ try {
         $interactive = $true
     }
 
-    $statusLines = Get-BuildMenuStatusLines -Servers $allServers -GoldImages $goldImages -Defaults $defaults
+    $statusLines = Get-BuildMenuStatusLines -Servers $allServers -GoldImages $goldImages -Defaults $defaults -Sources $sources
 
     while ($true) {
         if ($interactive) {
             $action = $null
             $selectedServers = @()
 
+            $configWord = if ($sources.Count -gt 1) { "{0} configs" -f $sources.Count } else { "the config" }
             $menuItems = @(
-                [pscustomobject]@{ Id = "all";      Label = ("Build all VMs       provision every server in config ({0})" -f $allServers.Count) }
-                [pscustomobject]@{ Id = "selected"; Label = "Build selected      pick one or more VMs from the config" }
+                [pscustomobject]@{ Id = "all";      Label = ("Build all VMs       provision every server in {0} ({1})" -f $configWord, $allServers.Count) }
+                [pscustomobject]@{ Id = "selected"; Label = "Build selected      pick one or more VMs" }
                 [pscustomobject]@{ Id = "quit";     Label = "Quit" }
             )
 
-            $choice = Show-Menu -Title "Build VMs from config.json" -Items $menuItems -StatusLines $statusLines
+            $menuTitle = if ($sources.Count -gt 1) { "Build VMs" } else { "Build VMs from $($sources[0].Name)" }
+            $choice = Show-Menu -Title $menuTitle -Items $menuItems -StatusLines $statusLines
             if ($null -eq $choice -or $choice -eq "quit") {
                 Write-Log "Cancelled by user" -Tag "Info"
                 Complete-Script -ExitCode 0
@@ -7765,12 +8368,31 @@ try {
 
         Write-Log "$action | $($selectedServers.Count) server(s) | slow host=$useSlowHost" -Tag "Info"
 
-        $vhdSetsInScope = @(Select-VhdSetsForServers -VhdSets @($config.vhdSets) -Servers $selectedServers)
-        if (@($config.vhdSets).Count -gt 0 -and $vhdSetsInScope.Count -eq 0) {
-            Write-Log "Skipping $($config.vhdSets.Count) VHD Set(s) - no selected members" -Tag "Info"
+        # One group per config the selection touches. Everything below that depends on
+        # a config - paths, gold folder, VHD Sets, naming - is resolved per group.
+        $buildGroups = @(Group-ServersByConfigSource -Servers $selectedServers -Sources $sources)
+        if ($buildGroups.Count -gt 1) {
+            Write-Log ("Selection spans {0} configs" -f $buildGroups.Count) -Tag "Info"
+            foreach ($group in $buildGroups) {
+                Write-Log ("  {0} - {1} VM(s)" -f $group.Source.Name, @($group.Servers).Count) -Tag "Info"
+            }
         }
-        elseif (@($config.vhdSets).Count -gt $vhdSetsInScope.Count) {
-            Write-Log "VHD Sets in scope: $($vhdSetsInScope.Count) of $($config.vhdSets.Count)" -Tag "Info"
+
+        # A VHD Set belongs to one config and names members from that same config, so
+        # the sets in scope are gathered per group rather than from a single root.
+        $vhdSetsInScope = @()
+        $declaredSets = 0
+        foreach ($group in $buildGroups) {
+            $groupConfig = if ($null -ne $group.Source) { $group.Source.Config } else { $config }
+            $declared = @($groupConfig.vhdSets)
+            $declaredSets += $declared.Count
+            $vhdSetsInScope += @(Select-VhdSetsForServers -VhdSets $declared -Servers $group.Servers)
+        }
+        if ($declaredSets -gt 0 -and $vhdSetsInScope.Count -eq 0) {
+            Write-Log "Skipping $declaredSets VHD Set(s) - no selected members" -Tag "Info"
+        }
+        elseif ($declaredSets -gt $vhdSetsInScope.Count) {
+            Write-Log "VHD Sets in scope: $($vhdSetsInScope.Count) of $declaredSets" -Tag "Info"
         }
 
         # Decide where the Server Core App Compatibility FOD comes from before anything is
@@ -7784,9 +8406,9 @@ try {
         Resolve-GoldLanguagePlan -Servers $selectedServers -GoldImages $goldImages -Interactive:$interactive
 
         if ($action -eq "Check") {
-            $passed = Invoke-BuildPreflight -Defaults $defaults -Servers $selectedServers `
-                -GoldImages $goldImages -VhdxDirectory $vhdxDirectory -VmPath $vmPath -VhdPath $vhdPath `
-                -VhdSets $vhdSetsInScope
+            $passed = Invoke-BuildPreflightForGroups -Groups $buildGroups -VhdSets $vhdSetsInScope `
+                -FallbackDefaults $defaults -FallbackVhdxDirectory $vhdxDirectory `
+                -FallbackVmPath $vmPath -FallbackVhdPath $vhdPath
             if ($interactive) {
                 Write-Host ""
                 Read-Host "Press Enter to return to the menu"
@@ -7799,9 +8421,9 @@ try {
         }
 
         # Build path: preflight first, then provision
-        $passed = Invoke-BuildPreflight -Defaults $defaults -Servers $selectedServers `
-            -GoldImages $goldImages -VhdxDirectory $vhdxDirectory -VmPath $vmPath -VhdPath $vhdPath `
-            -VhdSets $vhdSetsInScope
+        $passed = Invoke-BuildPreflightForGroups -Groups $buildGroups -VhdSets $vhdSetsInScope `
+            -FallbackDefaults $defaults -FallbackVhdxDirectory $vhdxDirectory `
+            -FallbackVmPath $vmPath -FallbackVhdPath $vhdPath
         if (-not $passed) {
             Write-Log "Build aborted - preflight failed" -Tag "Error"
             if ($interactive) {
@@ -7983,8 +8605,42 @@ try {
         }
 
         $vhdSetMap = Initialize-VhdSets -VhdSets $vhdSetsInScope -VhdRoot $vhdPath
-        $ok = Invoke-BuildServers -Defaults $defaults -Servers $selectedServers `
-            -GoldImages $goldImages -VhdSetMap $vhdSetMap -DoStart:$doStart -SlowHost:$useSlowHost
+
+        # One group at a time, each with the naming rules, catalogue root, gold folder
+        # and paths its own config asked for. A failure in one group does not stop the
+        # others: the machines in a different config have nothing to do with it.
+        $ok = $true
+        $manyGroups = ($buildGroups.Count -gt 1)
+        foreach ($group in $buildGroups) {
+            $groupDefaults = $defaults
+            $groupGolds = $goldImages
+
+            if ($null -ne $group.Source) {
+                Set-ActiveConfigSource -Source $group.Source
+                $resolved = Resolve-ConfigSourcePaths -Source $group.Source `
+                    -FallbackVmPath $vmPath -FallbackVhdPath $vhdPath
+                $groupDefaults = $group.Source.Defaults
+                $groupGolds = @(Get-HyperVGoldImages -VhdxDirectory $resolved.VhdxDirectory)
+                if ($buildGroups.Count -gt 1) {
+                    Write-Log ("Building {0} VM(s) from '{1}'" -f @($group.Servers).Count, $group.Source.Name) -Tag "Info"
+                }
+            }
+
+            $groupOk = Invoke-BuildServers -Defaults $groupDefaults -Servers $group.Servers `
+                -GoldImages $groupGolds -VhdSetMap $vhdSetMap -DoStart:$doStart -SlowHost:$useSlowHost `
+                -PartOfLargerRun:$manyGroups
+            if (-not $groupOk) { $ok = $false }
+        }
+
+        # Said once, about the run, after every config has had its turn.
+        if ($manyGroups) {
+            if ($ok) {
+                Write-Log ("All selected servers provisioned - {0} configs" -f $buildGroups.Count) -Tag "Ok"
+            }
+            else {
+                Write-Log "Some servers failed - see the errors above" -Tag "Error"
+            }
+        }
 
         if ($ok) {
             Complete-Script -ExitCode 0
