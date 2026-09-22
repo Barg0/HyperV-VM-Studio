@@ -3118,8 +3118,10 @@ function Get-CloudInitUserData {
         first boot the same way. Hashing it properly would need crypt(3) SHA-512, which
         Windows PowerShell 5.1 has no way to produce.
 
-        ssh_pwauth stays on so the Hyper-V console and a password are a way back in when
-        a key is wrong - on a lab VM that is worth more than the hardening.
+        ssh_pwauth defaults to on so the Hyper-V console and a password are a way back
+        in when a key is wrong - on a lab VM that is worth more than the hardening - but
+        it is the studio's Optional features card that decides, and a config written
+        before that card existed has no opinion and gets the old behaviour.
     #>
     param(
         [object]$Server,
@@ -3145,6 +3147,22 @@ function Get-CloudInitUserData {
         $trimmed = ([string]$package).Trim()
         if (-not [string]::IsNullOrWhiteSpace($trimmed)) { $packages += $trimmed }
     }
+
+    # The seed's own switches, from the studio's Optional features card. An absent
+    # property is not an empty list: it is a config written before that card existed,
+    # and the only safe reading of it is the behaviour this script has always had -
+    # password authentication on, the ssh unit left alone. An empty list is somebody
+    # having turned both off, which is a decision and is honoured as one.
+    $declaredFeatures = $null
+    if ($Server -and $Server.PSObject.Properties.Match("linuxFeatures").Count -gt 0) {
+        $declaredFeatures = @()
+        foreach ($feature in @($Server.linuxFeatures)) {
+            $trimmed = ([string]$feature).Trim()
+            if (-not [string]::IsNullOrWhiteSpace($trimmed)) { $declaredFeatures += $trimmed }
+        }
+    }
+    $sshPasswordAuth = ($null -eq $declaredFeatures) -or ($declaredFeatures -contains "ssh-password-auth")
+    $enableSshUnit = ($null -ne $declaredFeatures) -and ($declaredFeatures -contains "openssh-server")
 
     $lines = New-Object System.Collections.Generic.List[string]
     [void]$lines.Add("#cloud-config")
@@ -3180,8 +3198,11 @@ function Get-CloudInitUserData {
         [void]$lines.Add("    - name: $userName")
         [void]$lines.Add("      password: " + (ConvertTo-YamlSingleQuoted -Value $password))
         [void]$lines.Add("      type: text")
-        [void]$lines.Add("ssh_pwauth: true")
     }
+    # Written whichever way it goes, and outside the password block: "no password
+    # authentication" is a statement the seed should make out loud, and cloud-init's own
+    # default differs between images.
+    [void]$lines.Add("ssh_pwauth: " + $(if ($sshPasswordAuth) { "true" } else { "false" }))
 
     if ($packages.Count -gt 0) {
         [void]$lines.Add("package_update: true")
@@ -3197,13 +3218,27 @@ function Get-CloudInitUserData {
     # Both distributions carry `locales`, so locale-gen needs no network. Ubuntu also
     # carries console-setup, keyboard-configuration and kbd; Debian's genericcloud image
     # carries none of them, which is why the Debian gold installs them during its bake.
+    # One runcmd block, whatever fills it - cloud-init takes the key once and a second
+    # `runcmd:` in the same document silently replaces the first.
+    $runCommands = New-Object System.Collections.Generic.List[string]
+    # Enables sshd rather than installing it: both images ship openssh-server running,
+    # so this is a no-op on them and the one line that matters on an image that does
+    # not carry it. Named differently on different distributions, hence both, and
+    # `|| true` so a first boot is never failed by a unit that is already where it
+    # should be.
+    if ($enableSshUnit) {
+        [void]$runCommands.Add("systemctl enable --now ssh 2>/dev/null || systemctl enable --now sshd 2>/dev/null || true")
+    }
     if (-not [string]::IsNullOrWhiteSpace($Locale) -and $Locale -ne $Language) {
         $formatVariables = @("LC_TIME","LC_NUMERIC","LC_MONETARY","LC_PAPER","LC_MEASUREMENT",
                              "LC_ADDRESS","LC_TELEPHONE","LC_NAME","LC_IDENTIFICATION")
         $assignments = ($formatVariables | ForEach-Object { "$_=$Locale" }) -join " "
+        [void]$runCommands.Add("locale-gen $Locale || true")
+        [void]$runCommands.Add("update-locale $assignments")
+    }
+    if ($runCommands.Count -gt 0) {
         [void]$lines.Add("runcmd:")
-        [void]$lines.Add("  - [ sh, -c, 'locale-gen $Locale || true' ]")
-        [void]$lines.Add("  - [ sh, -c, 'update-locale $assignments' ]")
+        foreach ($command in $runCommands) { [void]$lines.Add("  - [ sh, -c, '$command' ]") }
     }
 
     # The gold is grown to its full size by New-Vhdx, but the partition and the
