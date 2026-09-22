@@ -3554,13 +3554,20 @@ function Write-ChompBar {
     $script:chompFrame = ([int]$script:chompFrame + 1) % 8
     $mouth = if ($script:chompFrame -lt 4) { "C" } else { "c" }
 
+    # Nothing left to eat: the mouth goes with the last dot rather than sitting on the
+    # end of a finished bar. A completed download is a solid line, full width.
+    if ($Filled -ge $Width) {
+        Write-Studio -Text ("-" * $Width) -Key "fg" -NoNewline
+        return
+    }
+
     # The mouth stands on the last eaten cell, so an empty bar still shows it at the
     # start rather than leaving the line blank until the first percent arrives.
     $mouthAt = $Filled - 1
     if ($mouthAt -lt 0) { $mouthAt = 0 }
 
     if ($mouthAt -gt 0) {
-        Write-Studio -Text ("-" * $mouthAt) -Key "border" -NoNewline
+        Write-Studio -Text ("-" * $mouthAt) -Key "fg" -NoNewline
     }
     Write-Studio -Text $mouth -Key "bandDeploy" -NoNewline
 
@@ -3584,7 +3591,7 @@ function Write-DownloadProgressLine {
         the console font having them, and this is the one piece of output that runs
         for minutes on a machine nobody has configured yet. Colour still applies -
         the mouth takes deploy orange, the dots ahead of it the accent blue, the
-        chewed track behind it the border, the numbers muted:
+        chewed track behind it the foreground the brackets have, the numbers muted:
 
           [-----------C  o  o  o  o  o  ]  58%  478.2/824.6 MiB  12.4 MiB/s  ETA 0:28
     #>
