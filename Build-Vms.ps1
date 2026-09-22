@@ -3110,6 +3110,154 @@ local-hostname: $HostName
 "@
 }
 
+function ConvertTo-YamlDoubleQuoted {
+    # A YAML double-quoted scalar. Needed because a shell command may contain single
+    # quotes - a realm join does - and the single-quoted form cannot hold one without
+    # doubling it, which the shell would then see.
+    param([string]$Value)
+
+    # .Replace, not -replace: the pattern of -replace is a regex and its replacement
+    # has its own rules, so a backslash has to be written three different ways to mean
+    # one thing. These are literal string swaps and read as what they are.
+    $escaped = ([string]$Value).Replace("\", "\\")
+    $escaped = $escaped.Replace('"', '\"')
+    return '"' + $escaped + '"'
+}
+
+function Get-LinuxDomainJoinPackages {
+    # realmd does the join and writes the sssd, krb5, nsswitch and PAM configuration;
+    # the rest is what has to be installed for it to be able to. oddjob-mkhomedir is
+    # not optional in practice - without it a domain user logs in with no home
+    # directory at all.
+    return @(
+        "realmd", "sssd", "sssd-tools", "adcli", "krb5-user",
+        "libnss-sss", "libpam-sss", "oddjob", "oddjob-mkhomedir", "samba-common-bin"
+    )
+}
+
+function ConvertTo-ShellSingleQuoted {
+    param([string]$Value)
+    return "'" + (([string]$Value) -replace "'", "'\''") + "'"
+}
+
+function ConvertTo-LinuxGroupName {
+    <#
+        A domain group as a Linux box knows it.
+
+        A realm join leaves sssd resolving names fully qualified, so "Domain Admins" is
+        "Domain Admins@ad.example" to everything on the box and a line naming the short
+        form matches nothing at all. A name with no @ gets the domain appended rather
+        than being taken on trust.
+
+        The down-level form is accepted and its prefix dropped. "AD\Domain Admins" is
+        how Windows spells it and how somebody used to Windows will type it, but sssd
+        never answers to a backslash - and a backslash reaching a sudoers file is worse
+        than a name that does not resolve, because there it is an escape character.
+    #>
+    param([string]$Group, [string]$Domain)
+
+    $name = ([string]$Group).Trim()
+    if ([string]::IsNullOrWhiteSpace($name)) { return "" }
+    $slash = $name.LastIndexOf("\")
+    if ($slash -ge 0) { $name = $name.Substring($slash + 1).Trim() }
+    if ([string]::IsNullOrWhiteSpace($name)) { return "" }
+    if ($name -notmatch "@" -and -not [string]::IsNullOrWhiteSpace($Domain)) {
+        $name = "$name@$($Domain.Trim())"
+    }
+    return $name
+}
+
+function ConvertTo-SudoersGroupToken {
+    <#
+        A group as sudoers spells it: "%" then the name, with every space escaped -
+        "Domain Admins" is one group, not two words, and sudoers only reads it that way
+        when the space carries a backslash.
+    #>
+    param([string]$Group, [string]$Domain)
+
+    $name = ConvertTo-LinuxGroupName -Group $Group -Domain $Domain
+    if ([string]::IsNullOrWhiteSpace($name)) { return "" }
+    return "%" + ($name -replace " ", "\ ")
+}
+
+function Get-LinuxDomainJoinCommands {
+    <#
+        The shell commands that join a domain and hand out sudo. Returned as plain
+        strings; the caller quotes them for YAML.
+
+        Order matters and every step earns its place:
+
+        1. `realm join --unattended` with the password on stdin. Unattended is what
+           makes realmd read stdin instead of prompting at a console nobody is watching.
+        2. `getent group` for each group BEFORE it reaches sudoers. A group that does
+           not resolve is a typo, or a name sssd spells differently - and the difference
+           between saying so and saying nothing is this check.
+        3. The sudoers file is built in a temp file, validated with `visudo -cf`, and
+           only then installed. An invalid file under /etc/sudoers.d does not disable
+           one rule; it can stop sudo running at all, on a machine whose only other
+           account may be a domain account that cannot yet elevate.
+        4. `realm permit` only when a login list was given. A plain realm join already
+           permits every domain user, so an empty list means "leave that alone" rather
+           than "permit nobody".
+    #>
+    param([object]$DomainJoin)
+
+    $commands = New-Object System.Collections.Generic.List[string]
+
+    $domain = ([string]$DomainJoin.domain).Trim()
+    $joinUser = ([string]$DomainJoin.joinUser).Trim()
+    $joinPassword = [string]$DomainJoin.joinPassword
+    $ouPath = ([string]$DomainJoin.ouPath).Trim()
+    if ([string]::IsNullOrWhiteSpace($domain)) { return $commands.ToArray() }
+
+    $joinArgs = "--unattended --user=" + (ConvertTo-ShellSingleQuoted -Value $joinUser)
+    if (-not [string]::IsNullOrWhiteSpace($ouPath)) {
+        $joinArgs += " --computer-ou=" + (ConvertTo-ShellSingleQuoted -Value $ouPath)
+    }
+    $join = "printf '%s' " + (ConvertTo-ShellSingleQuoted -Value $joinPassword) +
+            " | realm join $joinArgs " + (ConvertTo-ShellSingleQuoted -Value $domain) +
+            " && echo DOMAIN-JOIN-OK || echo DOMAIN-JOIN-FAILED"
+    [void]$commands.Add($join)
+
+    $sudoTokens = @()
+    foreach ($group in @($DomainJoin.sudoGroups)) {
+        $token = ConvertTo-SudoersGroupToken -Group $group -Domain $domain
+        if (-not [string]::IsNullOrWhiteSpace($token)) { $sudoTokens += $token }
+    }
+
+    if ($sudoTokens.Count -gt 0) {
+        $script = 'tmp=$(mktemp); '
+        foreach ($token in $sudoTokens) {
+            $plain = $token.Substring(1) -replace "\\ ", " "
+            $script += "if getent group " + (ConvertTo-ShellSingleQuoted -Value $plain) + " >/dev/null 2>&1; then "
+            $script += "printf '%s ALL=(ALL:ALL) ALL\n' " + (ConvertTo-ShellSingleQuoted -Value $token) + ' >> $tmp; '
+            $script += "else echo " + (ConvertTo-ShellSingleQuoted -Value ("SUDO-GROUP-UNRESOLVED " + $plain)) + "; fi; "
+        }
+        $script += 'if [ -s $tmp ] && visudo -cf $tmp >/dev/null 2>&1; then '
+        $script += 'install -m 0440 -o root -g root $tmp /etc/sudoers.d/90-domain-sudo && echo SUDO-OK; '
+        $script += 'else echo SUDO-NOT-INSTALLED; fi; rm -f $tmp'
+        [void]$commands.Add($script)
+    }
+
+    $loginNames = @()
+    foreach ($group in @($DomainJoin.loginGroups)) {
+        $name = ConvertTo-LinuxGroupName -Group $group -Domain $domain
+        if ([string]::IsNullOrWhiteSpace($name)) { continue }
+        $loginNames += $name
+    }
+
+    if ($loginNames.Count -gt 0) {
+        $permit = "realm deny --all; "
+        foreach ($name in $loginNames) {
+            $permit += "realm permit -g " + (ConvertTo-ShellSingleQuoted -Value $name) + "; "
+        }
+        $permit += "echo DOMAIN-LOGIN-RESTRICTED"
+        [void]$commands.Add($permit)
+    }
+
+    return $commands.ToArray()
+}
+
 function Get-CloudInitUserData {
     <#
         The Linux answer file.
@@ -3144,27 +3292,27 @@ function Get-CloudInitUserData {
         $sshKey = ([string]$Defaults.sshAuthorizedKey).Trim()
     }
 
+    # The join is a property of the row, resolved by the studio's export into a plain
+    # domainJoin block - the same one the Windows path reads. mode "deferred" is
+    # Windows only: it exists because a Windows join has to survive a reboot inside
+    # specialize, and cloud-init has no equivalent problem.
+    $domainJoin = $null
+    if ($Server.domainJoin -and [bool]$Server.domainJoin.enabled -and
+        -not [string]::IsNullOrWhiteSpace([string]$Server.domainJoin.domain)) {
+        $domainJoin = $Server.domainJoin
+    }
+
     $packages = @()
+    if ($null -ne $domainJoin) {
+        # Installed per VM rather than baked, by decision: a gold stays lean and only
+        # the machines that actually join pay for it. The cost is that a joining VM
+        # needs the package mirror AND the domain controller reachable on first boot.
+        foreach ($package in @(Get-LinuxDomainJoinPackages)) { $packages += $package }
+    }
     foreach ($package in @($Server.packages)) {
         $trimmed = ([string]$package).Trim()
         if (-not [string]::IsNullOrWhiteSpace($trimmed)) { $packages += $trimmed }
     }
-
-    # The seed's own switches, from the studio's Optional features card. An absent
-    # property is not an empty list: it is a config written before that card existed,
-    # and the only safe reading of it is the behaviour this script has always had -
-    # password authentication on, the ssh unit left alone. An empty list is somebody
-    # having turned both off, which is a decision and is honoured as one.
-    $declaredFeatures = $null
-    if ($Server -and $Server.PSObject.Properties.Match("linuxFeatures").Count -gt 0) {
-        $declaredFeatures = @()
-        foreach ($feature in @($Server.linuxFeatures)) {
-            $trimmed = ([string]$feature).Trim()
-            if (-not [string]::IsNullOrWhiteSpace($trimmed)) { $declaredFeatures += $trimmed }
-        }
-    }
-    $sshPasswordAuth = ($null -eq $declaredFeatures) -or ($declaredFeatures -contains "ssh-password-auth")
-    $enableSshUnit = ($null -ne $declaredFeatures) -and ($declaredFeatures -contains "openssh-server")
 
     $lines = New-Object System.Collections.Generic.List[string]
     [void]$lines.Add("#cloud-config")
@@ -3201,10 +3349,9 @@ function Get-CloudInitUserData {
         [void]$lines.Add("      password: " + (ConvertTo-YamlSingleQuoted -Value $password))
         [void]$lines.Add("      type: text")
     }
-    # Written whichever way it goes, and outside the password block: "no password
-    # authentication" is a statement the seed should make out loud, and cloud-init's own
-    # default differs between images.
-    [void]$lines.Add("ssh_pwauth: " + $(if ($sshPasswordAuth) { "true" } else { "false" }))
+    # Stated out loud, and outside the password block: cloud-init's own default differs
+    # between images, so the seed says what it wants rather than inheriting an answer.
+    [void]$lines.Add("ssh_pwauth: true")
 
     if ($packages.Count -gt 0) {
         [void]$lines.Add("package_update: true")
@@ -3223,14 +3370,6 @@ function Get-CloudInitUserData {
     # One runcmd block, whatever fills it - cloud-init takes the key once and a second
     # `runcmd:` in the same document silently replaces the first.
     $runCommands = New-Object System.Collections.Generic.List[string]
-    # Enables sshd rather than installing it: both images ship openssh-server running,
-    # so this is a no-op on them and the one line that matters on an image that does
-    # not carry it. Named differently on different distributions, hence both, and
-    # `|| true` so a first boot is never failed by a unit that is already where it
-    # should be.
-    if ($enableSshUnit) {
-        [void]$runCommands.Add("systemctl enable --now ssh 2>/dev/null || systemctl enable --now sshd 2>/dev/null || true")
-    }
     if (-not [string]::IsNullOrWhiteSpace($Locale) -and $Locale -ne $Language) {
         $formatVariables = @("LC_TIME","LC_NUMERIC","LC_MONETARY","LC_PAPER","LC_MEASUREMENT",
                              "LC_ADDRESS","LC_TELEPHONE","LC_NAME","LC_IDENTIFICATION")
@@ -3238,9 +3377,21 @@ function Get-CloudInitUserData {
         [void]$runCommands.Add("locale-gen $Locale || true")
         [void]$runCommands.Add("update-locale $assignments")
     }
+
+    # Last, and after the packages that cloud-init installs earlier in this same file:
+    # realm join cannot run until realmd exists, and the locale work above has no
+    # opinion about any of it.
+    if ($null -ne $domainJoin) {
+        foreach ($command in @(Get-LinuxDomainJoinCommands -DomainJoin $domainJoin)) {
+            [void]$runCommands.Add($command)
+        }
+    }
     if ($runCommands.Count -gt 0) {
         [void]$lines.Add("runcmd:")
-        foreach ($command in $runCommands) { [void]$lines.Add("  - [ sh, -c, '$command' ]") }
+        # Double-quoted, not single: a realm join carries single-quoted shell words
+        # of its own, and the single-quoted YAML form cannot hold one without doubling
+        # it - which the shell would then see as part of the command.
+        foreach ($command in $runCommands) { [void]$lines.Add("  - [ sh, -c, " + (ConvertTo-YamlDoubleQuoted -Value $command) + " ]") }
     }
 
     # The gold is grown to its full size by New-Vhdx, but the partition and the
