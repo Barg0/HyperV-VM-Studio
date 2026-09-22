@@ -1611,7 +1611,7 @@ function Invoke-OptimizeDynamicVhd {
         Invoke-ZeroVhdFreeSpace -Path $Path
         try {
             Optimize-VHD -Path $Path -Mode Prezeroed -ErrorAction Stop
-            Write-Log "Optimize-VHD Prezeroed completed" -Tag "Ok"
+            Write-Log "Optimize-VHD Prezeroed" -Tag "Ok"
         }
         catch {
             Write-Log ("Optimize-VHD Prezeroed failed: {0}" -f $_.Exception.Message) -Tag "Warn"
@@ -1626,7 +1626,7 @@ function Invoke-OptimizeDynamicVhd {
 
         try {
             Optimize-VHD -Path $Path -Mode Retrim -ErrorAction Stop
-            Write-Log "Optimize-VHD Retrim completed" -Tag "Ok"
+            Write-Log "Optimize-VHD Retrim" -Tag "Ok"
         }
         catch {
             Write-Log ("Optimize-VHD Retrim skipped: {0}" -f $_.Exception.Message) -Tag "Warn"
@@ -1634,13 +1634,13 @@ function Invoke-OptimizeDynamicVhd {
 
         try {
             Optimize-VHD -Path $Path -Mode Full -ErrorAction Stop
-            Write-Log "Optimize-VHD Full completed" -Tag "Ok"
+            Write-Log "Optimize-VHD Full" -Tag "Ok"
         }
         catch {
             Write-Log ("Optimize-VHD Full failed: {0} - trying Quick" -f $_.Exception.Message) -Tag "Warn"
             try {
                 Optimize-VHD -Path $Path -Mode Quick -ErrorAction Stop
-                Write-Log "Optimize-VHD Quick completed" -Tag "Ok"
+                Write-Log "Optimize-VHD Quick" -Tag "Ok"
             }
             catch {
                 Write-Log ("Optimize-VHD Quick failed: {0}" -f $_.Exception.Message) -Tag "Warn"
@@ -1655,7 +1655,7 @@ function Invoke-OptimizeDynamicVhd {
                 $mounted = $false
             }
             Optimize-VHD -Path $Path -Mode Pretrimmed -ErrorAction Stop
-            Write-Log "Optimize-VHD Pretrimmed completed" -Tag "Ok"
+            Write-Log "Optimize-VHD Pretrimmed" -Tag "Ok"
         }
         catch {
             Write-Log ("Optimize-VHD Pretrimmed skipped: {0}" -f $_.Exception.Message) -Tag "Warn"
@@ -1790,7 +1790,7 @@ function Convert-FixedDiskToDynamic {
         }
         $result.Success = $true
         $result.Message = ("Reclaimed {0}" -f (Format-ByteSize $result.ReclaimedBytes))
-        Write-Log ("Done '{0}': {1}" -f $Disk.FileName, $result.Message) -Tag "Ok"
+        Write-Log ("'{0}': {1}" -f $Disk.FileName, $result.Message) -Tag "Ok"
 
         if (-not $KeepSourceFile) {
             Remove-Item -LiteralPath $oldPath -Force -ErrorAction Stop
@@ -2048,7 +2048,7 @@ function Start-CompactSelectedDisks {
                 if ($before -gt $after) { $r.ReclaimedBytes = $before - $after }
                 $r.Success = $true
                 $r.Message = ("Reclaimed {0}" -f (Format-ByteSize $r.ReclaimedBytes))
-                Write-Log ("Compact done '{0}': {1}" -f $disk.FileName, $r.Message) -Tag "Ok"
+                Write-Log ("Compact '{0}': {1}" -f $disk.FileName, $r.Message) -Tag "Ok"
             }
             catch {
                 $r.Message = $_.Exception.Message

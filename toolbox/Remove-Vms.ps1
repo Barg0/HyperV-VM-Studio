@@ -1576,7 +1576,7 @@ function Remove-SingleVm {
         $outcome.Message = "$($outcome.FilesFailed) file(s) could not be deleted"
     }
 
-    Write-Log ("'{0}' done - {1} file(s) deleted, {2} freed" -f $name, $outcome.FilesDeleted, (Format-ByteSize $outcome.BytesFreed)) -Tag "Ok"
+    Write-Log ("'{0}' - {1} file(s) deleted, {2} freed" -f $name, $outcome.FilesDeleted, (Format-ByteSize $outcome.BytesFreed)) -Tag "Ok"
     return $outcome
 }
 
