@@ -44,13 +44,23 @@ $enableLogFile = $true
 #
 # Replacing it with this project's own bar was researched and dropped; the findings
 # are in .claude\progress-panel-research.md rather than in code.
-$ProgressPreference = "SilentlyContinue"
+#
+# GLOBAL, not script scope. Most cmdlets resolve a preference variable by walking the
+# caller's scope and would see either, but the Storage module's cmdlets are CDXML -
+# generated wrappers over CIM - and Format-Volume was still painting its band with the
+# script-scoped form. The global is the scope every lookup ends at, so it is the one
+# that reaches all of them. These scripts own their process and exit at the end, so
+# there is nothing to restore it for.
+$global:ProgressPreference = "SilentlyContinue"
 
 $logFileDirectory = Join-Path -Path $env:ProgramData -ChildPath "VmDeployLogs"
 $logFile          = Join-Path -Path $logFileDirectory -ChildPath $logFileName
 $stateFilePath    = Join-Path -Path $env:ProgramData -ChildPath "VmDeployLogs\state.json"
 $manifestPath     = Join-Path -Path $PSScriptRoot -ChildPath "manifest.json"
 $arcSecretPath    = Join-Path -Path $PSScriptRoot -ChildPath "arc-deploy.json"
+# What azcmagent is pointed at with --config, so the secret never becomes an argument.
+# Removed in the same finally block as arc-deploy.json.
+$arcConnectConfigPath = Join-Path -Path $PSScriptRoot -ChildPath "arc-connect.json"
 
 if ($enableLogFile -and -not (Test-Path -Path $logFileDirectory)) {
     New-Item -ItemType Directory -Path $logFileDirectory -Force | Out-Null
@@ -159,6 +169,10 @@ function Complete-Script {
     Write-Log "Runtime $($duration.ToString('hh\:mm\:ss\.ff'))" -Tag "Info"
     Write-Log "Exit $ExitCode" -Tag "Info"
     Write-Log "==================== End ====================" -Tag "End"
+
+    # One blank line before the prompt comes back, so the shell's own line does not sit
+    # flush against the end banner.
+    Write-Host ""
 
     exit $ExitCode
 }
@@ -665,15 +679,55 @@ function Connect-GuestProvisionAzureArc {
             return
         }
 
-        $connectArgs = @(
-            "connect",
-            "--service-principal-id", $appId,
-            "--service-principal-secret", $secret,
-            "--tenant-id", $tenantId,
-            "--subscription-id", $subscriptionId,
-            "--resource-group", $resourceGroup,
-            "--location", $location
-        )
+        # The secret goes in a FILE, not on the command line. Microsoft says so in the
+        # azcmagent reference - "to avoid exposing the secret in any console logs" - and
+        # a command line is readable by any process that can see this one while the
+        # connect runs, which on a machine still being provisioned is not a short
+        # window. --config takes JSON whose keys are the flag names without the dashes.
+        #
+        # It is written next to arc-deploy.json and removed by the same finally block,
+        # so the file that carries the secret and the file that replaces it have
+        # exactly one cleanup path between them.
+        $connectConfig = [ordered]@{
+            "service-principal-id"     = $appId
+            "service-principal-secret" = $secret
+            "tenant-id"                = $tenantId
+            "subscription-id"          = $subscriptionId
+            "resource-group"           = $resourceGroup
+            "location"                 = $location
+        }
+        try {
+            # WriteAllText with an explicit BOM-less encoder, NOT Set-Content -Encoding
+            # UTF8. On Windows PowerShell 5.1 that switch means "UTF-8 WITH a byte order
+            # mark", and azcmagent is a Go program: encoding/json refuses a leading BOM
+            # and the agent reports it as AZCM0019, "the path to the configuration file
+            # is incorrect" - which sends you looking at the path, where nothing is
+            # wrong. PowerShell 7 writes no BOM for the same switch, so this cannot be
+            # reproduced anywhere but the guest.
+            $json = $connectConfig | ConvertTo-Json -Compress
+            [System.IO.File]::WriteAllText($arcConnectConfigPath, $json, (New-Object System.Text.UTF8Encoding($false)))
+            # SYSTEM and Administrators only, with inheritance broken. icacls rather
+            # than a constructed FileSecurity: a new FileSecurity object carries no
+            # owner, which Set-Acl can refuse outright - and icacls is what this script
+            # already uses to lock down the sealed domain-join credential, so there is
+            # one idiom for "this file holds a secret" rather than two.
+            & icacls.exe $arcConnectConfigPath /inheritance:r /grant:r "SYSTEM:F" "BUILTIN\Administrators:F" | Out-Null
+            if ($LASTEXITCODE -ne 0) { throw "icacls exited with $LASTEXITCODE" }
+        }
+        catch {
+            Write-Log "Could not write the azcmagent config: $($_.Exception.Message)" -Tag "Error"
+            return
+        }
+
+        # Proof the thing exists before blaming the agent for not finding it.
+        if (-not (Test-Path -LiteralPath $arcConnectConfigPath)) {
+            Write-Log "azcmagent config missing at '$arcConnectConfigPath'" -Tag "Error"
+            return
+        }
+        $configBytes = (Get-Item -LiteralPath $arcConnectConfigPath).Length
+        Write-Log "azcmagent config written ($configBytes bytes)" -Tag "Debug"
+
+        $connectArgs = @("connect", "--config", $arcConnectConfigPath)
 
         # Exit 42 ("Failed to Create Resource") is most often RBAC role-assignment
         # or resource-provider-registration propagation delay - inherently racy
@@ -689,15 +743,19 @@ function Connect-GuestProvisionAzureArc {
             try {
                 $output = & $azcmagentPath @connectArgs 2>&1
                 $exitCode = $LASTEXITCODE
-                foreach ($line in @($output)) {
-                    Write-Log "azcmagent: $line" -Tag "Debug"
-                }
                 if ($exitCode -eq 0) {
+                    foreach ($line in @($output)) { Write-Log "azcmagent: $line" -Tag "Debug" }
                     Write-Log "Azure Arc connected (attempt $attempt/$maxAttempts)" -Tag "Ok"
                     $connected = $true
                     break
                 }
                 Write-Log "Azure Arc connect failed (exit $exitCode, attempt $attempt/$maxAttempts)" -Tag "Warn"
+                # At Warn, not Debug. $logDebug is off by default, so a failed connect
+                # used to record the exit code and throw away the only sentence that
+                # said WHY - which is exactly the run you are reading the log for.
+                foreach ($line in @($output)) {
+                    if (-not [string]::IsNullOrWhiteSpace([string]$line)) { Write-Log "azcmagent: $line" -Tag "Warn" }
+                }
             }
             catch {
                 Write-Log "Azure Arc connect threw: $($_.Exception.Message) (attempt $attempt/$maxAttempts)" -Tag "Warn"
@@ -715,6 +773,9 @@ function Connect-GuestProvisionAzureArc {
         }
     }
     finally {
+        if (Test-Path -LiteralPath $arcConnectConfigPath) {
+            Remove-Item -LiteralPath $arcConnectConfigPath -Force -ErrorAction SilentlyContinue
+        }
         if (Test-Path -LiteralPath $arcSecretPath) {
             Remove-Item -LiteralPath $arcSecretPath -Force -ErrorAction SilentlyContinue
             Write-Log "Removed injected arc-deploy.json" -Tag "Info"

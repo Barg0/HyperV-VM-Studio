@@ -147,6 +147,26 @@
   .card-title img { width: 16px; height: 16px; }
   .card-meta { font-size: 11.5px; color: var(--fg-muted); margin-top: 1px; }
   .card-actions { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
+  /* The address is a fixed-width column, for the badges' sake as much as its own.
+     card-actions is a right-aligned flex row, so a wider address pushes everything to
+     its LEFT along with it - 10.1.1.100 shifted a row's DOMAIN and CORE badges out of
+     line with the row above, which is what made the list look crooked. Sized for
+     255.255.255.255 so no real address can ever grow the column.
+
+     tabular-nums on top of that, so the octets line up digit for digit down the list
+     rather than drifting with proportional glyph widths. */
+  .card-actions .card-ip {
+    /* Sized to the longest address actually in the list, not to 255.255.255.255 -
+       see ipColumnWidth(). The fallback only applies if that ever fails to run. */
+    min-width: var(--ip-col, 15ch);
+    text-align: right;
+    font-variant-numeric: tabular-nums;
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--fg);
+  }
+  /* No static address is not a value, so it does not get the weight of one. */
+  .card-actions .card-ip.is-none { font-weight: 400; color: var(--fg-muted); }
   /* Equal-size header badges: Domain / Arc / Desktop|Core|Client */
   .card-actions .pill.role,
   .card-actions .pill.status {
@@ -3702,8 +3722,8 @@ function serversForDomainJoinAccount(accountId) {
 function serversForArcPrincipal(principalId) {
   const key = String(principalId || "").trim();
   const globalPrincipal = azureArcAllVmsPrincipal();
-  if (globalPrincipal && (globalPrincipal.id === key || globalPrincipal._id === key)) return state.servers.filter(s => s.name && !isLinuxServer(s));
-  return state.servers.filter(s => s.azureArc && s.azureArc.enabled && (s.azureArc.principalId === key) && !isLinuxServer(s));
+  if (globalPrincipal && (globalPrincipal.id === key || globalPrincipal._id === key)) return state.servers.filter(s => s.name);
+  return state.servers.filter(s => s.azureArc && s.azureArc.enabled && (s.azureArc.principalId === key));
 }
 
 /* VMs added to the host failover cluster (Add-ClusterVirtualMachineRole). Unrelated to the
@@ -4682,6 +4702,24 @@ function sanitizeDiskNamePart(name) {
    disk and the rest are just the second and third disk, so they are numbered. A
    Linux VM with a file called disk-web01-d.vhdx names a thing that does not exist
    anywhere inside it. */
+/* How wide the address column needs to be, in characters.
+
+   Fixed at 15ch it fits 255.255.255.255, which no lab ever uses - so every row carried
+   four or five columns of dead space between the badges and the address. Measuring the
+   list instead keeps the column exactly as wide as its widest member: the badges still
+   line up, the addresses still line up, and the gap is gone.
+
+   A floor of 9 stops a list of short addresses from squeezing the column narrower than
+   the "no IP" placeholder and the header need. */
+function ipColumnWidth(servers) {
+  let longest = 5;                                   // "no IP"
+  for (const s of (servers || [])) {
+    const ip = String((s && s.ipAddress) || "").trim();
+    if (ip.length > longest) longest = ip.length;
+  }
+  return Math.min(15, Math.max(9, longest));
+}
+
 function osDiskFileName(serverName, forLinux) {
   const n = sanitizeDiskNamePart(serverName) || "vm";
   return forLinux ? `disk-${n}-system.vhdx` : `disk-${n}-c.vhdx`;
@@ -7342,7 +7380,7 @@ function renderServerCard(s) {
       <div class="card-actions">
         ${djBadge}${arcBadge}${clusterBadge}
         <span class="pill role ${pillClass}">${esc(img.kind)}</span>
-        <span class="card-meta">${esc(s.ipAddress || "no IP")}</span>
+        <span class="card-ip${String(s.ipAddress || "").trim() ? "" : " is-none"}" style="--ip-col:${ipColumnWidth(state.servers)}ch">${esc(s.ipAddress || "no IP")}</span>
         ${psObjectButton("vm", s._id)}
         <button class="btn icon danger-text" type="button" title="Remove VM" aria-label="Remove VM" data-del="${esc(s._id)}">${trashIcon()}</button>
       </div>
@@ -8617,6 +8655,16 @@ function validate() {
     if (p.authMode !== "hostContext") {
       if (!String(p.servicePrincipalAppId || "").trim()) err(`Arc principal ${label} uses a service principal but has no application ID.`, "Azure Arc", `arc:${p._id}:servicePrincipalAppId`);
       if (!String(p.servicePrincipalSecret || "").trim()) err(`Arc principal ${label} uses a service principal but has no secret.`, "Azure Arc", `arc:${p._id}:servicePrincipalSecret`);
+    }
+    /* Host context means "sign in with the host's own Az PowerShell session and call
+       Connect-AzConnectedMachine over PowerShell Direct" — a Windows mechanism with no
+       Linux counterpart. Build-Vms.ps1 warns and skips such a VM rather than onboarding
+       it half way, so say it here where it can still be changed. */
+    if (p.authMode === "hostContext") {
+      const linux = serversForArcPrincipal(p.id || p._id).filter(isLinuxServer);
+      if (linux.length) {
+        warn(`Arc principal ${label} uses host context, which only works for Windows — ${linux.map(s => s.name).join(", ")} will be skipped. Switch it to a service principal to onboard them.`, "Azure Arc");
+      }
     }
   });
 
@@ -11166,10 +11214,9 @@ function closeMemberPicker() {
 function renderMemberPickerList() {
   const ctx = state.memberPicker;
   const filter = (document.getElementById("memberPickerFilter").value || "").toLowerCase().trim();
-  // Arc is still Windows-only here; domain join is not any more - a Linux VM joins
-  // through realmd and sssd, which the seed sets up.
-  const excludeLinux = (ctx.mode === "azureArc");
-  const names = state.servers.filter(s => s.name && !(excludeLinux && isLinuxServer(s))).map(s => s.name);
+  // Neither Arc nor domain join is Windows-only any more: a Linux VM joins through
+  // realmd and sssd, and onboards with azcmagent - both from the cloud-init seed.
+  const names = state.servers.filter(s => s.name).map(s => s.name);
   const list = document.getElementById("memberPickerList");
   const filtered = names.filter(n => !filter || n.includes(filter));
   list.innerHTML = filtered.length ? filtered.map(n => {
