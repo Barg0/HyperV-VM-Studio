@@ -710,6 +710,15 @@
   }
   .dns-row .btn.danger-text { flex-shrink: 0; white-space: nowrap; }
 
+  /* Same shape as .dns-row - one value, one bin - under its own name so an
+     address-specific rule can land on the DNS rows without moving these. */
+  .list-row { display: flex; align-items: center; gap: 8px; }
+  .list-row input {
+    flex: 1; min-width: 0; padding-left: 32px;
+    background-repeat: no-repeat; background-position: left 9px center; background-size: 15px 15px;
+  }
+  .list-row .btn.icon, .list-row .btn.danger-text { flex-shrink: 0; }
+
   .pill.tag {
     font-size: 10px; font-weight: 700; letter-spacing: .3px; text-transform: uppercase;
     background: var(--bg-hover); color: var(--fg-muted); border-radius: var(--radius-lg); padding: 2px 6px; border: none;
@@ -2395,7 +2404,14 @@ const IMAGE_CATALOG = [
      secureBootTemplate is the field that actually matters: these images are signed by
      Microsoft's third-party UEFI CA, not by the Windows template, and a VM created
      with the wrong one does not boot. vTPM is off - nothing here uses it, and it is
-     one more thing that can refuse. */
+     one more thing that can refuse.
+
+     Differencing is off, the same as every Windows image here. It was on for a while
+     on these three - a Linux gold is small and the chain looks free - and that is
+     exactly the trap: a differencing disk ties the VM to a parent that must never be
+     touched again, which is not a default anybody chooses, it is one they discover.
+     It stays a per-VM decision on the Boot / disk card, and the default is an
+     independent copy. */
   {
     id: "hv-ubuntu-2604",
     label: "Ubuntu 26.04 LTS",
@@ -2407,7 +2423,7 @@ const IMAGE_CATALOG = [
     experience: "",
     noServerRoles: true,
     secureBootTemplate: "MicrosoftUEFICertificateAuthority",
-    defaults: { useDifferencingDisk: true, enableSecureBoot: true, enableVtpm: false, startAfterCreate: true, memoryGB: 2, cpuCount: 2 }
+    defaults: { useDifferencingDisk: false, enableSecureBoot: true, enableVtpm: false, startAfterCreate: true, memoryGB: 2, cpuCount: 2 }
   },
   {
     id: "hv-ubuntu-2404",
@@ -2420,7 +2436,7 @@ const IMAGE_CATALOG = [
     experience: "",
     noServerRoles: true,
     secureBootTemplate: "MicrosoftUEFICertificateAuthority",
-    defaults: { useDifferencingDisk: true, enableSecureBoot: true, enableVtpm: false, startAfterCreate: true, memoryGB: 2, cpuCount: 2 }
+    defaults: { useDifferencingDisk: false, enableSecureBoot: true, enableVtpm: false, startAfterCreate: true, memoryGB: 2, cpuCount: 2 }
   },
   {
     /* Debian ships no grub-pc in any trixie cloud variant, so it is UEFI only - there
@@ -2435,7 +2451,7 @@ const IMAGE_CATALOG = [
     experience: "",
     noServerRoles: true,
     secureBootTemplate: "MicrosoftUEFICertificateAuthority",
-    defaults: { useDifferencingDisk: true, enableSecureBoot: true, enableVtpm: false, startAfterCreate: true, memoryGB: 2, cpuCount: 2 }
+    defaults: { useDifferencingDisk: false, enableSecureBoot: true, enableVtpm: false, startAfterCreate: true, memoryGB: 2, cpuCount: 2 }
   }
 ];
 
@@ -2447,6 +2463,15 @@ function isLinuxImage(img) {
 }
 function isLinuxServer(s) {
   return isLinuxImage(findImage(s && s.imageId));
+}
+
+/* The icon for a catalog image, tinted by what the image IS rather than by the glyph's
+   own band. Every Linux row shares vm.svg, whose band is Workloads green - right for a
+   Windows server carrying the same cube, wrong for a Debian box. Only Linux is special
+   cased: everything else keeps the exact tint it had, including Azure Local. */
+function imageIconSrc(img) {
+  if (img && isLinuxImage(img)) return iconSrcBand(img.icon, "linux");
+  return iconSrc(img ? img.icon : "vm.svg");
 }
 
 /** Curated Install-WindowsFeature catalog (roles + role services + features). */
@@ -2816,6 +2841,45 @@ const CLIENT_FEATURE_CATALOG = [
     info: "Enables Microsoft-Hyper-V-Tools-All — Hyper-V Manager, vmconnect and the Hyper-V PowerShell module, the same checkbox as Hyper-V Management Tools in Turn Windows features on or off. There is no Rsat.Hyper-V.Tools capability: these tools live in the image, not in the Languages and Optional Features ISO. The Hyper-V platform itself stays off — running VMs inside this VM is a separate decision that needs nested virtualization on the host. Pro, Enterprise and Education only."
   }
 ];
+
+/* The Linux half of the picker. Nothing here is Install-WindowsFeature and nothing
+   here is apt: every entry is a switch in the cloud-init seed, which is the only
+   thing this tool ever writes into a Linux VM. Software to install belongs in the
+   Extra packages card next door - this list is for decisions the seed itself makes,
+   and it is built to grow. */
+const LINUX_FEATURE_CATALOG = [
+  {
+    id: "openssh-server",
+    label: "OpenSSH server",
+    icon: "key.svg",
+    defaultOn: true,
+    /* Deliberately not a package install. Both cloud images ship openssh-server
+       running, so an apt transaction here would put a mirror the VM may not be able
+       to reach in front of every Linux build, for something that is already there.
+       The seed enables the unit instead: a no-op on an image that has it, and the
+       one line that matters on an image that does not. */
+    runcmd: "systemctl enable --now ssh 2>/dev/null || systemctl enable --now sshd 2>/dev/null || true",
+    info: "Makes sure sshd is enabled and running at the end of the first boot. Both cloud images here ship it that way already, so this is a no-op on them and the seed installs nothing - a distribution that does not carry openssh-server wants the package added in Extra packages as well. Off means the seed leaves the unit alone, which on these images still leaves SSH listening: it is not a switch that turns SSH off."
+  },
+  {
+    id: "ssh-password-auth",
+    label: "Password authentication over SSH",
+    icon: "users.svg",
+    defaultOn: true,
+    info: "Writes ssh_pwauth, which is what lets the local password in over the network as well as at the Hyper-V console. On is how every Linux VM this tool has built so far behaves. Off is key-only over SSH - worth having on anything that leaves a lab, and a VM whose key is wrong is then reachable at the console and nowhere else."
+  }
+];
+
+/* An array means somebody has decided; no array at all means nobody has, so the
+   catalogue's own defaults answer - which is what keeps a design written before this
+   card existed behaving exactly as it did. */
+function linuxFeatureIds(s) {
+  if (Array.isArray(s.linuxFeatures)) {
+    return s.linuxFeatures.filter(id => LINUX_FEATURE_CATALOG.some(f => f.id === id));
+  }
+  return LINUX_FEATURE_CATALOG.filter(f => f.defaultOn).map(f => f.id);
+}
+function hasLinuxFeature(s, id) { return linuxFeatureIds(s).indexOf(id) !== -1; }
 
 const ROLE_PRESETS = {
   // Server Manager's "Quick Start" deployment, as role services: broker, web access and
@@ -5076,8 +5140,11 @@ function buildConfig() {
       row.osFamily = "linux";
       const sshKey = String(s.sshAuthorizedKey || "").trim() || String(state.defaults.sshAuthorizedKey || "").trim();
       if (sshKey) row.sshAuthorizedKey = sshKey;
-      const pkgs = String(s.linuxPackages || "").split(/[\s,]+/).map(x => x.trim()).filter(Boolean);
-      if (pkgs.length) row.packages = [...new Set(pkgs)];
+      const pkgs = linuxPackageList(s);
+      if (pkgs.length) row.packages = pkgs;
+      /* Always written, empty list included: absent means a file older than the
+         picker, and Build-Vms.ps1 reads that as the behaviour it used to have. */
+      row.linuxFeatures = linuxFeatureIds(s);
     }
     // "Use for every VM" resolves at export time into per-VM rows, exactly like the
     // cluster blade's addAllVms - Build-Vms.ps1 only ever sees per-VM domainJoin/azureArc.
@@ -5480,6 +5547,125 @@ function downloadConfigNow() {
   a.click();
   URL.revokeObjectURL(a.href);
   toast("config.json downloaded");
+}
+
+/* A package list is an array of rows on screen and a deduplicated array in the
+   contract, but a state token written before this card existed carries the single
+   space-or-comma separated string the old field produced - so every read goes
+   through here and nothing else has to know both shapes. */
+function linuxPackageRows(s) {
+  const raw = s.linuxPackages;
+  if (Array.isArray(raw)) return raw.map(x => String(x || ""));
+  return String(raw || "").split(/[\s,]+/).map(x => x.trim()).filter(Boolean);
+}
+function linuxPackageList(s) {
+  return [...new Set(linuxPackageRows(s).map(x => x.trim()).filter(Boolean))];
+}
+
+/* The private half of a generated key, kept in memory and nowhere else - keyed by
+   "gs" for the defaults card or the VM's id. Deliberately NOT in state: the save
+   token is a string people paste into chats and tickets, and a private key that
+   travels that way is a key that has to be replaced. The consequence is stated on
+   the card - download it now, or generate another one. */
+const sshPrivateKeys = {};
+
+function sshUint32(n) {
+  return new Uint8Array([(n >>> 24) & 255, (n >>> 16) & 255, (n >>> 8) & 255, n & 255]);
+}
+/* Everything in an OpenSSH blob is a length-prefixed string; these two build one. */
+function sshString(bytes) {
+  const body = typeof bytes === "string" ? new TextEncoder().encode(bytes) : bytes;
+  return sshBytes([sshUint32(body.length), body]);
+}
+function sshBytes(parts) {
+  const total = parts.reduce((n, part) => n + part.length, 0);
+  const out = new Uint8Array(total);
+  let at = 0;
+  parts.forEach(part => { out.set(part, at); at += part.length; });
+  return out;
+}
+function sshBase64(bytes) {
+  let binary = "";
+  bytes.forEach(b => { binary += String.fromCharCode(b); });
+  return btoa(binary);
+}
+/* The seed is the 32 bytes inside the PKCS#8 CurvePrivateKey OCTET STRING. Browsers
+   currently export Ed25519 without the optional public-key attribute, which would
+   put the seed last - but that is an option the format allows, so the marker is
+   matched rather than the tail assumed. */
+function sshEd25519Seed(pkcs8) {
+  for (let i = 0; i + 36 <= pkcs8.length; i++) {
+    if (pkcs8[i] === 0x04 && pkcs8[i + 1] === 0x22 && pkcs8[i + 2] === 0x04 && pkcs8[i + 3] === 0x20) {
+      return pkcs8.slice(i + 4, i + 36);
+    }
+  }
+  return pkcs8.slice(pkcs8.length - 32);
+}
+/* Ed25519 rather than RSA: it is one line of authorized_keys, every OpenSSH since
+   6.5 takes it, and the private half is a 32-byte seed rather than a key the
+   browser would have to re-encode as PKCS#1. */
+async function generateSshKeyPair(comment) {
+  if (!window.crypto || !crypto.subtle) {
+    throw new Error("This browser exposes no WebCrypto - run ssh-keygen -t ed25519 instead.");
+  }
+  let pair;
+  try {
+    pair = await crypto.subtle.generateKey({ name: "Ed25519" }, true, ["sign", "verify"]);
+  } catch (err) {
+    throw new Error("This browser cannot generate Ed25519 keys - run: ssh-keygen -t ed25519 -C \"" + comment + "\"");
+  }
+  const pub = new Uint8Array(await crypto.subtle.exportKey("raw", pair.publicKey));
+  const seed = sshEd25519Seed(new Uint8Array(await crypto.subtle.exportKey("pkcs8", pair.privateKey)));
+  const type = "ssh-ed25519";
+  const pubBlob = sshBytes([sshString(type), sshString(pub)]);
+  /* The check integers are written twice and compared on load - that is how ssh
+     tells a wrong passphrase from a corrupt file. Unencrypted here, so any value
+     does, as long as both copies match. */
+  const check = crypto.getRandomValues(new Uint8Array(4));
+  let priv = sshBytes([
+    check, check,
+    sshString(type), sshString(pub), sshString(sshBytes([seed, pub])), sshString(comment)
+  ]);
+  /* Padded to the cipher block size with 1, 2, 3... even for cipher "none", whose
+     block size is 8. ssh-keygen refuses a file padded any other way. */
+  const padding = [];
+  for (let i = 1; ((priv.length + padding.length) & 7) !== 0; i++) padding.push(i);
+  priv = sshBytes([priv, new Uint8Array(padding)]);
+  const blob = sshBytes([
+    new TextEncoder().encode("openssh-key-v1\0"),
+    sshString("none"), sshString("none"), sshString(""),
+    sshUint32(1), sshString(pubBlob), sshString(priv)
+  ]);
+  const body = (sshBase64(blob).match(/.{1,70}/g) || []).join("\n");
+  return {
+    publicKey: type + " " + sshBase64(pubBlob) + " " + comment,
+    privateKey: "-----BEGIN OPENSSH PRIVATE KEY-----\n" + body + "\n-----END OPENSSH PRIVATE KEY-----\n"
+  };
+}
+/* One writer for every file this studio hands out, so config.json and a private key
+   cannot disagree about how a download is made. */
+function downloadTextFile(name, text, mime) {
+  const blob = new Blob([text], { type: mime || "text/plain" });
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = name;
+  a.click();
+  URL.revokeObjectURL(a.href);
+}
+/* The comment is what shows up in authorized_keys and in `ssh-add -l`, so it says
+   which VM the key was cut for rather than which browser cut it. */
+function sshKeyComment(s) {
+  if (!s) return "hyperv-vm-studio";
+  const user = String(s.localUserName || "").trim() || "root";
+  const host = String(s.name || "").trim() || "vm";
+  return user + "@" + host;
+}
+function sshKeyFileName(s) {
+  const host = s ? (String(s.name || "").trim() || "vm") : "default";
+  return host + "_id_ed25519";
+}
+function downloadIcon() {
+  return `<img class="glyph" src="${iconSrc("download.svg")}" width="16" height="16" alt="" aria-hidden="true">`;
 }
 
 function openStateModal(mode) {
@@ -6155,8 +6341,16 @@ function renderGeneral() {
 
     ${gsCard("gs-sshkey", "secret.svg", "Linux SSH key", (String(d.sshAuthorizedKey || "").trim() ? "set" : "none"), `
       <label class="field"><span>Default SSH authorized key</span>
-        <input data-d="sshAuthorizedKey" value="${esc(d.sshAuthorizedKey || "")}" placeholder="ssh-ed25519 AAAAC3Nza... user@host" spellcheck="false">
-        <span class="hint">Public key only. Every Linux VM inherits this unless its own card overrides it. A Linux VM with no key anywhere can only be reached with its password, at the Hyper-V console.</span>
+        <div class="edit-field">
+          <input data-d="sshAuthorizedKey" value="${esc(d.sshAuthorizedKey || "")}" placeholder="ssh-ed25519 AAAAC3Nza... user@host" spellcheck="false">
+          <button class="btn icon" type="button" data-gen-ssh="gs"
+            title="Generate an Ed25519 key pair" aria-label="Generate an SSH key pair">${regenIcon()}</button>
+          <button class="btn icon" type="button" data-dl-ssh="gs"${sshPrivateKeys.gs ? "" : " disabled"}
+            title="${sshPrivateKeys.gs ? "Download the private key" : "Generate a key pair first"}" aria-label="Download the private key">${downloadIcon()}</button>
+        </div>
+        <span class="hint">Public key only. Every Linux VM inherits this unless its own card overrides it. A Linux VM with no key anywhere can only be reached with its password, at the Hyper-V console.${sshPrivateKeys.gs
+          ? " <strong>The private key is held in this tab and in no save token</strong> — download it before you leave the page."
+          : ""}</span>
       </label>`)}
     ${gsCard("gs-paths", "storage.svg", "Paths", "Gold VHDX, VM/VHD paths, SxS source", `
       <div class="grid-2" style="align-items:start">
@@ -6201,7 +6395,7 @@ function renderGeneral() {
         <div class="section collapsible ${open ? "" : "collapsed"}" style="margin-top:10px">
           <div class="section-head" data-nested="img-${esc(img.id)}">
             <span class="section-chevron">${chevron()}</span>
-            <img src="${iconSrc(img.icon)}"> ${esc(img.label)}
+            <img src="${imageIconSrc(img)}"> ${esc(img.label)}
             <span class="section-meta">${esc(img.id)}</span>
           </div>
           <div class="section-body">
@@ -6550,6 +6744,36 @@ function imageTakesServerRoles(img) {
    them, N and multi-session included. Asked in four places, so it lives in one. */
 function supportsAppRemoval(imageId) {
   return /^w1[01]-/.test(String(imageId || ""));
+}
+
+/* The Linux answer to Roles & features. It sits on the card wherever the Windows
+   one would, and it renders with the same row as the RSAT list - a picker somebody
+   has already learned once should not have to be learned twice. */
+function renderLinuxFeaturesSection(s) {
+  if (!isLinuxServer(s)) return "";
+  const open = isNestedOpen(s._id + "-lnxfeat", false);
+  const selected = linuxFeatureIds(s);
+  return `
+    <div class="section collapsible ${open ? "" : "collapsed"}">
+      <div class="section-head" data-nested="${esc(s._id)}-lnxfeat">
+        <span class="section-chevron">${chevron()}</span>
+        <img src="${iconSrc("extensions.svg")}"> Optional features
+        ${infoTip("Optional features", "Switches in the cloud-init seed rather than packages - what the first boot does, not what it downloads. Packages go in the card below.")}
+        <span class="section-meta">${selected.length} of ${LINUX_FEATURE_CATALOG.length} selected</span>
+      </div>
+      <div class="section-body">
+        <p class="hint" style="margin:12px 0 10px">Written into the cloud-init seed and applied on the first boot. Nothing here needs a mirror.</p>
+        <div class="role-tree">
+          ${LINUX_FEATURE_CATALOG.map(f => renderFeatureListRow({
+            on: hasLinuxFeature(s, f.id),
+            icon: f.icon,
+            label: f.label,
+            item: f,
+            attrs: `data-lnxfeat-toggle="${esc(s._id)}" data-lnxfeat="${esc(f.id)}"`
+          })).join("")}
+        </div>
+      </div>
+    </div>`;
 }
 
 function renderServerRolesSection(s) {
@@ -6980,7 +7204,7 @@ function renderServerCard(s) {
     ? (s.imageHint ? "Custom · " + s.imageHint : "Custom gold image")
     : img.label;
   const displayImageIcon = isCustomImage ? "shared-gallery.svg" : img.icon;
-  const displayImageIconSrc = isCustomImage ? iconSrcBand("shared-gallery.svg", "deploy") : iconSrc(img.icon);
+  const displayImageIconSrc = isCustomImage ? iconSrcBand("shared-gallery.svg", "deploy") : imageIconSrc(img);
   const dj = s.domainJoin || {};
   const arc = s.azureArc || {};
   const djAccount = effectiveDomainJoinAccount(s);
@@ -6999,6 +7223,7 @@ function renderServerCard(s) {
   const autoStartOpen = isNestedOpen(s._id + "-autostart", false);
   const disksOpen = isNestedOpen(s._id + "-disks", false);
   const pathsOpen = isNestedOpen(s._id + "-paths", false);
+  const packagesOpen = isNestedOpen(s._id + "-packages", false);
   const bootOpen = isNestedOpen(s._id + "-boot", false);
   const disks = s.additionalDisks || [];
   const isEnabledCount = ["shutdown","timeSynchronization","dataExchange","heartbeat","backup","guestServices"]
@@ -7129,7 +7354,7 @@ function renderServerCard(s) {
                       ${g.label ? `<div class="opt-sub" role="presentation">${esc(g.label)}</div>` : ""}
                       ${g.images.map(i => `
                     <button type="button" role="option" aria-selected="${!isCustom && i.id===s.imageId?"true":"false"}" class="${!isCustom && i.id===s.imageId?"selected":""} ${g.label ? "indented" : ""}" data-image-pick="${esc(s._id)}" data-image-id="${esc(i.id)}">
-                      <img src="${iconSrc(i.icon)}" alt="">
+                      <img src="${imageIconSrc(i)}" alt="">
                       <span class="opt-body">
                         <span class="opt-label">${esc(i.label)}</span>
                         <span class="opt-meta">${esc(i.id)}</span>
@@ -7206,15 +7431,21 @@ function renderServerCard(s) {
           </div>
           ${!isLinux ? "" : `
           <div class="grid-1" style="margin-top:12px">
-            ${field("SSH authorized key", `<input data-s="${esc(s._id)}" data-k="sshAuthorizedKey" value="${esc(s.sshAuthorizedKey || "")}" placeholder="ssh-ed25519 AAAAC3Nza... user@host" spellcheck="false">
-              <span class="hint">Public key only. Blank falls back to the key in General Settings; with neither, the password is the only way in.</span>`)}
-          </div>
-          <div class="grid-1" style="margin-top:12px">
-            ${field("Extra packages", `<input data-s="${esc(s._id)}" data-k="linuxPackages" value="${esc(s.linuxPackages || "")}" placeholder="htop qemu-guest-agent nginx" spellcheck="false">
-              <span class="hint">Space or comma separated, installed by cloud-init on first boot. The VM needs a network path to the distribution mirrors.</span>`)}
+            ${field("SSH authorized key", `<div class="edit-field">
+                <input data-s="${esc(s._id)}" data-k="sshAuthorizedKey" value="${esc(s.sshAuthorizedKey || "")}" placeholder="ssh-ed25519 AAAAC3Nza... user@host" spellcheck="false">
+                <button class="btn icon" type="button" data-gen-ssh="${esc(s._id)}"
+                  title="Generate an Ed25519 key pair" aria-label="Generate an SSH key pair">${regenIcon()}</button>
+                <button class="btn icon" type="button" data-dl-ssh="${esc(s._id)}"${sshPrivateKeys[s._id] ? "" : " disabled"}
+                  title="${sshPrivateKeys[s._id] ? "Download the private key" : "Generate a key pair first"}" aria-label="Download the private key">${downloadIcon()}</button>
+              </div>
+              <span class="hint">Public key only. Blank falls back to the key in General Settings; with neither, the password is the only way in.${sshPrivateKeys[s._id]
+                ? " <strong>The private key is held in this tab and in no save token</strong> — download it before you leave the page."
+                : ""}</span>`)}
           </div>`}
         </div>
       </div>
+
+      ${renderLinuxFeaturesSection(s)}
 
       <div class="section collapsible ${cpuOpen ? "" : "collapsed"}">
         <div class="section-head" data-nested="${esc(s._id)}-cpu">
@@ -7325,6 +7556,32 @@ function renderServerCard(s) {
           </div>
         </div>
       </div>
+
+      ${!isLinux ? "" : `
+      <div class="section collapsible ${packagesOpen ? "" : "collapsed"}">
+        <div class="section-head" data-nested="${esc(s._id)}-packages">
+          <span class="section-chevron">${chevron()}</span>
+          <img src="${iconSrc("extensions.svg")}"> Extra packages
+          <span class="section-meta">${(() => {
+            const count = linuxPackageList(s).length;
+            return count ? `${count} package${count === 1 ? "" : "s"}` : "none";
+          })()}</span>
+        </div>
+        <div class="section-body">
+          <p class="hint" style="margin-top:12px">Installed by cloud-init on first boot, one package per row — the names go into the seed ISO exactly as typed, so they are the distribution's own. The VM needs a network path to its mirrors at first boot or the whole list is skipped.</p>
+          <div class="dns-list" style="display:flex; flex-direction:column; gap:6px; margin-top:12px">
+            ${(() => {
+              const rows = linuxPackageRows(s);
+              return (rows.length ? rows : [""]).map((pkg, i) => `
+              <div class="list-row">
+                <input data-s="${esc(s._id)}" data-pkg-i="${i}" value="${esc(pkg)}" placeholder="qemu-guest-agent" spellcheck="false" style="background-image:url('${iconSrc("extensions.svg")}')">
+                ${rows.length > 1 ? `<button class="btn icon danger-text" type="button" title="Remove package" aria-label="Remove package" data-pkg-del="${esc(s._id)}" data-pkg-del-i="${i}">${trashIcon()}</button>` : ""}
+              </div>`).join("");
+            })()}
+            <button class="btn" type="button" data-pkg-add="${esc(s._id)}" style="align-self:flex-start;margin-top:4px"><img src="${iconSrc("extensions.svg")}" alt=""> Add package</button>
+          </div>
+        </div>
+      </div>`}
 
       ${renderServerRolesSection(s)}
       ${renderServerAppsSection(s)}
@@ -9046,6 +9303,58 @@ document.getElementById("main").addEventListener("click", e => {
     }
     return;
   }
+  const pkgAdd = e.target.closest("[data-pkg-add]");
+  if (pkgAdd) {
+    e.stopPropagation();
+    const s = state.servers.find(x => x._id === pkgAdd.getAttribute("data-pkg-add"));
+    if (s) {
+      s.linuxPackages = linuxPackageRows(s);
+      s.linuxPackages.push("");
+      render();
+    }
+    return;
+  }
+  const pkgDel = e.target.closest("[data-pkg-del]");
+  if (pkgDel) {
+    e.stopPropagation();
+    const s = state.servers.find(x => x._id === pkgDel.getAttribute("data-pkg-del"));
+    if (s) {
+      const idx = Number(pkgDel.getAttribute("data-pkg-del-i"));
+      s.linuxPackages = linuxPackageRows(s).filter((_, i) => i !== idx);
+      if (!s.linuxPackages.length) s.linuxPackages = [""];
+      render();
+    }
+    return;
+  }
+  /* Generation is asynchronous - WebCrypto is - so this hands the work off and the
+     click returns. Nothing else on the card changes while it runs. */
+  const genSsh = e.target.closest("[data-gen-ssh]");
+  if (genSsh) {
+    e.stopPropagation();
+    const scope = genSsh.getAttribute("data-gen-ssh");
+    const target = scope === "gs" ? null : state.servers.find(x => x._id === scope);
+    if (scope !== "gs" && !target) return;
+    generateSshKeyPair(sshKeyComment(target)).then(pair => {
+      sshPrivateKeys[scope] = pair.privateKey;
+      if (target) target.sshAuthorizedKey = pair.publicKey;
+      else state.defaults.sshAuthorizedKey = pair.publicKey;
+      render();
+      toast("Ed25519 key pair generated - download the private key");
+    }).catch(err => toast(err.message || "Key generation failed", true));
+    return;
+  }
+  const dlSsh = e.target.closest("[data-dl-ssh]");
+  if (dlSsh) {
+    e.stopPropagation();
+    const scope = dlSsh.getAttribute("data-dl-ssh");
+    const key = sshPrivateKeys[scope];
+    if (!key) { toast("Generate a key pair first", true); return; }
+    const target = scope === "gs" ? null : state.servers.find(x => x._id === scope);
+    const name = sshKeyFileName(target);
+    downloadTextFile(name, key);
+    toast(name + " downloaded - chmod 600 it");
+    return;
+  }
   const genUser = e.target.closest("[data-gen-user]");
   if (genUser) {
     e.stopPropagation();
@@ -9552,6 +9861,22 @@ document.getElementById("main").addEventListener("click", e => {
     return;
   }
 
+  const lnxFeatToggle = e.target.closest("[data-lnxfeat-toggle]");
+  if (lnxFeatToggle && !e.target.closest(".tip-warn") && !e.target.closest(".tip-info") && !e.target.closest(".warn-banner")) {
+    const s = state.servers.find(x => x._id === lnxFeatToggle.getAttribute("data-lnxfeat-toggle"));
+    const feat = lnxFeatToggle.getAttribute("data-lnxfeat");
+    if (s && feat) {
+      const on = !hasLinuxFeature(s, feat);
+      const ids = linuxFeatureIds(s).filter(id => id !== feat);
+      if (on) ids.push(feat);
+      /* The first toggle is also what turns the catalogue default into a decision -
+         from here on the array is what the design says, defaults included. */
+      s.linuxFeatures = LINUX_FEATURE_CATALOG.filter(f => ids.indexOf(f.id) !== -1).map(f => f.id);
+      render();
+    }
+    return;
+  }
+
   const clientFeatToggle = e.target.closest("[data-clientfeat-toggle]");
   if (clientFeatToggle && !e.target.closest(".tip-warn") && !e.target.closest(".tip-info") && !e.target.closest(".warn-banner")) {
     const s = state.servers.find(x => x._id === clientFeatToggle.getAttribute("data-clientfeat-toggle"));
@@ -9917,6 +10242,15 @@ document.getElementById("main").addEventListener("input", e => {
       const invalid = ipValidationInfo(e.target.value, reservedAddressProblem(e.target.value, dnsBase.address, dnsBase.prefixLength)).invalid;
       e.target.classList.toggle("is-invalid", invalid);
       e.target.setAttribute("aria-invalid", invalid ? "true" : "false");
+    }
+    return;
+  }
+  const pkgIdxAttr = e.target.getAttribute("data-pkg-i");
+  if (sid && pkgIdxAttr !== null) {
+    const sPkg = state.servers.find(x => x._id === sid);
+    if (sPkg) {
+      sPkg.linuxPackages = linuxPackageRows(sPkg);
+      sPkg.linuxPackages[Number(pkgIdxAttr)] = e.target.value;
     }
     return;
   }
