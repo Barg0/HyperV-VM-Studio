@@ -3522,6 +3522,60 @@ function Get-ConsoleWidth {
     return 80
 }
 
+function Write-ChompBar {
+    <#
+        The bar itself, drawn the way pacman draws its ILoveCandy one: a mouth eating
+        its way along a line of dots, leaving a chewed track behind it.
+
+            [------C  o  o  o  o  o  o  o ]
+
+        Still 7-bit ASCII, for the same reason the rest of this line is - "C", "c", "o"
+        and "-" are on every console in existence, and this output runs for minutes on
+        a machine nobody has configured yet.
+
+        The dots sit at fixed cells, every third one, so they stay put and the mouth
+        eats them as it advances rather than the whole field sliding along. The mouth
+        opens and closes on a frame counter rather than on the position: a 32 GB copy
+        can sit on the same percentage for a minute, and a bar that has stopped moving
+        is exactly when it matters that it is still alive.
+    #>
+    param(
+        [int]$Width,
+        [int]$Filled
+    )
+
+    if ($Width -lt 1) { return }
+    if ($Filled -lt 0) { $Filled = 0 }
+    if ($Filled -gt $Width) { $Filled = $Width }
+
+    # The line repaints every 80 ms, so four frames a mouth is roughly three chomps a
+    # second. Flapping on every repaint is twelve, which reads as jitter rather than
+    # as something eating.
+    $script:chompFrame = ([int]$script:chompFrame + 1) % 8
+    $mouth = if ($script:chompFrame -lt 4) { "C" } else { "c" }
+
+    # The mouth stands on the last eaten cell, so an empty bar still shows it at the
+    # start rather than leaving the line blank until the first percent arrives.
+    $mouthAt = $Filled - 1
+    if ($mouthAt -lt 0) { $mouthAt = 0 }
+
+    if ($mouthAt -gt 0) {
+        Write-Studio -Text ("-" * $mouthAt) -Key "border" -NoNewline
+    }
+    Write-Studio -Text $mouth -Key "bandDeploy" -NoNewline
+
+    $ahead = $Width - $mouthAt - 1
+    if ($ahead -gt 0) {
+        $dots = New-Object System.Text.StringBuilder
+        for ($cell = $mouthAt + 1; $cell -lt $Width; $cell++) {
+            # Counted from the bar's own start, not from the mouth - a dot belongs to a
+            # place on the track, and moving with the mouth would make it uneatable.
+            if (($cell % 3) -eq 0) { [void]$dots.Append("o") } else { [void]$dots.Append(" ") }
+        }
+        Write-Studio -Text $dots.ToString() -Key "accent" -NoNewline
+    }
+}
+
 function Write-DownloadProgressLine {
     <#
         One line, redrawn in place with a carriage return.
@@ -3529,10 +3583,10 @@ function Write-DownloadProgressLine {
         Deliberately 7-bit ASCII. Block-drawing characters look better but depend on
         the console font having them, and this is the one piece of output that runs
         for minutes on a machine nobody has configured yet. Colour still applies -
-        the bar takes the accent, its track the border, the numbers muted - so the
-        line is Kaido without needing a single Unicode glyph:
+        the mouth takes deploy orange, the dots ahead of it the accent blue, the
+        chewed track behind it the border, the numbers muted:
 
-          [##################------------]  58%  478.2/824.6 MiB  12.4 MiB/s  ETA 0:28
+          [-----------C  o  o  o  o  o  ]  58%  478.2/824.6 MiB  12.4 MiB/s  ETA 0:28
     #>
     param(
         [int64]$BytesRead,
@@ -3588,8 +3642,7 @@ function Write-DownloadProgressLine {
         # The brackets take `fg`, not `border`: they are what gives the bar its ends, and
         # at border they sank into the background beside the track they are meant to bound.
         Write-Studio -Text "  [" -Key "fg" -NoNewline
-        Write-Studio -Text ("#" * $filled) -Key "accent" -NoNewline
-        Write-Studio -Text ("-" * ($barWidth - $filled)) -Key "border" -NoNewline
+        Write-ChompBar -Width $barWidth -Filled $filled
         Write-Studio -Text "]" -Key "fg" -NoNewline
         Write-Studio -Text $percentText -Key "fg" -NoNewline
         Write-Studio -Text $statsRest -Key "muted" -NoNewline
