@@ -2413,9 +2413,9 @@ const IMAGE_CATALOG = [
      It stays a per-VM decision on the Boot / disk card, and the default is an
      independent copy. */
   {
-    id: "hv-ubuntu-2604",
+    id: "ubuntu2604",
     label: "Ubuntu 26.04 LTS",
-    icon: "vm.svg",
+    icon: "os-server-panes.svg",
     kind: "linux",
     osFamily: "linux",
     distro: "ubuntu",
@@ -2426,9 +2426,9 @@ const IMAGE_CATALOG = [
     defaults: { useDifferencingDisk: false, enableSecureBoot: true, enableVtpm: false, startAfterCreate: true, memoryGB: 2, cpuCount: 2 }
   },
   {
-    id: "hv-ubuntu-2404",
+    id: "ubuntu2404",
     label: "Ubuntu 24.04 LTS",
-    icon: "vm.svg",
+    icon: "os-server-panes.svg",
     kind: "linux",
     osFamily: "linux",
     distro: "ubuntu",
@@ -2441,9 +2441,9 @@ const IMAGE_CATALOG = [
   {
     /* Debian ships no grub-pc in any trixie cloud variant, so it is UEFI only - there
        is no Generation 1 fallback to offer. */
-    id: "hv-debian-13",
+    id: "debian13",
     label: "Debian 13 (Trixie)",
-    icon: "vm.svg",
+    icon: "os-server-panes.svg",
     kind: "linux",
     osFamily: "linux",
     distro: "debian",
@@ -2922,7 +2922,13 @@ function vlanHintText(vlanId) {
   return v ? `Access mode · tagged VLAN ${v}` : "Access mode · untagged";
 }
 
+const LINUX_DISTRO_LABEL = { ubuntu: "Ubuntu", debian: "Debian" };
+
 function imageReleaseLabel(img) {
+  /* Linux first: these carry noServerRoles too, and that branch would give every
+     release a heading of its own - "UBUNTU 26.04 LTS", "UBUNTU 24.04 LTS" - where the
+     picker wants one heading per distribution with the releases under it. */
+  if (isLinuxImage(img)) return LINUX_DISTRO_LABEL[img.distro] || img.label;
   if (img.noServerRoles) return img.label;
   if (img.kind === "client") return "Windows 11";
   const m = String(img.id).match(/^ws(\d{4})/);
@@ -4308,9 +4314,20 @@ function normalizeServerIdentityRefs(s, catalogs) {
   return s;
 }
 
+/* Linux golds were briefly named hv-ubuntu-2604 and so on, with the whole name as the
+   id. They now follow the Windows shape - hv-enus-ubuntu2604.vhdx, id "ubuntu2604" -
+   and without this map an old design would resolve through findImage's fallback and
+   come back as a Windows Server VM, silently. A wrong image is worse than an error. */
+const LEGACY_IMAGE_IDS = {
+  "hv-ubuntu-2604": "ubuntu2604",
+  "hv-ubuntu-2404": "ubuntu2404",
+  "hv-debian-13": "debian13",
+};
+
 function normalizeImageId(id) {
   const key = String(id || "").toLowerCase().trim();
-  return key || "ws2025-datacenter-desktop";
+  if (!key) return "ws2025-datacenter-desktop";
+  return LEGACY_IMAGE_IDS[key] || key;
 }
 
 function defaultImageProfiles() {
@@ -6342,11 +6359,13 @@ function renderGeneral() {
     ${gsCard("gs-sshkey", "secret.svg", "Linux SSH key", (String(d.sshAuthorizedKey || "").trim() ? "set" : "none"), `
       <label class="field"><span>Default SSH authorized key</span>
         <div class="edit-field">
-          <input data-d="sshAuthorizedKey" value="${esc(d.sshAuthorizedKey || "")}" placeholder="ssh-ed25519 AAAAC3Nza... user@host" spellcheck="false">
+          <input data-d="sshAuthorizedKey" data-name-input="sshkey:gs" class="keep-border" value="${esc(d.sshAuthorizedKey || "")}" placeholder="ssh-ed25519 AAAAC3Nza... user@host" spellcheck="false"${state.nameEdit["sshkey:gs"] ? "" : " readonly"}>
           <button class="btn icon" type="button" data-gen-ssh="gs"
             title="Generate an Ed25519 key pair" aria-label="Generate an SSH key pair">${regenIcon()}</button>
           <button class="btn icon" type="button" data-dl-ssh="gs"${sshPrivateKeys.gs ? "" : " disabled"}
             title="${sshPrivateKeys.gs ? "Download the private key" : "Generate a key pair first"}" aria-label="Download the private key">${downloadIcon()}</button>
+          <button class="btn icon" type="button" data-name-edit="sshkey:gs"
+            title="${state.nameEdit["sshkey:gs"] ? "Done" : "Edit the key"}" aria-label="${state.nameEdit["sshkey:gs"] ? "Done" : "Edit the key"}">${state.nameEdit["sshkey:gs"] ? checkIcon() : pencilIcon()}</button>
         </div>
         <span class="hint">Public key only. Every Linux VM inherits this unless its own card overrides it. A Linux VM with no key anywhere can only be reached with its password, at the Hyper-V console.${sshPrivateKeys.gs
           ? " <strong>The private key is held in this tab and in no save token</strong> — download it before you leave the page."
@@ -7431,16 +7450,25 @@ function renderServerCard(s) {
           </div>
           ${!isLinux ? "" : `
           <div class="grid-1" style="margin-top:12px">
-            ${field("SSH authorized key", `<div class="edit-field">
-                <input data-s="${esc(s._id)}" data-k="sshAuthorizedKey" value="${esc(s.sshAuthorizedKey || "")}" placeholder="ssh-ed25519 AAAAC3Nza... user@host" spellcheck="false">
+            ${field("SSH authorized key", (() => {
+                /* Locked like the user name and the password beside it. A public key is
+                   long, generated far more often than it is typed, and a stray keystroke
+                   in it is invisible - the VM simply refuses the key later. The pencil
+                   makes editing deliberate. */
+                const keyUnlocked = !!state.nameEdit[`sshkey:${s._id}`];
+                return `<div class="edit-field">
+                <input data-s="${esc(s._id)}" data-k="sshAuthorizedKey" data-name-input="sshkey:${esc(s._id)}" class="keep-border" value="${esc(s.sshAuthorizedKey || "")}" placeholder="ssh-ed25519 AAAAC3Nza... user@host" spellcheck="false"${keyUnlocked ? "" : " readonly"}>
                 <button class="btn icon" type="button" data-gen-ssh="${esc(s._id)}"
                   title="Generate an Ed25519 key pair" aria-label="Generate an SSH key pair">${regenIcon()}</button>
                 <button class="btn icon" type="button" data-dl-ssh="${esc(s._id)}"${sshPrivateKeys[s._id] ? "" : " disabled"}
                   title="${sshPrivateKeys[s._id] ? "Download the private key" : "Generate a key pair first"}" aria-label="Download the private key">${downloadIcon()}</button>
+                <button class="btn icon" type="button" data-name-edit="sshkey:${esc(s._id)}"
+                  title="${keyUnlocked ? "Done" : "Edit the key"}" aria-label="${keyUnlocked ? "Done" : "Edit the key"}">${keyUnlocked ? checkIcon() : pencilIcon()}</button>
               </div>
               <span class="hint">Public key only. Blank falls back to the key in General Settings; with neither, the password is the only way in.${sshPrivateKeys[s._id]
                 ? " <strong>The private key is held in this tab and in no save token</strong> — download it before you leave the page."
-                : ""}</span>`)}
+                : ""}</span>`;
+              })())}
           </div>`}
         </div>
       </div>
