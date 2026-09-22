@@ -699,9 +699,11 @@ function Get-GoldNameParts {
 }
 
 function Get-LinuxGoldIds {
-    # The gold names New-Vhdx.ps1 writes for Linux, which are also the imageIds the
-    # studio emits. Keep this in step with Get-LinuxImageCatalog over there.
-    return @("hv-ubuntu-2604", "hv-ubuntu-2404", "hv-debian-13")
+    # The imageIds the studio emits for Linux, which are also the LAST segment of the
+    # gold's file name - hv-enus-ubuntu2604. Keep in step with Get-LinuxImageCatalog in
+    # New-Vhdx.ps1. Their only job here is to let a Linux id past the Windows rules
+    # table; everything after that is the ordinary three-segment lookup.
+    return @("ubuntu2604", "ubuntu2404", "debian13")
 }
 
 function Test-IsLinuxImageId {
@@ -1009,10 +1011,6 @@ function Resolve-GoldLanguagePlan {
         if ([string]::IsNullOrWhiteSpace($imageId) -or [string]::IsNullOrWhiteSpace($name)) { continue }
         # A hand-picked file name answers the question by itself.
         if (-not [string]::IsNullOrWhiteSpace([string]$server.imageHint)) { continue }
-        # A Linux gold has no language segment to choose between - its middle segment is
-        # the distro. Asking which language of hv-ubuntu-2604 to use is a question with
-        # no answer, so these never become rows.
-        if (Test-IsLinuxImageId -ImageId $imageId) { continue }
 
         $candidates = @($GoldImages | Where-Object {
                 $parts = Get-GoldNameParts -BaseName $_.BaseName
@@ -1111,22 +1109,15 @@ function Resolve-GoldVhdxPath {
 
     $key = $ImageId.ToLowerInvariant().Trim()
 
-    # A Linux gold is named hv-ubuntu-2604.vhdx, and that whole name IS the imageId.
-    # Get-GoldNameParts would read it as language "ubuntu" + imageId "2604", because the
-    # middle slot carries the distro here rather than a locale - so the parser, the
-    # language picker and the id whitelist are all bypassed for these. One gold per
-    # distro, one exact name, nothing to disambiguate.
-    if (Test-IsLinuxImageId -ImageId $key) {
-        $linuxMatches = @($GoldImages | Where-Object { $_.BaseName.ToLowerInvariant() -eq $key })
-        if ($linuxMatches.Count -eq 0) {
-            throw "No gold image for imageId='$ImageId' (expected $key.vhdx in the vhdx folder - build it with New-Vhdx.ps1)"
+    # A Linux gold is hv-enus-ubuntu2604.vhdx - the same three segments a Windows gold
+    # has, so Get-GoldNameParts reads it correctly and everything below works unchanged.
+    # The only thing these ids need is a pass through the Windows rules table, which
+    # only knows about Windows editions.
+    if (-not (Test-IsLinuxImageId -ImageId $key)) {
+        $rules = Get-ImageIdMatchRules
+        if (-not $rules.Contains($key)) {
+            throw "Unknown imageId '$ImageId'. Expected one of: $($rules.Keys -join ', ')"
         }
-        return $linuxMatches[0].FullName
-    }
-
-    $rules = Get-ImageIdMatchRules
-    if (-not $rules.Contains($key)) {
-        throw "Unknown imageId '$ImageId'. Expected one of: $($rules.Keys -join ', ')"
     }
 
     $candidates = @($GoldImages | Where-Object {
@@ -3024,17 +3015,24 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%~dp0GuestProvision\Gue
 #
 # A Linux VM is provisioned the way a Windows VM is provisioned by an unattend.xml:
 # with an answer file that first boot reads and then never looks at again. The format
-# is cloud-init's NoCloud datasource - a tiny ISO, volume label CIDATA, holding
-# user-data, meta-data and optionally network-config - and the VM gets it on a DVD
-# drive that is removed once it has booted.
+# is cloud-init's NoCloud datasource - user-data, meta-data and optionally
+# network-config on a volume labelled CIDATA.
+#
+# It cannot go INSIDE the gold the way an unattend.xml does. Set-OfflineUnattendFile
+# mounts a Windows gold and writes into NTFS; a Linux gold is ext4, which Windows
+# cannot write at all. So the answer file has to arrive on a second volume the guest
+# reads at boot - that part is not a choice.
+#
+# What IS a choice is the medium, and it is a small FAT32 VHDX rather than an ISO.
+# NoCloud takes either: its own code searches `TYPE=vfat` first and `TYPE=iso9660`
+# second, then intersects with a case-insensitive LABEL=cidata. A disk is the better
+# fit here - this project builds VHDX, a VM ends up with disks instead of a disc drive
+# nobody asked for, and it needs no IMAPI2FS, no COM and no compiled IStream helper.
 #
 # NoCloud is used for every distribution here, which is the whole reason the golds are
 # built from the GENERIC cloud images rather than the vendors' azure ones: an azure
 # image pins cloud-init to the Azure datasource and would want an ovf-env.xml and a
 # wire server that a lab does not have.
-#
-# The ISO is written with IMAPI2FS, the disc-mastering COM component that has shipped
-# in Windows since Vista. No mkisofs, no oscdimg, nothing to download.
 
 function Get-LinuxLocaleName {
     # de-DE -> de_DE.UTF-8. A copy of the function in New-Vhdx.ps1: neither script
@@ -3087,6 +3085,10 @@ function Format-MacWithColons {
 
     $clean = ([string]$MacAddress) -replace "[^0-9A-Fa-f]", ""
     if ($clean.Length -ne 12) { return "" }
+    # All zeroes is what Hyper-V reports for an adapter whose dynamic address has not
+    # been generated yet. It passes every format check and matches no adapter alive, so
+    # it must never reach a netplan file.
+    if ($clean -eq "000000000000") { return "" }
     $pairs = @()
     for ($i = 0; $i -lt 12; $i += 2) { $pairs += $clean.Substring($i, 2).ToLowerInvariant() }
     return ($pairs -join ":")
@@ -3250,6 +3252,19 @@ function Get-CloudInitUserData {
     [void]$lines.Add("  devices: ['/']")
     [void]$lines.Add("resize_rootfs: true")
 
+    # Power off when provisioning is finished, so the host has an unambiguous signal
+    # that the seed has been read and can be taken away. power_state_change runs LAST
+    # in cloud_final_modules and its frequency is per-instance, so this happens once,
+    # on the first boot of this machine, and never again.
+    #
+    # It is the only signal that needs no channel: no serial pipe to read, no heartbeat
+    # to interpret, and nothing that depends on hyperv-daemons being installed - so it
+    # works even on a gold whose bake never finished.
+    [void]$lines.Add("power_state:")
+    [void]$lines.Add("  mode: poweroff")
+    [void]$lines.Add("  timeout: 30")
+    [void]$lines.Add("  condition: true")
+
     return ($lines -join "`n") + "`n"
 }
 
@@ -3289,9 +3304,17 @@ function Get-CloudInitNetworkConfig {
     [void]$lines.Add("version: 2")
     [void]$lines.Add("ethernets:")
     [void]$lines.Add("  primary:")
+    [void]$lines.Add("    match:")
     if (-not [string]::IsNullOrWhiteSpace($mac)) {
-        [void]$lines.Add("    match:")
         [void]$lines.Add("      macaddress: '$mac'")
+    }
+    else {
+        # Without a match netplan reads the key `primary` as the INTERFACE NAME, finds
+        # no such device and silently configures nothing - the VM then boots with no
+        # address and nothing to say about it. Matching every ethernet is the honest
+        # fallback: these VMs are built with one adapter, and a machine that has more
+        # gets its MAC from Get-VmNicMacForUnattend, which pins one before reading it.
+        [void]$lines.Add("      name: 'e*'")
     }
     [void]$lines.Add("    dhcp4: false")
     [void]$lines.Add("    dhcp6: false")
@@ -3311,154 +3334,417 @@ function Get-CloudInitNetworkConfig {
     return ($lines -join "`n") + "`n"
 }
 
-function Get-IsoStreamWriterType {
+# ---------------------------[ Progress bar ]---------------------------
+#
+# Copies of New-Vhdx.ps1's bar. Neither script dot-sources the other - they
+# already each carry their own Write-Log - so these travel together and have to
+# be kept in step.
+
+function Format-ByteSize {
+    param([int64]$Bytes)
+
+    if ($Bytes -ge 1073741824) { return ("{0:N1} GiB" -f ($Bytes / 1073741824)) }
+    if ($Bytes -ge 1048576)    { return ("{0:N1} MiB" -f ($Bytes / 1048576)) }
+    if ($Bytes -ge 1024)       { return ("{0:N1} KiB" -f ($Bytes / 1024)) }
+    return "$Bytes B"
+}
+
+function Format-Duration {
+    param([double]$Seconds)
+
+    if ($Seconds -lt 0 -or [double]::IsInfinity($Seconds) -or [double]::IsNaN($Seconds)) { return "--:--" }
+    if ($Seconds -gt 359999) { return "99:59:59" }
+
+    $span = [System.TimeSpan]::FromSeconds([Math]::Round($Seconds))
+    if ($span.TotalHours -ge 1) { return ("{0}:{1:00}:{2:00}" -f [int]$span.TotalHours, $span.Minutes, $span.Seconds) }
+    return ("{0}:{1:00}" -f $span.Minutes, $span.Seconds)
+}
+
+function Get-ConsoleWidth {
+    try {
+        $width = $Host.UI.RawUI.WindowSize.Width
+        if ($width -gt 20) { return [int]$width }
+    }
+    catch {
+        # No RawUI at all - a redirected host, or ISE. 80 is the safe assumption.
+    }
+    return 80
+}
+
+function Write-DownloadProgressLine {
     <#
-        IMAPI2FS hands back its finished image as a COM IStream, and PowerShell cannot
-        get at it: casting the __ComObject to
-        System.Runtime.InteropServices.ComTypes.IStream throws
+        One line, redrawn in place with a carriage return.
 
-            Cannot convert the "System.__ComObject" value of type "System.__ComObject"
-            to type "System.Runtime.InteropServices.ComTypes.IStream"
+        Deliberately 7-bit ASCII. Block-drawing characters look better but depend on
+        the console font having them, and this is the one piece of output that runs
+        for minutes on a machine nobody has configured yet. Colour still applies -
+        the bar takes the accent, its track the border, the numbers muted - so the
+        line is Kaido without needing a single Unicode glyph:
 
-        because the PowerShell cast operator does not QueryInterface a runtime callable
-        wrapper for an interface it was not already typed as. C#'s `as` does, which is
-        why every published IMAPI script goes through a compiled helper. This is that
-        helper, and it is the whole reason it exists.
-
-        Added once per session and cached: a resume run reaches this a second time, and
-        Add-Type throws on a type that already exists rather than returning it.
+          [##################------------]  58%  478.2/824.6 MiB  12.4 MiB/s  ETA 0:28
     #>
-    $existing = "VhdxBuild.IsoStreamWriter" -as [type]
-    if ($existing) { return $existing }
+    param(
+        [int64]$BytesRead,
+        [int64]$TotalBytes,
+        [double]$BytesPerSecond,
+        # Only ever seen when the total is unknown - everything else on the line is the
+        # same whether the bytes came off a mirror or off another disk.
+        [string]$Activity = "downloading",
+        [switch]$Final
+    )
 
-    Add-Type -TypeDefinition @"
-using System;
-using System.IO;
-using System.Runtime.InteropServices;
-using System.Runtime.InteropServices.ComTypes;
+    $rate = ""
+    if ($BytesPerSecond -gt 0) { $rate = "  " + (Format-ByteSize -Bytes ([int64]$BytesPerSecond)) + "/s" }
 
-namespace VhdxBuild {
-    public static class IsoStreamWriter {
-        public static void Write(object comStream, string path, int blockSize) {
-            IStream stream = comStream as IStream;
-            if (stream == null) {
-                throw new InvalidOperationException("The IMAPI2FS result image did not expose IStream.");
-            }
-            if (blockSize <= 0) { blockSize = 2048; }
+    if ($TotalBytes -gt 0) {
+        $percent = [int][Math]::Floor(($BytesRead * 100.0) / $TotalBytes)
+        if ($percent -gt 100) { $percent = 100 }
 
-            // IStream.Read reports how much it read through unmanaged memory rather
-            // than a return value, so the count needs somewhere to live.
-            IntPtr readCount = Marshal.AllocHGlobal(4);
-            try {
-                using (FileStream file = File.Create(path)) {
-                    byte[] buffer = new byte[blockSize];
-                    while (true) {
-                        stream.Read(buffer, blockSize, readCount);
-                        int got = Marshal.ReadInt32(readCount);
-                        if (got <= 0) { break; }
-                        file.Write(buffer, 0, got);
-                    }
-                    file.Flush();
-                }
+        # EVERY field here is a fixed width, and that is the whole point. The bar takes
+        # whatever the stats leave, so a stats string that grows by a character - 9.9
+        # MiB becoming 10.1 MiB, an ETA gaining a digit - steals a cell from the track
+        # and the bar visibly twitches between redraws several times a second.
+        # Right-aligned numbers, left-aligned units, blanks where a value is absent.
+        $counts = "{0,9}/{1,-9}" -f (Format-ByteSize -Bytes $BytesRead), (Format-ByteSize -Bytes $TotalBytes)
+
+        if ($BytesPerSecond -gt 0) { $rate = "{0,9}/s" -f (Format-ByteSize -Bytes ([int64]$BytesPerSecond)) }
+        else                       { $rate = " " * 11 }
+
+        if ($Final)                     { $eta = " " * 11 }
+        elseif ($BytesPerSecond -gt 0)  { $eta = "ETA {0,-7}" -f (Format-Duration -Seconds (($TotalBytes - $BytesRead) / $BytesPerSecond)) }
+        else                            { $eta = "ETA {0,-7}" -f "--:--" }
+
+        # The percentage is the one number somebody reads at a glance, so it carries the
+        # foreground the brackets do. Everything after it - the byte counts, the rate,
+        # the ETA - is detail and stays muted. Split only at drawing time: the width
+        # calculation below needs the whole line's length either way.
+        $percentText = "{0,4}%" -f $percent
+        $statsRest = "  " + $counts + "  " + $rate + "  " + $eta
+        $stats = $percentText + $statsRest
+
+        # The bar gets whatever is left. Two for the brackets, two for the leading
+        # indent, one so the line never lands in the last cell - writing there wraps
+        # the console and scrolls the bar out of sight.
+        $barWidth = (Get-ConsoleWidth) - $stats.Length - 7
+        if ($barWidth -lt 10) { $barWidth = 10 }
+        if ($barWidth -gt 60) { $barWidth = 60 }
+
+        $filled = [int][Math]::Floor(($BytesRead * [double]$barWidth) / $TotalBytes)
+        if ($filled -gt $barWidth) { $filled = $barWidth }
+        if ($filled -lt 0) { $filled = 0 }
+
+        Write-Host "`r" -NoNewline
+        # The brackets take `fg`, not `border`: they are what gives the bar its ends, and
+        # at border they sank into the background beside the track they are meant to bound.
+        Write-Studio -Text "  [" -Key "fg" -NoNewline
+        Write-Studio -Text ("#" * $filled) -Key "accent" -NoNewline
+        Write-Studio -Text ("-" * ($barWidth - $filled)) -Key "border" -NoNewline
+        Write-Studio -Text "]" -Key "fg" -NoNewline
+        Write-Studio -Text $percentText -Key "fg" -NoNewline
+        Write-Studio -Text $statsRest -Key "muted" -NoNewline
+        $drawn = 3 + $barWidth + $stats.Length
+    }
+    else {
+        # No Content-Length: a chunked response, or a proxy that stripped it. There is
+        # no percentage to show and no end to predict, so the line says what it knows.
+        $stats = "  " + (Format-ByteSize -Bytes $BytesRead) + $rate
+        Write-Host "`r" -NoNewline
+        Write-Studio -Text "  [ $Activity ]" -Key "fg" -NoNewline
+        Write-Studio -Text $stats -Key "muted" -NoNewline
+        $drawn = 6 + $Activity.Length + $stats.Length
+    }
+
+    # Pad out whatever the previous, longer line left behind.
+    $slack = (Get-ConsoleWidth) - 1 - $drawn
+    if ($slack -gt 0) { Write-Host (" " * $slack) -NoNewline }
+
+    if ($Final) { Write-Host "" }
+}
+
+function Copy-FileWithProgress {
+    <#
+        Copy-Item with the download bar in front of it.
+
+        Worth the code for one reason: the files this copies are golds. A non-
+        differencing VM copies a 32 GB disk, and Copy-Item says nothing at all while it
+        does - so a build that is working looks identical to a build that has hung, for
+        several minutes at a time.
+
+        Same loop as the downloader and the same bar: read a buffer, write it, redraw on
+        a clock rather than per buffer. 4 MiB rather than the downloader's 256 KiB,
+        because this is disk to disk and the syscalls cost more than the bytes.
+
+        Falls back to Copy-Item when the console cannot draw - and on failure deletes the
+        half-written destination, so a copy that died cannot be mistaken for a disk.
+    #>
+    param(
+        [Parameter(Mandatory = $true)][string]$Source,
+        [Parameter(Mandatory = $true)][string]$Destination,
+        [string]$Activity = "copying",
+        [int]$BufferSize = 4194304
+    )
+
+    if (-not (Test-MenuHostSupported)) {
+        Copy-Item -LiteralPath $Source -Destination $Destination -Force -ErrorAction Stop
+        return
+    }
+
+    $sourceInfo = Get-Item -LiteralPath $Source -ErrorAction Stop
+    $totalBytes = [int64]$sourceInfo.Length
+
+    $directory = Split-Path -Path $Destination -Parent
+    if ($directory -and -not (Test-Path -LiteralPath $directory)) {
+        New-Item -ItemType Directory -Path $directory -Force | Out-Null
+    }
+
+    $inStream = $null
+    $outStream = $null
+    $completed = $false
+    try {
+        $inStream = [System.IO.File]::Open($Source, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Read, [System.IO.FileShare]::Read)
+        $outStream = [System.IO.File]::Open($Destination, [System.IO.FileMode]::Create, [System.IO.FileAccess]::Write, [System.IO.FileShare]::None)
+
+        $buffer = [byte[]]::new($BufferSize)
+        $copied = [int64]0
+        $clock = [System.Diagnostics.Stopwatch]::StartNew()
+        $lastDraw = [double]0
+
+        $sampleTimes = New-Object System.Collections.ArrayList
+        $sampleBytes = New-Object System.Collections.ArrayList
+        $windowSeconds = 3.0
+
+        Write-Host ""
+        Write-DownloadProgressLine -BytesRead 0 -TotalBytes $totalBytes -BytesPerSecond 0 -Activity $Activity
+
+        while ($true) {
+            $read = $inStream.Read($buffer, 0, $BufferSize)
+            if ($read -le 0) { break }
+            $outStream.Write($buffer, 0, $read)
+            $copied += $read
+
+            $now = $clock.Elapsed.TotalSeconds
+            [void]$sampleTimes.Add($now)
+            [void]$sampleBytes.Add($copied)
+            while ($sampleTimes.Count -gt 2 -and ($now - $sampleTimes[0]) -gt $windowSeconds) {
+                $sampleTimes.RemoveAt(0)
+                $sampleBytes.RemoveAt(0)
             }
-            finally {
-                Marshal.FreeHGlobal(readCount);
-                // No ReleaseComObject: `as` hands back the SAME runtime callable wrapper
-                // the caller still holds, and releasing it here would leave them with a
-                // separated RCW - a confusing failure a garbage collection would have
-                // avoided by itself. The stream is in memory and small.
+
+            if ((($now - $lastDraw) * 1000) -ge 80) {
+                $lastDraw = $now
+                $rate = 0.0
+                $span = $now - $sampleTimes[0]
+                if ($span -gt 0.2) { $rate = ($copied - $sampleBytes[0]) / $span }
+                Write-DownloadProgressLine -BytesRead $copied -TotalBytes $totalBytes -BytesPerSecond $rate -Activity $Activity
             }
+        }
+
+        $outStream.Flush()
+        $clock.Stop()
+
+        $average = 0.0
+        if ($clock.Elapsed.TotalSeconds -gt 0) { $average = $copied / $clock.Elapsed.TotalSeconds }
+        Write-DownloadProgressLine -BytesRead $copied -TotalBytes $totalBytes -BytesPerSecond $average -Activity $Activity -Final
+        Write-Host ""
+
+        if ($copied -ne $totalBytes) {
+            throw "Copied $copied of $totalBytes bytes from '$Source'"
+        }
+        $completed = $true
+        Write-Log "Copied $(Format-ByteSize -Bytes $copied) in $(Format-Duration -Seconds $clock.Elapsed.TotalSeconds) ($(Format-ByteSize -Bytes ([int64]$average))/s)" -Tag "ok"
+    }
+    finally {
+        if ($inStream) { $inStream.Dispose() }
+        if ($outStream) { $outStream.Dispose() }
+        # A half-copied gold is worse than no gold: it is a file that looks like a disk.
+        if (-not $completed -and (Test-Path -LiteralPath $Destination)) {
+            Remove-Item -LiteralPath $Destination -Force -ErrorAction SilentlyContinue
         }
     }
 }
-"@ -ErrorAction Stop
 
-    return ("VhdxBuild.IsoStreamWriter" -as [type])
-}
-
-function New-CloudInitSeedIso {
+function New-CloudInitSeedDisk {
     <#
-        Writes the CIDATA ISO with IMAPI2FS.
+        Writes the cloud-init seed as a small FAT32 VHDX instead of an ISO.
 
-        The volume label has to be exactly CIDATA - upper case - or cloud-init's NoCloud
-        datasource does not recognise the disc and the VM boots unprovisioned with no
-        error anywhere.
+        cloud-init's NoCloud datasource does not care which of the two it gets. Its own
+        code looks for `TYPE=vfat` FIRST and `TYPE=iso9660` second, then intersects that
+        with a case-insensitive `LABEL=cidata` - so a formatted disk and a mastered disc
+        are equally valid seeds. Given the choice, a VHDX is the better one here: this
+        project produces VHDX, a VM ends up with disks rather than a disc drive nobody
+        asked for, and it needs no IMAPI2FS, no COM and no compiled IStream helper.
 
-        ISO9660 + Joliet: Joliet alone is not enough for every cloud-init version, and
-        the file names here are short enough that ISO9660 costs nothing.
+        The label must be exactly CIDATA. Without it the datasource does not recognise
+        the volume and the VM boots unprovisioned, with nothing said about why.
+
+        64 MB because Windows will not format FAT32 much below 32 MB, and a dynamic
+        VHDX only occupies what it holds - which for three small text files is nothing.
     #>
     param(
-        [Parameter(Mandatory = $true)][string]$IsoPath,
+        [Parameter(Mandatory = $true)][string]$VhdxPath,
         [Parameter(Mandatory = $true)][string]$UserData,
         [Parameter(Mandatory = $true)][string]$MetaData,
         [string]$NetworkConfig
     )
 
-    $stagingDirectory = Join-Path -Path ([System.IO.Path]::GetTempPath()) -ChildPath ("cidata-" + [Guid]::NewGuid().ToString("N"))
-    New-Item -ItemType Directory -Path $stagingDirectory -Force | Out-Null
+    $directory = Split-Path -Path $VhdxPath -Parent
+    if ($directory -and -not (Test-Path -LiteralPath $directory)) {
+        New-Item -ItemType Directory -Path $directory -Force | Out-Null
+    }
+    if (Test-Path -LiteralPath $VhdxPath) { Remove-Item -LiteralPath $VhdxPath -Force }
 
+    $mounted = $false
     try {
-        # LF line endings and no BOM. cloud-init parses YAML, and a BOM at the top of
+        New-VHD -Path $VhdxPath -SizeBytes 64MB -Dynamic -ErrorAction Stop | Out-Null
+
+        $disk = Mount-VHD -Path $VhdxPath -Passthru -ErrorAction Stop
+        $mounted = $true
+
+        # MBR, not GPT: this is a data volume the firmware never boots from, and MBR
+        # keeps it to one partition with no reserved space to reason about.
+        Initialize-Disk -Number $disk.Number -PartitionStyle MBR -ErrorAction Stop | Out-Null
+        $partition = New-Partition -DiskNumber $disk.Number -UseMaximumSize -AssignDriveLetter -ErrorAction Stop
+        $null = Format-Volume -Partition $partition -FileSystem FAT32 -NewFileSystemLabel "CIDATA" `
+            -Confirm:$false -Force -ErrorAction Stop
+
+        # Re-read it: the drive letter is assigned by the partition call above, and the
+        # object captured before the format does not always carry it.
+        $partition = Get-Partition -DiskNumber $disk.Number | Where-Object { $_.DriveLetter } | Select-Object -First 1
+        if (-not $partition -or -not $partition.DriveLetter) {
+            throw "The seed volume was created but Windows assigned it no drive letter"
+        }
+        $root = "$($partition.DriveLetter):\"
+
+        # LF endings and no BOM. cloud-init parses YAML, and a BOM at the top of
         # user-data makes the first line unparseable.
         $encoding = New-Object System.Text.UTF8Encoding($false)
-        [System.IO.File]::WriteAllText((Join-Path $stagingDirectory "user-data"), ($UserData -replace "`r`n", "`n"), $encoding)
-        [System.IO.File]::WriteAllText((Join-Path $stagingDirectory "meta-data"), ($MetaData -replace "`r`n", "`n"), $encoding)
+        [System.IO.File]::WriteAllText((Join-Path $root "user-data"), ($UserData -replace "`r`n", "`n"), $encoding)
+        [System.IO.File]::WriteAllText((Join-Path $root "meta-data"), ($MetaData -replace "`r`n", "`n"), $encoding)
         if (-not [string]::IsNullOrWhiteSpace($NetworkConfig)) {
-            [System.IO.File]::WriteAllText((Join-Path $stagingDirectory "network-config"), ($NetworkConfig -replace "`r`n", "`n"), $encoding)
+            [System.IO.File]::WriteAllText((Join-Path $root "network-config"), ($NetworkConfig -replace "`r`n", "`n"), $encoding)
         }
 
-        $image = New-Object -ComObject IMAPI2FS.MsftFileSystemImage
-        $image.FileSystemsToCreate = 3   # ISO9660 (1) + Joliet (2)
-        $image.VolumeName = "CIDATA"
-        $image.Root.AddTree($stagingDirectory, $false)
-
-        $result = $image.CreateResultImage()
-
-        $directory = Split-Path -Path $IsoPath -Parent
-        if ($directory -and -not (Test-Path -LiteralPath $directory)) {
-            New-Item -ItemType Directory -Path $directory -Force | Out-Null
-        }
-        if (Test-Path -LiteralPath $IsoPath) { Remove-Item -LiteralPath $IsoPath -Force }
-
-        # The IStream -> file copy lives in a compiled helper because PowerShell cannot
-        # cast the COM object to IStream at all - see Get-IsoStreamWriterType.
-        $writer = Get-IsoStreamWriterType
-        $writer::Write($result.ImageStream, $IsoPath, [int]$result.BlockSize)
-
-        Write-Log "Wrote cloud-init seed '$IsoPath'" -Tag "Run"
-        return $IsoPath
+        Write-Log "Wrote cloud-init seed disk '$VhdxPath'" -Tag "Run"
+        return $VhdxPath
     }
     finally {
-        if (Test-Path -LiteralPath $stagingDirectory) {
-            Remove-Item -LiteralPath $stagingDirectory -Recurse -Force -ErrorAction SilentlyContinue
+        if ($mounted) {
+            # Always, and before anything else touches the file: a seed still mounted on
+            # the host is a file the VM cannot be given.
+            try { Dismount-VHD -Path $VhdxPath -ErrorAction Stop }
+            catch { Write-Log "Could not dismount the seed disk '$VhdxPath': $($_.Exception.Message)" -Tag "Error" }
         }
     }
 }
 
 function Set-CloudInitSeedOnVm {
     <#
-        Attaches the seed as a DVD. Nothing else in this project has ever attached one,
-        so this is net-new rather than a variation on something.
+        Attaches the seed disk. It is left in place rather than detached after the first
+        boot: cloud-init reads it on every boot and re-reading a seed whose instance-id
+        has not changed is a no-op, while pulling it out from under a VM that has not
+        finished booting is not.
 
-        The drive is left in place: cloud-init reads it on every boot and re-reading a
-        seed whose instance-id has not changed is a no-op, while pulling the disc out
-        from under a VM that has not finished booting is not. Removing it is a tidy-up
-        for later, once a boot has actually been watched.
+        Any DVD drive this VM picked up is removed. Nothing on the Linux path needs one
+        now that the seed is a disk, and an empty drive on every VM is clutter that
+        invites the question of what it was for.
     #>
     param(
         [Parameter(Mandatory = $true)][string]$VmName,
-        [Parameter(Mandatory = $true)][string]$IsoPath
+        [Parameter(Mandatory = $true)][string]$SeedPath
     )
 
-    $existing = @(Get-VMDvdDrive -VMName $VmName -ErrorAction SilentlyContinue)
-    if ($existing.Count -gt 0) {
-        Set-VMDvdDrive -VMName $VmName -ControllerNumber $existing[0].ControllerNumber `
-            -ControllerLocation $existing[0].ControllerLocation -Path $IsoPath -ErrorAction Stop
+    $attached = @(Get-VMHardDiskDrive -VMName $VmName -ErrorAction SilentlyContinue |
+        Where-Object { $_.Path -eq $SeedPath })
+    if ($attached.Count -eq 0) {
+        Add-VMHardDiskDrive -VMName $VmName -Path $SeedPath -ErrorAction Stop
     }
-    else {
-        Add-VMDvdDrive -VMName $VmName -Path $IsoPath -ErrorAction Stop
+
+    foreach ($drive in @(Get-VMDvdDrive -VMName $VmName -ErrorAction SilentlyContinue)) {
+        try { Remove-VMDvdDrive -VMDvdDrive $drive -ErrorAction Stop }
+        catch { Write-Log "Could not remove the DVD drive from '$VmName': $($_.Exception.Message)" -Tag "Debug" }
     }
-    Write-Log "Attached the cloud-init seed to '$VmName'" -Tag "Run"
+
+    Write-Log "Attached the cloud-init seed disk to '$VmName'" -Tag "Run"
+}
+
+function Complete-LinuxFirstBoot {
+    <#
+        Runs the provisioning boot, then takes the seed away.
+
+        The VM is started whatever the studio's "start after create" says, because that
+        toggle decides whether a FINISHED machine is left running - not whether it gets
+        provisioned at all. A Linux VM that is never started is a VM that never read its
+        answer file, which is not a useful thing to hand somebody.
+
+        cloud-init powers the machine off when it is done, and that is the signal: no
+        serial pipe, no heartbeat, nothing that needs hyperv-daemons. When it arrives,
+        the seed disk is detached and deleted - it holds the local password in clear,
+        and a VM that has finished with it should not carry it around.
+
+        If it never arrives the seed is LEFT ALONE and the run says so. A VM that can
+        still be fixed is worth more than a tidy disk list.
+    #>
+    param(
+        [Parameter(Mandatory = $true)][string]$VmName,
+        [Parameter(Mandatory = $true)][string]$SeedPath,
+        [int]$TimeoutMinutes = 20
+    )
+
+    Write-Log "Starting '$VmName' for its provisioning boot" -Tag "Run"
+    Start-VmWithRetry -VmName $VmName
+
+    $deadline = (Get-Date).AddMinutes($TimeoutMinutes)
+    $lastReport = Get-Date
+    $poweredOff = $false
+
+    while ((Get-Date) -lt $deadline) {
+        $vm = Get-VM -Name $VmName -ErrorAction SilentlyContinue
+        if ($null -eq $vm) {
+            Write-Log "'$VmName' disappeared while waiting for its provisioning boot" -Tag "Error"
+            return $false
+        }
+        if ($vm.State -eq "Off") { $poweredOff = $true; break }
+
+        if (((Get-Date) - $lastReport).TotalSeconds -ge 60) {
+            $lastReport = Get-Date
+            Write-Log "Waiting for '$VmName' to finish provisioning and power off" -Tag "Info"
+        }
+        Start-Sleep -Seconds 5
+    }
+
+    if (-not $poweredOff) {
+        Write-Log "'$VmName' did not power off within $TimeoutMinutes minute(s) - cloud-init may still be working, or may have failed" -Tag "Warn"
+        Write-Log "The seed disk stays attached at '$SeedPath'. It holds this VM's password in clear - remove it once the VM is known good" -Tag "Warn"
+        return $false
+    }
+
+    Write-Log "'$VmName' finished provisioning" -Tag "Ok"
+
+    try {
+        foreach ($drive in @(Get-VMHardDiskDrive -VMName $VmName -ErrorAction Stop | Where-Object { $_.Path -eq $SeedPath })) {
+            Remove-VMHardDiskDrive -VMHardDiskDrive $drive -ErrorAction Stop
+        }
+        Write-Log "Detached the seed disk from '$VmName'" -Tag "Run"
+    }
+    catch {
+        Write-Log "Could not detach the seed disk from '$VmName': $($_.Exception.Message)" -Tag "Error"
+        return $false
+    }
+
+    # Hyper-V holds the file for a moment after detaching it; this helper exists for
+    # exactly that and is already used elsewhere in this script.
+    $null = Wait-VhdFileReleased -VhdPath $SeedPath
+    try {
+        if (Test-Path -LiteralPath $SeedPath) {
+            Remove-Item -LiteralPath $SeedPath -Force -ErrorAction Stop
+            Write-Log "Deleted the seed disk '$SeedPath'" -Tag "Run"
+        }
+    }
+    catch {
+        Write-Log "Could not delete the seed disk '$SeedPath': $($_.Exception.Message) - it still holds the VM's password" -Tag "Warn"
+    }
+
+    return $true
 }
 
 function Set-LinuxProvisioning {
@@ -3516,9 +3802,10 @@ function Set-LinuxProvisioning {
         Write-Log "No static address for '$HostName' - the guest keeps the image's DHCP default" -Tag "Info"
     }
 
-    $isoPath = Join-Path -Path $SeedDirectory -ChildPath ("{0}-seed.iso" -f $VmName)
-    $null = New-CloudInitSeedIso -IsoPath $isoPath -UserData $userData -MetaData $metaData -NetworkConfig $networkConfig
-    Set-CloudInitSeedOnVm -VmName $VmName -IsoPath $isoPath
+    $seedPath = Join-Path -Path $SeedDirectory -ChildPath ("{0}-seed.vhdx" -f $VmName)
+    $null = New-CloudInitSeedDisk -VhdxPath $seedPath -UserData $userData -MetaData $metaData -NetworkConfig $networkConfig
+    Set-CloudInitSeedOnVm -VmName $VmName -SeedPath $seedPath
+    return $seedPath
 }
 
 function Set-OfflineUnattendFile {
@@ -4157,16 +4444,37 @@ function Get-DiskNameToken {
 }
 
 function Get-OsDiskFileName {
-    param([string]$VmName)
+    <#
+        Windows disks are named for the drive letter they will carry - disk-dc01-c.vhdx
+        is the C: drive, and that is the most useful label a Windows VM's disk can have.
+
+        Linux has no drive letters. The same file would be called -c after a letter that
+        never appears anywhere in the guest, so a Linux VM names its system disk what it
+        is instead.
+    #>
+    # ForLinux, not IsLinux: $IsLinux is a READ-ONLY automatic variable in PowerShell 6+
+    # and a parameter of that name cannot be bound there at all.
+    param([string]$VmName, [switch]$ForLinux)
+
+    if ($ForLinux) { return ("disk-{0}-system.vhdx" -f (Get-DiskNameToken -Name $VmName)) }
     return ("disk-{0}-c.vhdx" -f (Get-DiskNameToken -Name $VmName))
 }
 
 function Get-DataDiskFileName {
     param(
         [string]$VmName,
-        [int]$Index
+        [int]$Index,
+        [switch]$ForLinux
     )
-    # Index 0 => d, 1 => e, ...
+
+    # Linux: 01, 02, ... one-based, because -00 beside -system reads like a mistake and
+    # the guest will call them sdb, sdc, nvme1n1 or whatever the kernel decides anyway -
+    # the number here is only an ordering, so it should look like one.
+    if ($ForLinux) {
+        return ("disk-{0}-{1:00}.vhdx" -f (Get-DiskNameToken -Name $VmName), ($Index + 1))
+    }
+
+    # Windows: index 0 => d, 1 => e, ...
     $letter = [char](100 + $Index)
     return ("disk-{0}-{1}.vhdx" -f (Get-DiskNameToken -Name $VmName), $letter)
 }
@@ -4258,7 +4566,7 @@ function Get-ServerDataDiskPlan {
     $plan = New-Object System.Collections.Generic.List[object]
     $index = 0
     foreach ($disk in $disks) {
-        $diskFile = Get-DataDiskFileName -VmName $token -Index $index
+        $diskFile = Get-DataDiskFileName -VmName $token -Index $index -ForLinux:(Test-IsLinuxServer -Server $Server)
         if (-not [string]::IsNullOrWhiteSpace([string]$disk.fileName)) {
             $diskFile = [string]$disk.fileName
         }
@@ -4682,7 +4990,7 @@ function Get-ProvisionVmContext {
     $vmFolder = Join-Path -Path $vmRoot -ChildPath $folderName
     $vhdFolder = Join-Path -Path $vhdRoot -ChildPath $folderName
 
-    $osDiskName = Get-OsDiskFileName -VmName $computerName
+    $osDiskName = Get-OsDiskFileName -VmName $computerName -ForLinux:(Test-IsLinuxServer -Server $Server)
     if (-not [string]::IsNullOrWhiteSpace([string]$Server.osDiskFileName)) {
         $osDiskName = [string]$Server.osDiskFileName
     }
@@ -4752,7 +5060,9 @@ function Initialize-ProvisionVmDisks {
     }
     else {
         Write-Log "Copying gold image to '$($ctx.ChildVhd)'" -Tag "Run"
-        Copy-Item -LiteralPath $ctx.GoldPath -Destination $ctx.ChildVhd -Force
+        # A full copy of a gold is tens of gigabytes and Copy-Item says nothing while
+        # it runs, which makes a working build indistinguishable from a hung one.
+        Copy-FileWithProgress -Source $ctx.GoldPath -Destination $ctx.ChildVhd -Activity "copying gold"
     }
 
     Add-ServerDataDisks -VmName $ctx.ComputerName -VhdFolder $ctx.VhdFolder -Server $Server `
@@ -4826,7 +5136,9 @@ function New-ProvisionedVm {
     }
     else {
         Write-Log "Copying gold image to '$($ctx.ChildVhd)'" -Tag "Run"
-        Copy-Item -LiteralPath $ctx.GoldPath -Destination $ctx.ChildVhd -Force
+        # A full copy of a gold is tens of gigabytes and Copy-Item says nothing while
+        # it runs, which makes a working build indistinguishable from a hung one.
+        Copy-FileWithProgress -Source $ctx.GoldPath -Destination $ctx.ChildVhd -Activity "copying gold"
     }
 
     $memoryGb = 4
@@ -4982,8 +5294,9 @@ function New-ProvisionedVm {
     # The one place a Windows-specific action happens for every VM, and so the one place
     # Linux has to diverge: no answer file written into the disk, a cloud-init seed
     # attached beside it instead. Everything after this point is the same for both.
+    $linuxSeedPath = ""
     if (Test-IsLinuxServer -Server $Server) {
-        Set-LinuxProvisioning -Server $Server -Defaults $Defaults -VmName $hyperVName `
+        $linuxSeedPath = Set-LinuxProvisioning -Server $Server -Defaults $Defaults -VmName $hyperVName `
             -HostName $ctx.ComputerName -SeedDirectory (Split-Path -Path $ctx.ChildVhd -Parent) `
             -GoldPath $ctx.GoldPath -NicMacAddress ([string]$nicMac)
     }
@@ -5014,7 +5327,25 @@ function New-ProvisionedVm {
 
     Add-VmToFailoverCluster -VmName $hyperVName -ClusterSettings $Defaults.cluster -Server $Server
 
-    if (Test-ShouldStartProvisionedVm -Server $Server -DoStart:$DoStart) {
+    if (-not [string]::IsNullOrWhiteSpace($linuxSeedPath)) {
+        # A Linux VM is always started here, whatever the studio said: the toggle decides
+        # whether a FINISHED machine is left running, and a machine that never booted
+        # never read its answer file. cloud-init powers it off again when it is done,
+        # which is what lets the seed be taken away.
+        $null = Complete-LinuxFirstBoot -VmName $hyperVName -SeedPath $linuxSeedPath
+
+        if (Test-ShouldStartProvisionedVm -Server $Server -DoStart:$DoStart) {
+            $vm = Get-VM -Name $hyperVName -ErrorAction SilentlyContinue
+            if ($vm -and $vm.State -eq "Off") {
+                Write-Log "Starting VM '$hyperVName'" -Tag "Run"
+                Start-VmWithRetry -VmName $hyperVName
+            }
+        }
+        else {
+            Write-Log "VM '$hyperVName' provisioned and left off" -Tag "Info"
+        }
+    }
+    elseif (Test-ShouldStartProvisionedVm -Server $Server -DoStart:$DoStart) {
         Write-Log "Starting VM '$hyperVName'" -Tag "Run"
         Start-VmWithRetry -VmName $hyperVName
         Connect-HostContextAzureArc -VmName $hyperVName -ComputerName $ctx.ComputerName -Server $Server -Defaults $Defaults
@@ -6135,7 +6466,7 @@ function Invoke-BuildPreflight {
             $ok.Add("$label name is free")
         }
 
-        $osDiskName = Get-OsDiskFileName -VmName $computerName
+        $osDiskName = Get-OsDiskFileName -VmName $computerName -ForLinux:(Test-IsLinuxServer -Server $server)
         if (-not [string]::IsNullOrWhiteSpace([string]$server.osDiskFileName)) {
             $osDiskName = [string]$server.osDiskFileName
         }
@@ -6498,7 +6829,7 @@ function Get-ServerSummaryRows {
 
     $useDiff = $false
     if ($null -ne $Server.useDifferencingDisk) { $useDiff = [bool]$Server.useDifferencingDisk }
-    $osDiskName = Get-OsDiskFileName -VmName $computerName
+    $osDiskName = Get-OsDiskFileName -VmName $computerName -ForLinux:(Test-IsLinuxServer -Server $Server)
     if (-not [string]::IsNullOrWhiteSpace([string]$Server.osDiskFileName)) {
         $osDiskName = [string]$Server.osDiskFileName
     }
