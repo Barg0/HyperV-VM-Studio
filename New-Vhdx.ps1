@@ -1764,7 +1764,7 @@ function Show-Menu {
                 # Two spaces of indent so a separator that carries text lines up with
                 # the rows around it, and a blank one is simply a blank line.
                 if ([string]::IsNullOrWhiteSpace($separatorText)) { Write-Host "" }
-                else { Write-Studio -Text "  $separatorText" -Key "muted" }
+                else { Write-Studio -Text "  $separatorText" -Key "accent" }
                 continue
             }
 
@@ -4576,6 +4576,28 @@ function Get-LinuxGoldFeatureCatalog {
     )
 }
 
+function Get-LinuxDistroDisplayName {
+    <#
+        The heading a distribution appears under. Known names are spelled the way the
+        project spells them; anything else is title-cased, so a distribution added to
+        the catalog tomorrow gets a sensible heading without touching this function.
+    #>
+    param([string]$Distro)
+
+    $key = ([string]$Distro).Trim().ToLowerInvariant()
+    switch ($key) {
+        "ubuntu" { return "Ubuntu" }
+        "debian" { return "Debian" }
+        "rocky"  { return "Rocky Linux" }
+        "alma"   { return "AlmaLinux" }
+        "fedora" { return "Fedora" }
+        "suse"   { return "openSUSE" }
+        "other"  { return "Other" }
+    }
+    if ([string]::IsNullOrWhiteSpace($key)) { return "Other" }
+    return ($key.Substring(0, 1).ToUpperInvariant() + $key.Substring(1))
+}
+
 function Get-LinuxGoldName {
     <#
         The gold's file name: <hv|azl>-<language>-<imageId>, which is the SAME three
@@ -5408,9 +5430,35 @@ function Start-LinuxInteractiveConfiguration {
     )
 
     $catalog = @(Get-LinuxImageCatalog)
+
+    # Grouped under the distribution rather than listed flat. Three releases read fine
+    # either way; a dozen do not, and the catalog is meant to grow.
+    #
+    # Group order follows the CATALOG, not the alphabet, so the list stays in the order
+    # the catalog author chose - newest first within a distribution, and whichever
+    # distribution they put first at the top.
     $distroItems = @()
+    $seenDistros = @()
     foreach ($entry in $catalog) {
-        $distroItems += [PSCustomObject]@{ Id = $entry.Id; Label = $entry.Name }
+        $key = [string]$entry.Distro
+        if ([string]::IsNullOrWhiteSpace($key)) { $key = "other" }
+        if ($seenDistros -notcontains $key) { $seenDistros += $key }
+    }
+
+    foreach ($key in $seenDistros) {
+        if ($distroItems.Count -gt 0) {
+            $distroItems += [PSCustomObject]@{ Id = "__gap__"; Label = ""; Separator = $true }
+        }
+        $distroItems += [PSCustomObject]@{ Id = "__head__"; Label = (Get-LinuxDistroDisplayName -Distro $key); Separator = $true }
+
+        foreach ($entry in $catalog) {
+            $entryKey = [string]$entry.Distro
+            if ([string]::IsNullOrWhiteSpace($entryKey)) { $entryKey = "other" }
+            if ($entryKey -ne $key) { continue }
+            # Indented in the LABEL rather than by the renderer, so Show-Menu keeps its
+            # single way of drawing a row and the caret still lands in one column.
+            $distroItems += [PSCustomObject]@{ Id = $entry.Id; Label = ("  " + $entry.Name) }
+        }
     }
 
     $distroId = Show-Menu -Title "Select a Linux distribution" -Items $distroItems `
