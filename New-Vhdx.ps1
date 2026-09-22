@@ -1612,7 +1612,6 @@ function Show-Menu {
             }
 
             $anchor = Get-MenuCursorAnchor
-            $windowTop = Get-MenuWindowTop
         }
 
         $windowStart = 0
@@ -1671,6 +1670,15 @@ function Show-Menu {
             Write-Studio -Text "  Enter number + Enter   (Q to cancel)" -Key "muted"
         }
         Write-Host ""
+
+        # Read when the frame is COMPLETE, never half way through it. A frame taller
+        # than the window scrolls as its last lines are written, so a top measured
+        # before the list was drawn always disagrees with the one measured after - and
+        # the guard then declared a scroll on every single keypress and redrew the
+        # whole screen. That is the flicker coming back on exactly the tall blades:
+        # the build summary, a long feature list. Measured here the number settles
+        # after the first paint and the repaint path is used from then on.
+        $windowTop = Get-MenuWindowTop
 
         if ($useRawUi) {
             $key = $Host.UI.RawUI.ReadKey("NoEcho,IncludeKeyDown")
@@ -1811,7 +1819,6 @@ function Show-MultiSelectMenu {
             }
 
             $anchor = Get-MenuCursorAnchor
-            $windowTop = Get-MenuWindowTop
         }
 
         $lastSection = $null
@@ -1871,6 +1878,15 @@ function Show-MultiSelectMenu {
             Write-Studio -Text "  Number toggles, Enter continues, Q cancels" -Key "muted"
         }
         Write-Host ""
+
+        # Read when the frame is COMPLETE, never half way through it. A frame taller
+        # than the window scrolls as its last lines are written, so a top measured
+        # before the list was drawn always disagrees with the one measured after - and
+        # the guard then declared a scroll on every single keypress and redrew the
+        # whole screen. That is the flicker coming back on exactly the tall blades:
+        # the build summary, a long feature list. Measured here the number settles
+        # after the first paint and the repaint path is used from then on.
+        $windowTop = Get-MenuWindowTop
 
         if ($useRawUi) {
             $key = $Host.UI.RawUI.ReadKey("NoEcho,IncludeKeyDown")
@@ -1995,7 +2011,6 @@ function Show-VhdxConfigForm {
         if (-not $repainted) {
             Show-MenuHeader -Title $Title -Subtitle $Subtitle -StatusLines $StatusLines
             $anchor = Get-MenuCursorAnchor
-            $windowTop = Get-MenuWindowTop
         }
 
         Write-Studio -Text "  Disk size (GB)" -Key "fg"
@@ -2037,6 +2052,15 @@ function Show-VhdxConfigForm {
         Write-Studio -Text ("  " + ("-" * 62)) -Key "muted"
         Write-Studio -Text "  Up/Down move   Space select type   Type digits for size   Enter confirm   Esc cancel" -Key "muted"
         Write-Host ""
+
+        # Read when the frame is COMPLETE, never half way through it. A frame taller
+        # than the window scrolls as its last lines are written, so a top measured
+        # before the list was drawn always disagrees with the one measured after - and
+        # the guard then declared a scroll on every single keypress and redrew the
+        # whole screen. That is the flicker coming back on exactly the tall blades:
+        # the build summary, a long feature list. Measured here the number settles
+        # after the first paint and the repaint path is used from then on.
+        $windowTop = Get-MenuWindowTop
 
         $key = $Host.UI.RawUI.ReadKey("NoEcho,IncludeKeyDown")
         $virtualKey = [int]$key.VirtualKeyCode
@@ -2423,6 +2447,9 @@ function Show-IsoFilePicker {
     $currentPath = $StartPath
     $index = 0
     $useRawUi = Test-MenuHostSupported
+    $anchor = $null
+    $windowTop = $null
+    $anchoredPath = $null
 
     while ($true) {
         $entries = @(Get-FilePickerEntries -CurrentPath $currentPath)
@@ -2446,8 +2473,28 @@ function Show-IsoFilePicker {
         }
 
         $status = [ordered]@{ path = $displayPath }
-        Show-MenuHeader -Title "Select Windows ISO file" -Subtitle "Enter opens folder / selects .iso" `
-            -StatusLines $status
+
+        # Unlike the menus, this header is not constant: it carries the folder being
+        # browsed. Walking the rows inside one folder repaints the list alone; stepping
+        # into a folder changes the header, so the anchor is dropped and the whole
+        # screen is drawn again - once per folder rather than once per arrow key.
+        $repainted = $false
+        if ($null -ne $anchor -and $anchoredPath -eq $displayPath -and -not (Test-MenuWindowScrolled -TopBefore $windowTop)) {
+            if (Set-MenuCursorAnchor -Anchor $anchor) {
+                $repainted = (Clear-MenuBelowCursor)
+                if (-not $repainted) { $anchor = $null }
+            }
+            else {
+                $anchor = $null
+            }
+        }
+
+        if (-not $repainted) {
+            Show-MenuHeader -Title "Select Windows ISO file" -Subtitle "Enter opens folder / selects .iso" `
+                -StatusLines $status
+            $anchor = Get-MenuCursorAnchor
+            $anchoredPath = $displayPath
+        }
 
         $maxVisible = 16
         $windowStart = 0
@@ -2503,6 +2550,10 @@ function Show-IsoFilePicker {
             Write-Studio -Text "  Number + Enter selects   B = up   Q = cancel" -Key "muted"
         }
         Write-Host ""
+
+        # Read once the frame is complete - a top measured mid-frame disagrees with
+        # itself the moment the list is long enough to scroll the window.
+        $windowTop = Get-MenuWindowTop
 
         if ($useRawUi) {
             $key = $Host.UI.RawUI.ReadKey("NoEcho,IncludeKeyDown")
