@@ -414,13 +414,36 @@ function Get-PaddedAnsiLine {
     return ($Line + (" " * ($Width - $visible)))
 }
 
+function Get-ConsoleWidth {
+    try {
+        $width = $Host.UI.RawUI.WindowSize.Width
+        if ($width -gt 20) { return [int]$width }
+    }
+    catch {
+        # No RawUI at all - a redirected host, or ISE. 80 is the safe assumption.
+    }
+    return 80
+}
+
 function Write-FastfetchInfoRow {
     # Fastfetch-style aligned "label: value" (colons and values in one column).
     param(
         [string]$Label,
         [string]$Value,
-        [int]$LabelWidth = 8
+        [int]$LabelWidth = 8,
+        # Columns already consumed before this call - the logo and the gap after it,
+        # which Show-MenuHeader writes itself.
+        [int]$ReservedWidth = 0
     )
+
+    # A value that does not fit WRAPS, and the wrapped part lands in the logo's columns
+    # on the next line - straight through the artwork. A header is a summary, so a
+    # value that will not fit is truncated rather than allowed to redraw the screen.
+    $available = (Get-ConsoleWidth) - 1 - $ReservedWidth - $LabelWidth - 2
+    if ($available -lt 8) { $available = 8 }
+    if ($Value.Length -gt $available) {
+        $Value = $Value.Substring(0, $available - 3) + "..."
+    }
 
     $paddedLabel = ("{0,-$LabelWidth}" -f $Label)
     Write-Studio -Text $paddedLabel -Key "accent" -NoNewline
@@ -508,7 +531,7 @@ function Show-MenuHeader {
                 Write-Studio -Text $row.Value -Key "fg"
             }
             else {
-                Write-FastfetchInfoRow -Label $row.Label -Value $row.Value -LabelWidth $labelWidth
+                Write-FastfetchInfoRow -Label $row.Label -Value $row.Value -LabelWidth $labelWidth -ReservedWidth ($logoWidth + 3)
             }
         }
         else {

@@ -1333,8 +1333,22 @@ function Write-FastfetchInfoRow {
         [string]$Label,
         [string]$Value,
         [int]$LabelWidth = 8,
-        [int]$IndentWidth = 0
+        [int]$IndentWidth = 0,
+        # Columns already consumed before this call - the logo and the gap after it,
+        # which Show-MenuHeader writes itself. Without it this function believes the
+        # row starts at column zero.
+        [int]$ReservedWidth = 0
     )
+
+    # A value that does not fit WRAPS, and the wrapped part lands in the logo's
+    # columns on the next line - straight through the artwork. Truncating is the only
+    # honest option: the header is a summary, and a summary that redraws the screen
+    # badly is worse than one that says the path ends in three dots.
+    $available = (Get-ConsoleWidth) - 1 - $ReservedWidth - $IndentWidth - $LabelWidth - 2
+    if ($available -lt 8) { $available = 8 }
+    if ($Value.Length -gt $available) {
+        $Value = $Value.Substring(0, $available - 3) + "..."
+    }
 
     if ($IndentWidth -gt 0) {
         Write-Host (" " * $IndentWidth) -NoNewline
@@ -1425,7 +1439,7 @@ function Show-MenuHeader {
                 Write-Studio -Text $row.Value -Key "fg"
             }
             else {
-                Write-FastfetchInfoRow -Label $row.Label -Value $row.Value -LabelWidth $labelWidth
+                Write-FastfetchInfoRow -Label $row.Label -Value $row.Value -LabelWidth $labelWidth -ReservedWidth ($logoWidth + 3)
             }
         }
         else {
@@ -5145,7 +5159,7 @@ function Start-LinuxInteractiveConfiguration {
     # Dynamic mean exactly what they mean for a Windows gold, and both targets take
     # either: an Azure Local gold is a VHDX like any other.
     $vhdxConfig = Show-VhdxConfigForm -Title "Configure VHDX" `
-        -Subtitle "The gold's disk size is every VM's disk size - a differencing child cannot be resized away from its parent" `
+        -Subtitle "Size applies to every VM built from this gold" `
         -StatusLines ([ordered]@{
             distro   = $entry.Name
             target   = $targetId
@@ -5388,7 +5402,7 @@ function Start-LinuxInteractiveConfiguration {
         }
         if ($featureItems.Count -gt 0) {
             $bakeFeatures = Show-MultiSelectMenu -Title "Optional features" -Items $featureItems -AllowEmpty `
-                -Subtitle "Space toggles selection - all of these are baked into the gold, not per VM" `
+                -Subtitle "Space toggles - baked into the gold, not per VM" `
                 -ContinueLabel "Continue" `
                 -StatusLines ([ordered]@{ distro = $entry.Name; gold = "$goldName.vhdx" })
             if ($null -eq $bakeFeatures) { return $null }
