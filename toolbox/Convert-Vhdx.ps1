@@ -64,6 +64,95 @@ if ($enableLogFile -and -not (Test-Path -Path $logFileDirectory)) {
     New-Item -ItemType Directory -Path $logFileDirectory -Force | Out-Null
 }
 
+# ---------------------------[ Studio Palette ]---------------------------
+#
+# Kaido Dark, the studio's default theme, as the console's palette.
+#
+# Every hex below is lifted verbatim from FAMILIES[kaido].dark in
+# html\hyperv-vm-studio.html - which is already this project's default theme
+# (data-theme="kaido_dark", THEME_DEFAULT = "kaido") - with one stated exception,
+# `yellow`, documented where it is defined. A run and the studio that designed it are
+# the same colours rather than two guesses at them.
+#
+# Truecolor where the console does virtual terminal processing, the nearest of the
+# sixteen named ConsoleColors where it does not. Everything that reaches the screen
+# goes through Write-Studio, which is what makes the theme one table instead of a
+# hundred scattered -ForegroundColor arguments.
+#
+# The logo is deliberately NOT part of this: it keeps its own base64 ANSI art and
+# the colours baked into it.
+
+$script:studioPalette = @{
+    bg       = "#16171e"; elevated  = "#1d1f28"; subtle = "#1a1c24"; hover = "#262a38"
+    fg       = "#d7dbec"; muted     = "#8b93ad"
+    border   = "#2b2f3d"; borderStrong = "#3d4356"; divider = "#23262f"
+    accent   = "#7aa2f7"; accentHover = "#93b3fa"; accentSoft = "#22304f"; accentFg = "#11141c"
+    success  = "#9ece6a"; danger    = "#f7768e"; warn = "#e0af68"
+    bandHost = "#7dcfff"; bandIdent = "#bb9af7"; bandWork = "#9ece6a"; bandDeploy = "#ff9e64"
+    # THE ONE VALUE IN THIS TABLE THAT IS NOT THE STUDIO'S.
+    #
+    # Kaido has exactly two warm colours - warn #e0af68, a gold, and deploy #ff9e64, an
+    # orange - and a log needs three warm steps, because `info` is the commonest tag
+    # there is and it has to sit below `warn` without either reading as the other.
+    #
+    # Pick it by HUE, not by eye. 30 degrees is orange, 45 gold, 60 pure yellow; this is
+    # 56, far enough from warn's 35 to separate at a glance and short of acid lemon.
+    yellow   = "#e6de78"
+}
+
+# One per key, for a console that cannot do truecolor. Chosen for the JOB the hex does,
+# not the nearest RGB: muted and borderStrong both land on DarkGray because both are
+# "quieter than the text", and that is what has to survive.
+$script:studioFallback = @{
+    bg       = "Black";    elevated  = "Black";  subtle = "Black";     hover = "Black"
+    fg       = "Gray";     muted     = "DarkGray"
+    border   = "DarkGray"; borderStrong = "DarkGray"; divider = "DarkGray"
+    accent   = "Cyan";     accentHover = "White"; accentSoft = "DarkBlue"; accentFg = "Black"
+    success  = "Green";    danger    = "Red";     warn = "DarkYellow"
+    bandHost = "Cyan";     bandIdent = "Magenta"; bandWork = "Green";   bandDeploy = "Yellow"
+    yellow   = "Yellow"
+}
+
+function ConvertFrom-HexColor {
+    param([string]$Hex)
+
+    $h = $Hex.TrimStart("#")
+    return @(
+        [Convert]::ToInt32($h.Substring(0, 2), 16),
+        [Convert]::ToInt32($h.Substring(2, 2), 16),
+        [Convert]::ToInt32($h.Substring(4, 2), 16)
+    )
+}
+
+function Write-Studio {
+    # The one write in this script, apart from the logo's own fallback. Takes a palette
+    # KEY, never a colour: a call site that names a colour is a call site the theme
+    # cannot reach.
+    param(
+        [AllowEmptyString()][string]$Text = "",
+        [string]$Key = "fg",
+        [switch]$NoNewline
+    )
+
+    $hex = [string]$script:studioPalette[$Key]
+    if ([string]::IsNullOrWhiteSpace($hex)) { $hex = [string]$script:studioPalette["fg"] }
+
+    # Cheap after the first call - Enable-MenuVtProcessing caches on $script:menuVtEnabled
+    # - and it has to be here rather than only in the menu header, because log lines print
+    # long before any header does.
+    Enable-MenuVtProcessing
+    if (Test-MenuAnsiSupported) {
+        $rgb = ConvertFrom-HexColor -Hex $hex
+        $escape = [char]27
+        Write-Host ("{0}[38;2;{1};{2};{3}m{4}{0}[0m" -f $escape, $rgb[0], $rgb[1], $rgb[2], $Text) -NoNewline:$NoNewline
+        return
+    }
+
+    $named = [string]$script:studioFallback[$Key]
+    if ([string]::IsNullOrWhiteSpace($named)) { $named = "Gray" }
+    Write-Host $Text -NoNewline:$NoNewline -ForegroundColor $named
+}
+
 function Write-Log {
     [CmdletBinding()]
     param (
@@ -108,21 +197,25 @@ function Write-Log {
     if ([string]::IsNullOrWhiteSpace($shown)) { $shown = "error" }
     $rawTag = $shown.PadRight(5)
 
+    # Palette keys, not ConsoleColor names - see Write-Studio above. info sits BELOW
+    # warn on purpose: info is the commonest tag in any run and warn is the one that
+    # wants to be noticed. Kaido's two warm colours are one step apart and read as
+    # orange-on-orange, so the palette carries a third, `yellow`, for info alone.
     $color = switch ($shown) {
-        "start" { "Cyan" }
-        "get"   { "Blue" }
-        "run"   { "Magenta" }
-        "info"  { "Yellow" }
+        "start" { "accent" }
+        "get"   { "bandHost" }
+        "run"   { "bandIdent" }
+        "info"  { "yellow" }
         # There is no orange in ConsoleColor. DarkYellow is ANSI 3, which every current
         # scheme renders orange-brown, against info's Yellow = ANSI 11, the pale bright
         # one - so warn reads as the louder of the two, not the dimmer. That colour used
         # to belong to debug, which is now DarkGray, where a diagnostic tag belongs.
-        "warn"  { "DarkYellow" }
-        "o.k."  { "Green" }
-        "error" { "Red" }
-        "debug" { "DarkGray" }
-        "end"   { "Cyan" }
-        default { "White" }
+        "warn"  { "warn" }
+        "o.k."  { "success" }
+        "error" { "danger" }
+        "debug" { "muted" }
+        "end"   { "accent" }
+        default { "fg" }
     }
 
     $logMessage = "$timestamp [ $rawTag ] $Message"
@@ -149,11 +242,13 @@ function Write-Log {
         }
     }
 
-    Write-Host "$timestamp " -NoNewline
-    Write-Host "[ " -NoNewline -ForegroundColor White
-    Write-Host "$rawTag" -NoNewline -ForegroundColor $color
-    Write-Host " ] " -NoNewline -ForegroundColor White
-    Write-Host "$Message"
+    # Timestamp and brackets are furniture, not content: `muted` keeps the eye on the
+    # tag and the message.
+    Write-Studio -Text "$timestamp " -Key "muted" -NoNewline
+    Write-Studio -Text "[ " -Key "muted" -NoNewline
+    Write-Studio -Text "$rawTag" -Key $color -NoNewline
+    Write-Studio -Text " ] " -Key "muted" -NoNewline
+    Write-Studio -Text "$Message" -Key "fg"
 }
 
 function Complete-Script {
@@ -323,9 +418,9 @@ function Write-FastfetchInfoRow {
     )
 
     $paddedLabel = ("{0,-$LabelWidth}" -f $Label)
-    Write-Host $paddedLabel -NoNewline -ForegroundColor DarkCyan
-    Write-Host ": " -NoNewline -ForegroundColor DarkCyan
-    Write-Host $Value -ForegroundColor Gray
+    Write-Studio -Text $paddedLabel -Key "accent" -NoNewline
+    Write-Studio -Text ": " -Key "accent" -NoNewline
+    Write-Studio -Text $Value -Key "muted"
 }
 
 function Show-MenuHeader {
@@ -405,7 +500,7 @@ function Show-MenuHeader {
                 continue
             }
             if ($row.Accent) {
-                Write-Host $row.Value -ForegroundColor White
+                Write-Studio -Text $row.Value -Key "fg"
             }
             else {
                 Write-FastfetchInfoRow -Label $row.Label -Value $row.Value -LabelWidth $labelWidth
@@ -417,7 +512,7 @@ function Show-MenuHeader {
     }
 
     Write-Host ""
-    Write-Host ("  " + ("-" * 62)) -ForegroundColor DarkGray
+    Write-Studio -Text ("  " + ("-" * 62)) -Key "muted"
     Write-Host ""
 }
 
@@ -448,7 +543,7 @@ function Show-Menu {
         Show-MenuHeader -Title $Title -StatusLines $StatusLines
 
         if (-not [string]::IsNullOrWhiteSpace($questionText)) {
-            Write-Host "  $questionText" -ForegroundColor White
+            Write-Studio -Text "  $questionText" -Key "fg"
             Write-Host ""
         }
 
@@ -458,22 +553,22 @@ function Show-Menu {
             $selected = ($i -eq $index)
 
             if ($selected) {
-                Write-Host "  > " -NoNewline -ForegroundColor Cyan
-                Write-Host $label -ForegroundColor White
+                Write-Studio -Text "  > " -Key "accent" -NoNewline
+                Write-Studio -Text $label -Key "fg"
             }
             else {
                 Write-Host "    " -NoNewline
-                Write-Host $label -ForegroundColor Gray
+                Write-Studio -Text $label -Key "muted"
             }
         }
 
         Write-Host ""
-        Write-Host ("  " + ("-" * 62)) -ForegroundColor DarkGray
+        Write-Studio -Text ("  " + ("-" * 62)) -Key "muted"
         if ($useRawUi) {
-            Write-Host "  Up/Down move   Enter select   Esc/Q cancel" -ForegroundColor DarkGray
+            Write-Studio -Text "  Up/Down move   Enter select   Esc/Q cancel" -Key "muted"
         }
         else {
-            Write-Host "  Enter number + Enter   (Q to cancel)" -ForegroundColor DarkGray
+            Write-Studio -Text "  Enter number + Enter   (Q to cancel)" -Key "muted"
         }
         Write-Host ""
 
@@ -539,7 +634,7 @@ function Show-MultiSelectMenu {
         Show-MenuHeader -Title $Title -StatusLines $StatusLines -Subtitle "Space toggles selection"
 
         if (-not [string]::IsNullOrWhiteSpace($questionText)) {
-            Write-Host "  $questionText" -ForegroundColor White
+            Write-Studio -Text "  $questionText" -Key "fg"
             Write-Host ""
         }
 
@@ -551,22 +646,22 @@ function Show-MultiSelectMenu {
             $isSelectedRow = ($i -eq $index)
 
             if ($isSelectedRow) {
-                Write-Host "  > " -NoNewline -ForegroundColor Cyan
-                Write-Host $label -ForegroundColor White
+                Write-Studio -Text "  > " -Key "accent" -NoNewline
+                Write-Studio -Text $label -Key "fg"
             }
             else {
                 Write-Host "    " -NoNewline
-                Write-Host $label -ForegroundColor Gray
+                Write-Studio -Text $label -Key "muted"
             }
         }
 
         Write-Host ""
-        Write-Host ("  " + ("-" * 62)) -ForegroundColor DarkGray
+        Write-Studio -Text ("  " + ("-" * 62)) -Key "muted"
         if ($useRawUi) {
-            Write-Host "  Up/Down move   Space toggle   Enter done   Esc/Q cancel" -ForegroundColor DarkGray
+            Write-Studio -Text "  Up/Down move   Space toggle   Enter done   Esc/Q cancel" -Key "muted"
         }
         else {
-            Write-Host "  Number toggles, Enter alone confirms, Q cancels" -ForegroundColor DarkGray
+            Write-Studio -Text "  Number toggles, Enter alone confirms, Q cancels" -Key "muted"
         }
         Write-Host ""
 
@@ -839,9 +934,9 @@ function Write-DiskInventoryReport {
     Write-Log ("Inventory: {0} disk(s) across host ({1} Fixed, {2} Dynamic)" -f $Disks.Count, $fixed.Count, $dynamic.Count) -Tag "Info"
     Write-Log ("Fixed thick on disk: {0}" -f (Format-ByteSize $thickBytes)) -Tag "Info"
     Write-Host ""
-    Write-Host ("  {0,-28} {1,-10} {2,-12} {3,-8} {4,10} {5,10} {6}" -f `
-            "VM", "State", "Controller", "Type", "Max", "OnDisk", "File") -ForegroundColor DarkCyan
-    Write-Host ("  " + ("-" * 100)) -ForegroundColor DarkGray
+    Write-Studio -Text ("  {0,-28} {1,-10} {2,-12} {3,-8} {4,10} {5,10} {6}" -f `
+            "VM", "State", "Controller", "Type", "Max", "OnDisk", "File") -Key "accent"
+    Write-Studio -Text ("  " + ("-" * 100)) -Key "muted"
 
     foreach ($d in $Disks) {
         $typeColor = "Gray"
@@ -850,16 +945,16 @@ function Write-DiskInventoryReport {
         elseif ($d.VhdType -eq "Differencing") { $typeColor = "Magenta" }
 
         Write-Host ("  {0,-28} {1,-10} {2,-12} " -f $d.VmName, $d.VmState, $d.Controller) -NoNewline
-        Write-Host ("{0,-8}" -f $d.VhdType) -NoNewline -ForegroundColor $typeColor
+        Write-Studio -Text ("{0,-8}" -f $d.VhdType) -Key $typeColor -NoNewline
         Write-Host (" {0,10} {1,10} {2}" -f `
                 (Format-ByteSize $d.SizeBytes), `
                 (Format-ByteSize $d.FileSizeBytes), `
                 $d.FileName)
         if ($d.CheckpointCount -gt 0) {
-            Write-Host ("    checkpoints={0} (clear before convert)" -f $d.CheckpointCount) -ForegroundColor DarkYellow
+            Write-Studio -Text ("    checkpoints={0} (clear before convert)" -f $d.CheckpointCount) -Key "warn"
         }
         if ($d.VhdError) {
-            Write-Host ("    error: {0}" -f $d.VhdError) -ForegroundColor Red
+            Write-Studio -Text ("    error: {0}" -f $d.VhdError) -Key "danger"
         }
     }
     Write-Host ""
@@ -1180,8 +1275,8 @@ function Get-GuestCredentialInteractive {
         return $script:guestCredential
     }
     Write-Host ""
-    Write-Host "  Guest ReTrim needs PowerShell Direct credentials (local admin inside the VM)." -ForegroundColor Yellow
-    Write-Host "  Tip: use DOMAIN\user or .\Administrator" -ForegroundColor DarkGray
+    Write-Studio -Text "  Guest ReTrim needs PowerShell Direct credentials (local admin inside the VM)." -Key "warn"
+    Write-Studio -Text "  Tip: use DOMAIN\user or .\Administrator" -Key "muted"
     Write-Host ""
     $script:guestCredential = Get-Credential -Message "Guest OS credentials for PowerShell Direct"
     return $script:guestCredential
