@@ -2771,8 +2771,12 @@ function Resolve-FodPlans {
             -MediumLabel "$releaseLabel Languages and Optional Features ISO" `
             -Subject "App Compatibility ($releaseLabel)" `
             -VmList ($byRelease[$key] -join ", ") `
-            -OnlineLabel "Install in guest    each VM pulls it from Windows Update at first boot" `
-            -OnlineWarning "adds minutes to first boot and needs internet or a WSUS that allows optional content"
+            -OnlineLabel "Install in guest    from Windows Update at first boot" `
+            -OnlineWarning "minutes, needs internet" `
+            -Notes @(
+                "Installing in the guest adds minutes to every VM's first boot, and needs",
+                "internet - or a WSUS configured to allow optional content."
+            )
     }
 
     # --- Windows 11 RSAT capabilities, one medium for every client VM ---
@@ -2796,8 +2800,12 @@ function Resolve-FodPlans {
         -Subject "RSAT" `
         -VmList ($rsatNames -join ", ") `
         -Extra ([ordered]@{ "capabilities" = "$rsatCount to install" }) `
-        -OnlineLabel "Install in guest    SLOW - one Windows Update download per capability" `
-        -OnlineWarning "each capability is fetched separately at first boot; a WSUS without optional content configured fails them all"
+        -OnlineLabel "Install in guest    SLOW - one Windows Update download each" `
+        -OnlineWarning "one download per item" `
+        -Notes @(
+            "Each capability is fetched separately at first boot, so this is slow. A WSUS",
+            "without optional content configured fails all of them."
+        )
 }
 
 function Get-FodMediumInteractive {
@@ -2812,7 +2820,11 @@ function Get-FodMediumInteractive {
         [string]$VmList,
         [System.Collections.IDictionary]$Extra,
         [string]$OnlineLabel,
-        [string]$OnlineWarning
+        [string]$OnlineWarning,
+        # The caveat, in lines the caller has already broken. It goes above the list
+        # rather than into a row or the header: a menu row is one line by definition,
+        # and the header column is half a screen narrower than this one.
+        [string[]]$Notes = @()
     )
 
     while ($true) {
@@ -2820,16 +2832,28 @@ function Get-FodMediumInteractive {
         if ($Extra) {
             foreach ($k in $Extra.Keys) { $status[$k] = $Extra[$k] }
         }
-        $status["medium"] = $MediumLabel
-        $status["online costs"] = $OnlineWarning
+        # The medium is named in the note above the list, not here: which ISO to go and
+        # find is a sentence, and the header column is half a screen narrower than the
+        # list is.
+        $status["online"] = $OnlineWarning
 
         $items = @(
-            [pscustomobject]@{ Id = "iso";    Label = "Select FoD ISO...   browse for the $MediumLabel" }
+            [pscustomobject]@{ Id = "iso";    Label = "Select FoD ISO...   browse for it on disk" }
             [pscustomobject]@{ Id = "online"; Label = $OnlineLabel }
             [pscustomobject]@{ Id = "skip";   Label = "Skip                do not install these on the VMs above" }
         )
 
-        $choice = Show-Menu -Title $Title -StatusLines $status -Items $items
+        $note = {
+            Write-Studio -Text "  Needs the $MediumLabel." -Key "fg"
+            Write-Host ""
+            foreach ($line in $Notes) {
+                if ([string]::IsNullOrWhiteSpace($line)) { Write-Host "" }
+                else { Write-Studio -Text "  $line" -Key "muted" }
+            }
+            if ($Notes.Count -gt 0) { Write-Host "" }
+        }
+
+        $choice = Show-Menu -Title $Title -StatusLines $status -Items $items -PreItems $note
 
         if ($null -eq $choice -or $choice -eq "online") {
             Write-Log "$Subject : installing online in the guest at first boot" -Tag "Info"
@@ -5837,7 +5861,13 @@ function Write-FastfetchInfoRow {
     # columns on the next line - straight through the artwork. Truncating is the only
     # honest option: the header is a summary, and a summary that redraws the screen
     # badly is worse than one that says the value ends in three dots.
-    $available = (Get-ConsoleWidth) - 1 - $ReservedWidth - $IndentWidth - $LabelWidth - 2
+    #
+    # The label is measured, not assumed. $LabelWidth is the column it is padded TO,
+    # and a longer label simply overruns it - "online costs" is twelve characters in an
+    # eight-wide column. Budgeting for eight when twelve are written leaves the value
+    # four columns too long, which is exactly enough to wrap it into the logo.
+    $labelCells = [Math]::Max($LabelWidth, $Label.Length)
+    $available = (Get-ConsoleWidth) - 1 - $ReservedWidth - $IndentWidth - $labelCells - 2
     if ($available -lt 8) { $available = 8 }
     if ($Value.Length -gt $available) {
         $Value = $Value.Substring(0, $available - 3) + "..."
@@ -5959,8 +5989,10 @@ function Show-MenuHeader {
                 Write-Studio -Text $row.Value -Key "accent"
             }
             default {
+                # The two-space indent Show-MenuHeader writes before the logo counts too: the
+                # row starts at column 2, not column 0 - logo, the three-space gap, that indent.
                 Write-FastfetchInfoRow -Label $row.Label -Value $row.Value `
-                    -LabelWidth $row.LabelWidth -IndentWidth $row.Indent -ReservedWidth ($logoWidth + 3)
+                    -LabelWidth $row.LabelWidth -IndentWidth $row.Indent -ReservedWidth ($logoWidth + 5)
             }
         }
     }

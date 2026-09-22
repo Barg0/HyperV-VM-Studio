@@ -4674,15 +4674,31 @@ function passwordLength() {
 function sanitizeDiskNamePart(name) {
   return String(name || "").toLowerCase().replace(/-/g, "");
 }
-function osDiskFileName(serverName) {
+/* Disk file names follow the guest, not the host.
+
+   On Windows a disk file is named for the drive letter the guest will mount it on -
+   c, then d, e, f - so the file on the host and the volume in the VM answer to the
+   same letter. A Linux guest has no drive letters at all: the OS disk is the system
+   disk and the rest are just the second and third disk, so they are numbered. A
+   Linux VM with a file called disk-web01-d.vhdx names a thing that does not exist
+   anywhere inside it. */
+function osDiskFileName(serverName, forLinux) {
   const n = sanitizeDiskNamePart(serverName) || "vm";
-  return `disk-${n}-c.vhdx`;
+  return forLinux ? `disk-${n}-system.vhdx` : `disk-${n}-c.vhdx`;
 }
 function dataDiskLetter(index) {
   return String.fromCharCode(100 + index); // d, e, f, ...
 }
-function dataDiskFileName(serverName, index) {
+/* What to call a data disk on screen. Windows mounts it on a letter and that letter
+   is the disk as far as anybody using the VM is concerned; Linux does not, so the
+   honest label there is its position - disk 01, disk 02. */
+function dataDiskTag(server, index, disk) {
+  if (isLinuxServer(server)) return String(index + 1).padStart(2, "0");
+  return String((disk && disk.letter) || dataDiskLetter(index)).toUpperCase() + ":";
+}
+function dataDiskFileName(serverName, index, forLinux) {
   const n = sanitizeDiskNamePart(serverName) || "vm";
+  if (forLinux) return `disk-${n}-${String(index + 1).padStart(2, "0")}.vhdx`;
   return `disk-${n}-${dataDiskLetter(index)}.vhdx`;
 }
 /* ---- Data disk volumes ----------------------------------------------------
@@ -4727,8 +4743,8 @@ function sanitizeDiskFileName(raw, ext) {
   if (!v) return "";
   return v + ext;
 }
-function autoOsDiskFileName(s) { return osDiskFileName((s && s.name) || "vm"); }
-function autoDataDiskFileName(s, i) { return dataDiskFileName((s && s.name) || "vm", i); }
+function autoOsDiskFileName(s) { return osDiskFileName((s && s.name) || "vm", isLinuxServer(s)); }
+function autoDataDiskFileName(s, i) { return dataDiskFileName((s && s.name) || "vm", i, isLinuxServer(s)); }
 
 function hasCustomOsDiskName(s) {
   const v = sanitizeDiskFileName(s && s.osDiskFileName, ".vhdx");
@@ -5110,13 +5126,17 @@ function buildConfig() {
     const disks = (s.additionalDisks || []).map((d, i) => {
       const fs = diskFileSystem(d);
       const row = {
-        letter: d.letter || dataDiskLetter(i),
-        name: d.letter || dataDiskLetter(i),
         sizeGB: Number(d.sizeGB) || 100,
         type: d.type === "Dynamic" ? "Dynamic" : "Fixed",
         fileName: effectiveDataDiskFileName(s, d, i),
         fileSystem: fs
       };
+      // A drive letter is a Windows idea. On Linux the disk is numbered and mounted
+      // by whatever the guest decides, so sending one would be inventing a fact.
+      if (!isLinuxServer(s)) {
+        row.letter = d.letter || dataDiskLetter(i);
+        row.name = row.letter;
+      }
       // Only a formatted volume carries a label - "Leave raw" has nothing to name.
       if (fs !== "None") row.label = effectiveDataDiskLabel(d, i);
       if (d.path) row.path = d.path;
@@ -7570,12 +7590,14 @@ function renderServerCard(s) {
         <div class="section-body">
           <div class="disk-pane">
             <div class="disk-cmdbar">
-              <p class="hint">OS disk comes from the gold image. File names follow the VM name (<code>disk-&lt;server&gt;-c.vhdx</code>, <code>-d</code>, …) — hit the pencil to rename one by hand.</p>
+              <p class="hint">OS disk comes from the gold image. File names follow the VM name (${isLinuxServer(s)
+                ? `<code>disk-&lt;server&gt;-system.vhdx</code>, <code>-01</code>, …`
+                : `<code>disk-&lt;server&gt;-c.vhdx</code>, <code>-d</code>, …`}) — hit the pencil to rename one by hand.</p>
               <button class="btn primary" type="button" data-add-disk="${esc(s._id)}"><img src="${iconSrcOnAccent("disk.svg")}"> Create and attach</button>
             </div>
             <div class="disk-grid">
               <div class="disk-grid-head" aria-hidden="true">
-                <span>File name</span><span>Drive</span><span>Size (GB)</span><span>Type</span><span>Format</span><span>Volume label</span><span></span>
+                <span>File name</span><span>${isLinuxServer(s) ? "Disk" : "Drive"}</span><span>Size (GB)</span><span>Type</span><span>Format</span><span>Volume label</span><span></span>
               </div>
               <div class="disk-grid-row is-os">
                 ${diskNameCell({
@@ -7585,7 +7607,7 @@ function renderServerCard(s) {
                   badge: `<span class="disk-badge">OS</span>`,
                   bind: `data-s="${esc(s._id)}" data-k="osDiskFileName"`
                 })}
-                <span class="disk-drive">C:</span>
+                <span class="disk-drive">${isLinuxServer(s) ? "system" : "C:"}</span>
                 <span class="disk-muted" title="Set when the gold image was built with New-Vhdx.ps1">—</span>
                 ${s.useDifferencingDisk
                   ? `<span class="disk-muted">Differencing</span>`
@@ -7595,7 +7617,7 @@ function renderServerCard(s) {
                 <span></span>
               </div>
               ${disks.length ? disks.map((d, i) => {
-                const letter = (d.letter || dataDiskLetter(i)).toUpperCase();
+                const letter = dataDiskTag(s, i, d);
                 return `
               <div class="disk-grid-row">
                 ${diskNameCell({
@@ -8279,7 +8301,7 @@ function vmPlacementSummary(s) {
   if (!vmRoot && !vhdRoot) return NO_PATHS_NOTE;
 
   const folder = serverFolderName(s);
-  const disk = String(s.osDiskFileName || "").trim() || osDiskFileName(s.name);
+  const disk = String(s.osDiskFileName || "").trim() || osDiskFileName(s.name, isLinuxServer(s));
   const sameRoot = vmRoot && vhdRoot && vmRoot.toLowerCase() === vhdRoot.toLowerCase();
   const custom = serverUsesCustomPaths(s) && (String(s.vmPath || "").trim() || String(s.vhdPath || "").trim());
 
@@ -8756,7 +8778,7 @@ function validate() {
     }
 
     (s.additionalDisks || []).forEach((disk, i) => {
-      const dl = (disk.letter || dataDiskLetter(i)).toUpperCase();
+      const dl = dataDiskTag(s, i, disk);
       if (!(Number(disk.sizeGB) > 0)) err(`${label} data disk ${dl}: has no size.`, `Virtual machines › ${label}`, `s:${s._id}:disksize:${i}`);
       const fs = diskFileSystem(disk);
       // ReFS formatting needs a Windows edition that can create ReFS volumes. Every
@@ -8793,9 +8815,9 @@ function validate() {
     (s.additionalDisks || []).forEach((disk, i) => {
       const f = effectiveDataDiskFileName(s, disk, i).toLowerCase();
       if (diskFiles.has(f)) {
-        err(`${label} would write two disks to the same file "${f}" (${diskFiles.get(f)} and data disk ${dataDiskLetter(i).toUpperCase()}:).`, `Virtual machines › ${label}`);
+        err(`${label} would write two disks to the same file "${f}" (${diskFiles.get(f)} and data disk ${dataDiskTag(s, i, disk)}).`, `Virtual machines › ${label}`);
       }
-      diskFiles.set(f, `data disk ${dataDiskLetter(i).toUpperCase()}:`);
+      diskFiles.set(f, `data disk ${dataDiskTag(s, i, disk)}`);
     });
   });
 
@@ -8940,7 +8962,7 @@ function reviewServerRows(s) {
     kvRow("Data disks", disks.length ? disks.map((disk, i) => {
       const fs = diskFileSystem(disk);
       const volume = fs === "None" ? "raw, not formatted" : `${fs} "${effectiveDataDiskLabel(disk, i)}"`;
-      return `${(disk.letter || dataDiskLetter(i)).toUpperCase()}: ${Number(disk.sizeGB) || 0} GB ${disk.type === "Dynamic" ? "Dynamic" : "Fixed"} · ${volume} · ${effectiveDataDiskFileName(s, disk, i)}`;
+      return `${dataDiskTag(s, i, disk)} ${Number(disk.sizeGB) || 0} GB ${disk.type === "Dynamic" ? "Dynamic" : "Fixed"} · ${volume} · ${effectiveDataDiskFileName(s, disk, i)}`;
     }).join(" · ") : "") +
     kvRow("VHD Sets", sets.length ? sets.map(v => `${Number(v.sizeGB) || 0} GB ${v.type === "Dynamic" ? "Dynamic" : "Fixed"} shared with ${(v.attachTo || []).filter(n => String(n).toLowerCase() !== String(s.name || "").toLowerCase()).join(", ") || "nobody"}`).join(" · ") : "") +
     kvRow("Integration services", integOn.length ? integOn.join(", ") : "All disabled")

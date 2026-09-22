@@ -523,7 +523,12 @@ function Write-FastfetchInfoRow {
     # A value that does not fit WRAPS, and the wrapped part lands in the logo's columns
     # on the next line - straight through the artwork. A header is a summary, so a
     # value that will not fit is truncated rather than allowed to redraw the screen.
-    $available = (Get-ConsoleWidth) - 1 - $ReservedWidth - $LabelWidth - 2
+    # The label is measured, not assumed. $LabelWidth is the column it is padded TO,
+    # and a longer label simply overruns it - budgeting for eight when twelve are
+    # written leaves the value four columns too long, which is exactly enough to wrap
+    # it into the logo.
+    $labelCells = [Math]::Max($LabelWidth, $Label.Length)
+    $available = (Get-ConsoleWidth) - 1 - $ReservedWidth - $labelCells - 2
     if ($available -lt 8) { $available = 8 }
     if ($Value.Length -gt $available) {
         $Value = $Value.Substring(0, $available - 3) + "..."
@@ -615,7 +620,9 @@ function Show-MenuHeader {
                 Write-Studio -Text $row.Value -Key "fg"
             }
             else {
-                Write-FastfetchInfoRow -Label $row.Label -Value $row.Value -LabelWidth $labelWidth -ReservedWidth ($logoWidth + 3)
+                # The two-space indent Show-MenuHeader writes before the logo counts too: the
+                # row starts at column 2, not column 0 - logo, the three-space gap, that indent.
+                Write-FastfetchInfoRow -Label $row.Label -Value $row.Value -LabelWidth $labelWidth -ReservedWidth ($logoWidth + 5)
             }
         }
         else {
