@@ -1457,9 +1457,39 @@ function Show-Menu {
         throw "Show-Menu requires at least one item."
     }
 
+    # An item carrying Separator = $true is drawn but never lands under the caret: it is
+    # a blank line or a plain label used to group a long list. Navigation steps over it,
+    # so the arrow keys never stop on something that cannot be chosen.
+    $isSelectable = {
+        param([int]$At)
+        if ($At -lt 0 -or $At -ge $Items.Count) { return $false }
+        return -not [bool]$Items[$At].Separator
+    }
+    # $Step is ALWAYS passed parenthesised at the call sites: a bare -1 is read as a
+    # parameter name, lands in $args, and leaves $Step at zero - a walk that never walks.
+    $nextSelectable = {
+        param([int]$From, [int]$Step)
+        $at = $From
+        # One full lap at most - a list that is nothing but separators has no answer,
+        # and walking for ever looking for one is the wrong way to say so.
+        #
+        # The counter is $hops and NOT $step: PowerShell variable names are case
+        # insensitive, so a `for ($step = 0; ...)` here is the same variable as the
+        # $Step parameter and zeroes it on the loop's first statement. The walk then
+        # adds nothing each time round and every caret movement silently does nothing.
+        for ($hops = 0; $hops -lt $Items.Count; $hops++) {
+            $at = $at + $Step
+            if ($at -lt 0) { $at = $Items.Count - 1 }
+            if ($at -ge $Items.Count) { $at = 0 }
+            if (& $isSelectable $at) { return $at }
+        }
+        return $From
+    }
+
     $index = $SelectedIndex
     if ($index -lt 0) { $index = 0 }
     if ($index -ge $Items.Count) { $index = $Items.Count - 1 }
+    if (-not (& $isSelectable $index)) { $index = & $nextSelectable $index 1 }
 
     $useRawUi = Test-MenuHostSupported
     $maxVisible = 16
@@ -1498,6 +1528,20 @@ function Show-Menu {
             $label = if ($item.Label) { [string]$item.Label } else { [string]$item }
             $selected = ($i -eq $index)
 
+            if ($item.Separator) {
+                # Read the label off the item, NOT from $label above. That line falls
+                # back to [string]$item when Label is empty - which is what lets a menu
+                # be given plain strings instead of objects - and a blank separator has
+                # exactly that empty Label, so it was rendering as the object's own
+                # ToString: "@{Id=__gap__; Label=; Separator=True}".
+                $separatorText = [string]$item.Label
+                # Two spaces of indent so a separator that carries text lines up with
+                # the rows around it, and a blank one is simply a blank line.
+                if ([string]::IsNullOrWhiteSpace($separatorText)) { Write-Host "" }
+                else { Write-Studio -Text "  $separatorText" -Key "muted" }
+                continue
+            }
+
             if ($selected) {
                 Write-Studio -Text "  > " -Key "accent" -NoNewline
                 Write-Studio -Text $label -Key "fg"
@@ -1528,30 +1572,36 @@ function Show-Menu {
             $charKey = [string]$key.Character
 
             if ($virtualKey -eq 38) {
-                $index = if ($index -le 0) { $Items.Count - 1 } else { $index - 1 }
+                $index = & $nextSelectable $index (-1)
                 continue
             }
             if ($virtualKey -eq 40) {
-                $index = if ($index -ge ($Items.Count - 1)) { 0 } else { $index + 1 }
+                $index = & $nextSelectable $index 1
                 continue
             }
             if ($virtualKey -eq 33) {
-                $index = [Math]::Max(0, $index - $maxVisible)
+                $target = [Math]::Max(0, $index - $maxVisible)
+                if (& $isSelectable $target) { $index = $target }
+                else { $index = & $nextSelectable $target 1 }
                 continue
             }
             if ($virtualKey -eq 34) {
-                $index = [Math]::Min($Items.Count - 1, $index + $maxVisible)
+                $target = [Math]::Min($Items.Count - 1, $index + $maxVisible)
+                if (& $isSelectable $target) { $index = $target }
+                else { $index = & $nextSelectable $target (-1) }
                 continue
             }
             if ($virtualKey -eq 36) {
-                $index = 0
+                $index = if (& $isSelectable 0) { 0 } else { & $nextSelectable 0 1 }
                 continue
             }
             if ($virtualKey -eq 35) {
-                $index = $Items.Count - 1
+                $last = $Items.Count - 1
+                $index = if (& $isSelectable $last) { $last } else { & $nextSelectable $last (-1) }
                 continue
             }
             if ($virtualKey -eq 13) {
+                if (-not (& $isSelectable $index)) { continue }
                 return $Items[$index].Id
             }
             if ($virtualKey -eq 27 -or $charKey -eq "q" -or $charKey -eq "Q") {
@@ -1564,7 +1614,7 @@ function Show-Menu {
             if ($raw -match "^[Qq]$") { return $null }
             if ($raw -match "^\d+$") {
                 $num = [int]$raw
-                if ($num -ge 1 -and $num -le $Items.Count) {
+                if ($num -ge 1 -and $num -le $Items.Count -and (& $isSelectable ($num - 1))) {
                     return $Items[$num - 1].Id
                 }
             }
@@ -1997,6 +2047,45 @@ function Read-ConsolePath {
     return $raw.Trim().Trim('"')
 }
 
+function Write-BladeFooterAbove {
+    <#
+        Draws the closing rule BELOW the rows the caller is about to type into, then
+        puts the cursor back on the first of them - so the frame is on screen while the
+        question is still unanswered. Console output is linear and drawing order is not
+        display order; Read-ConsolePath does the same thing for the same reason.
+
+        $ReserveLines is how many input rows follow.
+
+        The rewind is GUARDED. The cursor only goes back when the console advanced by
+        exactly the number of lines that were written: a host that answers
+        CursorPosition with a terminal query can report 1;1 (observed under a pty), and
+        a rule drawn from there lands on top of the header. When the numbers disagree
+        the rule simply stays where it was drawn, which is the older behaviour - the
+        frame closes after the answer rather than before it. Ugly, never wrong.
+    #>
+    param([int]$ReserveLines = 1)
+
+    $before = $null
+    try { $before = $Host.UI.RawUI.CursorPosition } catch { $before = $null }
+
+    for ($i = 0; $i -lt $ReserveLines; $i++) { Write-Host "" }
+    Write-Host ""
+    Write-Studio -Text ("  " + ("-" * 62)) -Key "muted"
+    Write-Host ""
+
+    if ($null -eq $before) { return }
+
+    $after = $null
+    try { $after = $Host.UI.RawUI.CursorPosition } catch { $after = $null }
+    if ($null -eq $after) { return }
+
+    # Reserve blanks + the blank above the rule + the rule + the blank below it.
+    $expected = $ReserveLines + 3
+    if (($after.Y - $before.Y) -ne $expected) { return }
+
+    try { $Host.UI.RawUI.CursorPosition = $before } catch { }
+}
+
 function Read-BoundedInt {
     # Loops until a whole number within [MinValue, MaxValue] is entered; blank keeps the default.
     param(
@@ -2018,6 +2107,39 @@ function Read-BoundedInt {
             }
         }
         Write-Studio -Text "  Enter a whole number between $MinValue and $MaxValue." -Key "warn"
+    }
+}
+
+function Read-ConsoleIpAddress {
+    # Loops until a dotted-quad IPv4 address is entered. Blank returns the default,
+    # which for an optional field is an empty string - a gateway or a DNS server that
+    # nobody wants is a legitimate answer, an address with five octets is not.
+    param(
+        [string]$Prompt,
+        [string]$DefaultValue = "",
+        [switch]$AllowEmpty
+    )
+
+    while ($true) {
+        $shown = if ([string]::IsNullOrWhiteSpace($DefaultValue)) { "" } else { " [$DefaultValue]" }
+        $raw = Read-Host "$Prompt$shown"
+        if ([string]::IsNullOrWhiteSpace($raw)) {
+            if (-not [string]::IsNullOrWhiteSpace($DefaultValue)) { return $DefaultValue }
+            if ($AllowEmpty) { return "" }
+            Write-Studio -Text "  An address is required here." -Key "warn"
+            continue
+        }
+
+        $candidate = $raw.Trim()
+        $parsed = [System.Net.IPAddress]::None
+        if ([System.Net.IPAddress]::TryParse($candidate, [ref]$parsed) -and
+            $parsed.AddressFamily -eq [System.Net.Sockets.AddressFamily]::InterNetwork -and
+            ($candidate -split "\.").Count -eq 4) {
+            return $candidate
+        }
+        # TryParse alone is too generous: it accepts "10.1" and reads it as 10.0.0.1,
+        # which is never what somebody typing a lab address meant.
+        Write-Studio -Text "  Enter an IPv4 address as four numbers, for example 10.10.10.25." -Key "warn"
     }
 }
 
@@ -3003,6 +3125,9 @@ function Invoke-ImageDownload {
         $sampleBytes = New-Object System.Collections.ArrayList
         $windowSeconds = 3.0
 
+        # The bar gets a line to itself, top and bottom - it is the one thing on screen
+        # that redraws in place, and it should not look like another log row.
+        Write-Host ""
         Write-DownloadProgressLine -BytesRead 0 -TotalBytes $totalBytes -BytesPerSecond 0
 
         while ($true) {
@@ -3039,6 +3164,7 @@ function Invoke-ImageDownload {
         $average = 0.0
         if ($clock.Elapsed.TotalSeconds -gt 0) { $average = $bytesRead / $clock.Elapsed.TotalSeconds }
         Write-DownloadProgressLine -BytesRead $bytesRead -TotalBytes $totalBytes -BytesPerSecond $average -Final
+        Write-Host ""
 
         $fileStream.Dispose(); $fileStream = $null
 
@@ -3886,6 +4012,104 @@ function Import-LinuxTimeZoneCatalog {
     Write-Log "Loaded $($zones.Count) IANA time zones" -Tag "Debug"
 }
 
+function Get-AptMirrorCatalog {
+    <#
+        Country mirrors for the bake, because the stock cloud image points at
+        archive.ubuntu.com / deb.debian.org and a badly routed one turns a five minute
+        kernel install into a long wait.
+
+        Ubuntu and Debian do NOT use the same host names, and neither has a mirror
+        everywhere. Every entry below was probed on 2026-09-22 and only the ones that
+        answered are listed; a blank means that distribution has no country mirror there
+        and the run falls back to the distribution's own default, which is correct
+        rather than broken.
+
+        The pair worth remembering: the United Kingdom is `gb.archive.ubuntu.com` on
+        Ubuntu and `ftp.uk.debian.org` on Debian. Ubuntu has nothing usable for Denmark
+        or Portugal, and Debian has nothing for India, South Africa, Latvia, Argentina,
+        Indonesia, Vietnam or Israel.
+    #>
+
+    return @(
+        [PSCustomObject]@{ Code = "ar"; Name = "Argentina"; Ubuntu = "ar.archive.ubuntu.com"; Debian = "" }
+        [PSCustomObject]@{ Code = "au"; Name = "Australia"; Ubuntu = "au.archive.ubuntu.com"; Debian = "ftp.au.debian.org" }
+        [PSCustomObject]@{ Code = "at"; Name = "Austria"; Ubuntu = "at.archive.ubuntu.com"; Debian = "ftp.at.debian.org" }
+        [PSCustomObject]@{ Code = "be"; Name = "Belgium"; Ubuntu = "be.archive.ubuntu.com"; Debian = "ftp.be.debian.org" }
+        [PSCustomObject]@{ Code = "br"; Name = "Brazil"; Ubuntu = "br.archive.ubuntu.com"; Debian = "ftp.br.debian.org" }
+        [PSCustomObject]@{ Code = "bg"; Name = "Bulgaria"; Ubuntu = "bg.archive.ubuntu.com"; Debian = "ftp.bg.debian.org" }
+        [PSCustomObject]@{ Code = "ca"; Name = "Canada"; Ubuntu = "ca.archive.ubuntu.com"; Debian = "ftp.ca.debian.org" }
+        [PSCustomObject]@{ Code = "cl"; Name = "Chile"; Ubuntu = "cl.archive.ubuntu.com"; Debian = "ftp.cl.debian.org" }
+        [PSCustomObject]@{ Code = "cn"; Name = "China"; Ubuntu = "cn.archive.ubuntu.com"; Debian = "ftp.cn.debian.org" }
+        [PSCustomObject]@{ Code = "hr"; Name = "Croatia"; Ubuntu = "hr.archive.ubuntu.com"; Debian = "ftp.hr.debian.org" }
+        [PSCustomObject]@{ Code = "cz"; Name = "Czechia"; Ubuntu = "cz.archive.ubuntu.com"; Debian = "ftp.cz.debian.org" }
+        [PSCustomObject]@{ Code = "dk"; Name = "Denmark"; Ubuntu = ""; Debian = "ftp.dk.debian.org" }
+        [PSCustomObject]@{ Code = "ee"; Name = "Estonia"; Ubuntu = "ee.archive.ubuntu.com"; Debian = "ftp.ee.debian.org" }
+        [PSCustomObject]@{ Code = "fi"; Name = "Finland"; Ubuntu = "fi.archive.ubuntu.com"; Debian = "ftp.fi.debian.org" }
+        [PSCustomObject]@{ Code = "fr"; Name = "France"; Ubuntu = "fr.archive.ubuntu.com"; Debian = "ftp.fr.debian.org" }
+        [PSCustomObject]@{ Code = "de"; Name = "Germany"; Ubuntu = "de.archive.ubuntu.com"; Debian = "ftp.de.debian.org" }
+        [PSCustomObject]@{ Code = "gr"; Name = "Greece"; Ubuntu = "gr.archive.ubuntu.com"; Debian = "ftp.gr.debian.org" }
+        [PSCustomObject]@{ Code = "hk"; Name = "Hong Kong"; Ubuntu = "hk.archive.ubuntu.com"; Debian = "ftp.hk.debian.org" }
+        [PSCustomObject]@{ Code = "hu"; Name = "Hungary"; Ubuntu = "hu.archive.ubuntu.com"; Debian = "ftp.hu.debian.org" }
+        [PSCustomObject]@{ Code = "is"; Name = "Iceland"; Ubuntu = "is.archive.ubuntu.com"; Debian = "ftp.is.debian.org" }
+        [PSCustomObject]@{ Code = "in"; Name = "India"; Ubuntu = "in.archive.ubuntu.com"; Debian = "" }
+        [PSCustomObject]@{ Code = "id"; Name = "Indonesia"; Ubuntu = "id.archive.ubuntu.com"; Debian = "" }
+        [PSCustomObject]@{ Code = "ie"; Name = "Ireland"; Ubuntu = "ie.archive.ubuntu.com"; Debian = "ftp.ie.debian.org" }
+        [PSCustomObject]@{ Code = "il"; Name = "Israel"; Ubuntu = "il.archive.ubuntu.com"; Debian = "" }
+        [PSCustomObject]@{ Code = "it"; Name = "Italy"; Ubuntu = "it.archive.ubuntu.com"; Debian = "ftp.it.debian.org" }
+        [PSCustomObject]@{ Code = "jp"; Name = "Japan"; Ubuntu = "jp.archive.ubuntu.com"; Debian = "ftp.jp.debian.org" }
+        [PSCustomObject]@{ Code = "lv"; Name = "Latvia"; Ubuntu = "lv.archive.ubuntu.com"; Debian = "" }
+        [PSCustomObject]@{ Code = "lt"; Name = "Lithuania"; Ubuntu = "lt.archive.ubuntu.com"; Debian = "ftp.lt.debian.org" }
+        [PSCustomObject]@{ Code = "mx"; Name = "Mexico"; Ubuntu = "mx.archive.ubuntu.com"; Debian = "ftp.mx.debian.org" }
+        [PSCustomObject]@{ Code = "nl"; Name = "Netherlands"; Ubuntu = "nl.archive.ubuntu.com"; Debian = "ftp.nl.debian.org" }
+        [PSCustomObject]@{ Code = "nz"; Name = "New Zealand"; Ubuntu = "nz.archive.ubuntu.com"; Debian = "ftp.nz.debian.org" }
+        [PSCustomObject]@{ Code = "no"; Name = "Norway"; Ubuntu = "no.archive.ubuntu.com"; Debian = "ftp.no.debian.org" }
+        [PSCustomObject]@{ Code = "pl"; Name = "Poland"; Ubuntu = "pl.archive.ubuntu.com"; Debian = "ftp.pl.debian.org" }
+        [PSCustomObject]@{ Code = "pt"; Name = "Portugal"; Ubuntu = ""; Debian = "ftp.pt.debian.org" }
+        [PSCustomObject]@{ Code = "ro"; Name = "Romania"; Ubuntu = "ro.archive.ubuntu.com"; Debian = "ftp.ro.debian.org" }
+        [PSCustomObject]@{ Code = "ru"; Name = "Russia"; Ubuntu = "ru.archive.ubuntu.com"; Debian = "ftp.ru.debian.org" }
+        [PSCustomObject]@{ Code = "sg"; Name = "Singapore"; Ubuntu = "sg.archive.ubuntu.com"; Debian = "ftp.sg.debian.org" }
+        [PSCustomObject]@{ Code = "sk"; Name = "Slovakia"; Ubuntu = "sk.archive.ubuntu.com"; Debian = "ftp.sk.debian.org" }
+        [PSCustomObject]@{ Code = "si"; Name = "Slovenia"; Ubuntu = "si.archive.ubuntu.com"; Debian = "ftp.si.debian.org" }
+        [PSCustomObject]@{ Code = "za"; Name = "South Africa"; Ubuntu = "za.archive.ubuntu.com"; Debian = "" }
+        [PSCustomObject]@{ Code = "kr"; Name = "South Korea"; Ubuntu = "kr.archive.ubuntu.com"; Debian = "ftp.kr.debian.org" }
+        [PSCustomObject]@{ Code = "es"; Name = "Spain"; Ubuntu = "es.archive.ubuntu.com"; Debian = "ftp.es.debian.org" }
+        [PSCustomObject]@{ Code = "se"; Name = "Sweden"; Ubuntu = "se.archive.ubuntu.com"; Debian = "ftp.se.debian.org" }
+        [PSCustomObject]@{ Code = "ch"; Name = "Switzerland"; Ubuntu = "ch.archive.ubuntu.com"; Debian = "ftp.ch.debian.org" }
+        [PSCustomObject]@{ Code = "tw"; Name = "Taiwan"; Ubuntu = "tw.archive.ubuntu.com"; Debian = "ftp.tw.debian.org" }
+        [PSCustomObject]@{ Code = "th"; Name = "Thailand"; Ubuntu = "th.archive.ubuntu.com"; Debian = "ftp.th.debian.org" }
+        [PSCustomObject]@{ Code = "tr"; Name = "Turkey"; Ubuntu = "tr.archive.ubuntu.com"; Debian = "ftp.tr.debian.org" }
+        [PSCustomObject]@{ Code = "ua"; Name = "Ukraine"; Ubuntu = "ua.archive.ubuntu.com"; Debian = "ftp.ua.debian.org" }
+        [PSCustomObject]@{ Code = "gb"; Name = "United Kingdom"; Ubuntu = "gb.archive.ubuntu.com"; Debian = "ftp.uk.debian.org" }
+        [PSCustomObject]@{ Code = "us"; Name = "United States"; Ubuntu = "us.archive.ubuntu.com"; Debian = "ftp.us.debian.org" }
+        [PSCustomObject]@{ Code = "vn"; Name = "Vietnam"; Ubuntu = "vn.archive.ubuntu.com"; Debian = "" }
+    )
+}
+
+function Get-AptMirrorUri {
+    <#
+        The apt URI for a distribution in a region, or an empty string when there is no
+        mirror for that pair - which is the signal to leave the image's own default
+        alone rather than to invent a host name that does not resolve.
+    #>
+    param([object]$Entry, [string]$RegionCode)
+
+    if ($null -eq $Entry) { return "" }
+    if ([string]::IsNullOrWhiteSpace($RegionCode) -or $RegionCode -eq "default") { return "" }
+
+    $region = @(Get-AptMirrorCatalog) | Where-Object { $_.Code -eq $RegionCode } | Select-Object -First 1
+    if ($null -eq $region) { return "" }
+
+    if ($Entry.Distro -eq "ubuntu") {
+        if ([string]::IsNullOrWhiteSpace($region.Ubuntu)) { return "" }
+        return "http://$($region.Ubuntu)/ubuntu/"
+    }
+    if ($Entry.Distro -eq "debian") {
+        if ([string]::IsNullOrWhiteSpace($region.Debian)) { return "" }
+        return "http://$($region.Debian)/debian/"
+    }
+    return ""
+}
+
 function Get-UbuntuLanguagePack {
     # language-pack-de for de-DE, and nothing at all for English or for Debian. Returns
     # an empty string when no package is needed.
@@ -4128,7 +4352,8 @@ function Get-BakeUserData {
     param(
         [object]$Entry,
         [bool]$ApplyUpdates,
-        [string[]]$ExtraPackages
+        [string[]]$ExtraPackages,
+        [string]$MirrorUri
     )
 
     $packages = @()
@@ -4142,6 +4367,59 @@ function Get-BakeUserData {
 
     $lines = New-Object System.Collections.Generic.List[string]
     [void]$lines.Add("#cloud-config")
+    # A console login, purely so a bake that stalls can be looked at. The first run that
+    # hung sat at a login prompt nobody could get past, which turned a five-minute
+    # diagnosis into guesswork. cloud-init clean and the machine-id truncation below
+    # remove this account's traces from the gold, and every VM built from the gold gets
+    # its own user from its own seed.
+    [void]$lines.Add("users:")
+    [void]$lines.Add("  - name: bake")
+    [void]$lines.Add("    groups: [sudo]")
+    [void]$lines.Add("    shell: /bin/bash")
+    [void]$lines.Add("    sudo: 'ALL=(ALL) NOPASSWD:ALL'")
+    [void]$lines.Add("    lock_passwd: false")
+    [void]$lines.Add("chpasswd:")
+    [void]$lines.Add("  expire: false")
+    [void]$lines.Add("  users:")
+    [void]$lines.Add("    - name: bake")
+    [void]$lines.Add("      password: 'bake'")
+    [void]$lines.Add("      type: text")
+    # The mirror, through cloud-init's own apt module rather than by editing files.
+    # That matters on these images: Ubuntu 26.04 and Debian 13 both write their sources
+    # in deb822 format (/etc/apt/sources.list.d/*.sources), not the one-line format, and
+    # the module knows which one this release uses. A sed over sources.list would edit a
+    # file that is no longer read.
+    #
+    # It is set on the BAKE, so it persists into the gold - cloud-init clean does not
+    # revert sources - and every VM built from the gold inherits the same mirror.
+    # `security` is deliberately left alone: security.ubuntu.com and security.debian.org
+    # are single well-served hosts, and pointing them at a country mirror is how a lab
+    # ends up lagging on security updates.
+    [void]$lines.Add("apt:")
+    if (-not [string]::IsNullOrWhiteSpace($MirrorUri)) {
+        [void]$lines.Add("  primary:")
+        [void]$lines.Add("    - arches: [default]")
+        [void]$lines.Add("      uri: $MirrorUri")
+    }
+    # Bounded timeouts, so an unreachable mirror costs minutes rather than most of an
+    # hour. Read out of the image itself: package_update_upgrade_install is the FIRST
+    # module in cloud_final_modules and power_state_change is the LAST, so nothing after
+    # apt runs until apt is done - no runcmd, no sentinel, no poweroff. And nothing
+    # outside will cut it short either: cloud-final.service is Type=oneshot, for which
+    # systemd disables the start timeout by default.
+    #
+    # apt does NOT wait for ever on its own - its HTTP method carries a timeout of its
+    # own (ServerState starts at 30 s) - but that is per connection, and it is spent
+    # again on every index file and every retry, which is how a dead mirror turns into
+    # a VM that looks hung for a long time without ever being hung.
+    #
+    # Acquire::http::Timeout covers both the connection and the data timer, so shrinking
+    # it and capping the retries bounds the whole thing. A failed apt still lets
+    # cloud-init reach power_state, which is what turns a long silence into a verdict.
+    [void]$lines.Add("  conf: |")
+    [void]$lines.Add("    Acquire::http::Timeout `"20`";")
+    [void]$lines.Add("    Acquire::https::Timeout `"20`";")
+    [void]$lines.Add("    Acquire::Retries `"2`";")
     [void]$lines.Add("package_update: true")
     if ($ApplyUpdates) { [void]$lines.Add("package_upgrade: true") }
     if ($packages.Count -gt 0) {
@@ -4162,11 +4440,106 @@ function Get-BakeUserData {
     [void]$lines.Add("  - [ sh, -c, 'rm -f /etc/ssh/ssh_host_*' ]")
     [void]$lines.Add("  - [ sh, -c, 'rm -f /etc/netplan/50-cloud-init.yaml' ]")
     [void]$lines.Add("  - [ sh, -c, 'truncate -s 0 /etc/machine-id' ]")
+    # Both, on purpose. /dev/console resolves to whichever console= came LAST on the
+    # kernel command line, so on an image that ends up with console=tty1 the sentinel
+    # would land on the video console and never reach the pipe the host is reading -
+    # and a bake that worked would be reported as a failure. Naming the port directly
+    # removes the guess; the redirect to /dev/console stays for the operator watching
+    # the Hyper-V window.
     [void]$lines.Add("  - [ sh, -c, 'echo BAKE-OK > /dev/console' ]")
+    [void]$lines.Add("  - [ sh, -c, 'echo BAKE-OK > /dev/ttyS0 || true' ]")
     [void]$lines.Add("power_state:")
     [void]$lines.Add("  mode: poweroff")
     [void]$lines.Add("  timeout: 30")
     [void]$lines.Add("  condition: true")
+
+    return ($lines -join "`n") + "`n"
+}
+
+function Format-BakeMacWithColons {
+    # Hyper-V reports a MAC as 00155D0A0B0C; netplan matches on 00:15:5d:0a:0b:0c.
+    param([string]$MacAddress)
+
+    $clean = ([string]$MacAddress) -replace "[^0-9A-Fa-f]", ""
+    if ($clean.Length -ne 12) { return "" }
+    # All zeroes is what Hyper-V reports for an adapter whose DYNAMIC address has not
+    # been generated yet, which is the case for every VM that has not started. It
+    # passes every format check and matches no adapter on earth, so it is rejected
+    # here rather than written into a netplan file that silently matches nothing.
+    if ($clean -eq "000000000000") { return "" }
+    $pairs = @()
+    for ($i = 0; $i -lt 12; $i += 2) { $pairs += $clean.Substring($i, 2).ToLowerInvariant() }
+    return ($pairs -join ":")
+}
+
+function New-BakeMacAddress {
+    # Hyper-V OUI 00-15-5D plus three random bytes - the same shape Build-Vms.ps1 uses
+    # for the VMs it provisions.
+    $bytes = 1..3 | ForEach-Object { Get-Random -Minimum 0 -Maximum 256 }
+    return ("00155D{0:X2}{1:X2}{2:X2}" -f $bytes[0], $bytes[1], $bytes[2])
+}
+
+function Get-BakeNetworkConfig {
+    <#
+        The bake VM's network-config, netplan v2, as NoCloud's THIRD seed file - not
+        inside user-data, where cloud-init would ignore it and the VM would come up on
+        DHCP with nothing said about why.
+
+        Returns an empty string for DHCP, and no file is written: the image's own
+        default already is DHCP, so saying it again only adds something to get wrong.
+
+        The adapter is matched by MAC because the kernel's name for it is not knowable
+        from the host - which is why the VM has to exist before this is rendered.
+    #>
+    param(
+        [object]$Config,
+        [string]$MacAddress
+    )
+
+    if ([bool]$Config.BakeUseDhcp) { return "" }
+
+    $ipAddress = ([string]$Config.BakeIpAddress).Trim()
+    if ([string]::IsNullOrWhiteSpace($ipAddress)) { return "" }
+
+    $prefix = 24
+    if ($Config.BakePrefixLength) { $prefix = [int]$Config.BakePrefixLength }
+    $gateway = ([string]$Config.BakeGateway).Trim()
+
+    $dns = @()
+    foreach ($server in @($Config.BakeDnsServers)) {
+        $trimmed = ([string]$server).Trim()
+        if (-not [string]::IsNullOrWhiteSpace($trimmed)) { $dns += $trimmed }
+    }
+
+    $mac = Format-BakeMacWithColons -MacAddress $MacAddress
+
+    $lines = New-Object System.Collections.Generic.List[string]
+    [void]$lines.Add("version: 2")
+    [void]$lines.Add("ethernets:")
+    [void]$lines.Add("  primary:")
+    [void]$lines.Add("    match:")
+    if (-not [string]::IsNullOrWhiteSpace($mac)) {
+        [void]$lines.Add("      macaddress: '$mac'")
+    }
+    else {
+        # No usable MAC. netplan needs SOME match or it treats the key as an interface
+        # name and matches nothing at all - so match every ethernet instead. The bake VM
+        # has exactly one adapter, which is what makes that safe here and not elsewhere.
+        [void]$lines.Add("      name: 'e*'")
+    }
+    [void]$lines.Add("    dhcp4: false")
+    [void]$lines.Add("    dhcp6: false")
+    [void]$lines.Add("    addresses: ['$ipAddress/$prefix']")
+    if (-not [string]::IsNullOrWhiteSpace($gateway)) {
+        # `gateway4` is deprecated; a default route says the same thing and keeps working.
+        [void]$lines.Add("    routes:")
+        [void]$lines.Add("      - to: default")
+        [void]$lines.Add("        via: '$gateway'")
+    }
+    if ($dns.Count -gt 0) {
+        [void]$lines.Add("    nameservers:")
+        [void]$lines.Add("      addresses: [" + (($dns | ForEach-Object { "'$_'" }) -join ", ") + "]")
+    }
 
     return ($lines -join "`n") + "`n"
 }
@@ -4199,12 +4572,23 @@ function Read-VmSerialConsole {
         $pipe.Connect(120000)
 
         $buffer = New-Object byte[] 4096
+        $started = Get-Date
+        $lastReport = Get-Date
         while ((Get-Date) -lt $deadline) {
             # The VM powering off closes the pipe, which is what ends this loop - a read
             # returning zero is the normal exit, not a failure.
             $read = $pipe.Read($buffer, 0, $buffer.Length)
             if ($read -le 0) { break }
             [void]$transcript.Append([System.Text.Encoding]::UTF8.GetString($buffer, 0, $read))
+
+            # Say something every couple of minutes. A bake installs a kernel over a
+            # network and can legitimately take a while; a console that prints nothing
+            # for half an hour is indistinguishable from one that has hung.
+            if (((Get-Date) - $lastReport).TotalSeconds -ge 120) {
+                $lastReport = Get-Date
+                $elapsed = [int]((Get-Date) - $started).TotalMinutes
+                Write-Log "Bake still running - $elapsed minute(s), $($transcript.Length) bytes of console so far" -Tag "Info"
+            }
         }
     }
     catch {
@@ -4236,6 +4620,7 @@ function Invoke-LinuxBakeBoot {
         [Parameter(Mandatory = $true)][object]$Entry,
         [Parameter(Mandatory = $true)][string]$VhdxPath,
         [Parameter(Mandatory = $true)][string]$SwitchName,
+        [object]$Config,
         [bool]$ApplyUpdates = $false,
         [string[]]$ExtraPackages = @(),
         [int]$TimeoutMinutes = 30
@@ -4247,10 +4632,8 @@ function Invoke-LinuxBakeBoot {
     $created = $false
 
     try {
-        $userData = Get-BakeUserData -Entry $Entry -ApplyUpdates $ApplyUpdates -ExtraPackages $ExtraPackages
-        $metaData = "instance-id: bake-" + [DateTime]::UtcNow.ToString("yyyyMMddHHmmss") + "`nlocal-hostname: bake`n"
-        $null = New-CidataIsoFile -IsoPath $isoPath -UserData $userData -MetaData $metaData
-
+        # The VM is created BEFORE the seed, because a static address has to be pinned to
+        # the adapter's MAC and that MAC does not exist until Hyper-V has assigned one.
         Write-Log "Creating the temporary bake VM '$vmName'" -Tag "Run"
         New-VM -Name $vmName -Generation 2 -MemoryStartupBytes 2GB -VHDPath $VhdxPath -SwitchName $SwitchName -ErrorAction Stop | Out-Null
         $created = $true
@@ -4261,6 +4644,47 @@ function Invoke-LinuxBakeBoot {
         # The third-party UEFI CA, not the Windows template - these images are signed
         # through shim, and the Windows template simply does not boot them.
         Set-VMFirmware -VMName $vmName -EnableSecureBoot On -SecureBootTemplate "MicrosoftUEFICertificateAuthority" -ErrorAction Stop
+
+        # Pin a static MAC before reading one. A dynamic MAC is generated by the host
+        # when the VM first STARTS, so reading it straight after New-VM gives all
+        # zeroes - and the seed has to be written before the VM boots. Build-Vms.ps1
+        # settles the same problem the same way for every VM it provisions.
+        $adapter = Get-VMNetworkAdapter -VMName $vmName -ErrorAction Stop | Select-Object -First 1
+        try {
+            Set-VMNetworkAdapter -VMNetworkAdapter $adapter -StaticMacAddress (New-BakeMacAddress) -ErrorAction Stop
+            $adapter = Get-VMNetworkAdapter -VMName $vmName -ErrorAction Stop | Select-Object -First 1
+        }
+        catch {
+            Write-Log "Could not pin a static MAC on the bake adapter: $($_.Exception.Message) - the seed will match by adapter name instead" -Tag "Warn"
+        }
+        $bakeVlanId = 0
+        if ($Config -and $Config.BakeVlanId) { $bakeVlanId = [int]$Config.BakeVlanId }
+        if ($bakeVlanId -gt 0) {
+            Set-VMNetworkAdapterVlan -VMNetworkAdapter $adapter -Access -VlanId $bakeVlanId -ErrorAction Stop
+            Write-Log "Bake adapter tagged with VLAN $bakeVlanId" -Tag "Run"
+        }
+
+        $networkConfig = ""
+        if ($Config) { $networkConfig = Get-BakeNetworkConfig -Config $Config -MacAddress ([string]$adapter.MacAddress) }
+        if ([string]::IsNullOrWhiteSpace($networkConfig)) {
+            Write-Log "Bake network: DHCP" -Tag "Info"
+        }
+        else {
+            Write-Log "Bake network: $($Config.BakeIpAddress)/$($Config.BakePrefixLength) via '$($Config.BakeGateway)', DNS $(@($Config.BakeDnsServers) -join ', ')" -Tag "Info"
+        }
+
+        $mirrorUri = ""
+        if ($Config) { $mirrorUri = Get-AptMirrorUri -Entry $Entry -RegionCode ([string]$Config.BakeMirrorRegion) }
+        if ([string]::IsNullOrWhiteSpace($mirrorUri)) {
+            Write-Log "apt mirror: the distribution's default" -Tag "Info"
+        }
+        else {
+            Write-Log "apt mirror: $mirrorUri" -Tag "Info"
+        }
+
+        $userData = Get-BakeUserData -Entry $Entry -ApplyUpdates $ApplyUpdates -ExtraPackages $ExtraPackages -MirrorUri $mirrorUri
+        $metaData = "instance-id: bake-" + [DateTime]::UtcNow.ToString("yyyyMMddHHmmss") + "`nlocal-hostname: bake`n"
+        $null = New-CidataIsoFile -IsoPath $isoPath -UserData $userData -MetaData $metaData -NetworkConfig $networkConfig
 
         Add-VMDvdDrive -VMName $vmName -Path $isoPath -ErrorAction Stop
 
@@ -4455,10 +4879,7 @@ function Start-LinuxInteractiveConfiguration {
     Write-Studio -Text "  The gold's disk size is the disk size of every VM built from it." -Key "muted"
     Write-Studio -Text "  A differencing child cannot be resized away from its parent." -Key "muted"
     Write-Host ""
-    # Closing rule, the same one Show-Menu draws under its options, so a blade that
-    # takes typed input is framed like a blade that takes a keypress.
-    Write-Studio -Text ("  " + ("-" * 62)) -Key "muted"
-    Write-Host ""
+    Write-BladeFooterAbove -ReserveLines 1
     $diskGB = Read-BoundedInt -Prompt "  Disk size (GB)" -DefaultValue $entry.DefaultDiskGB -MinValue 8 -MaxValue 2048
 
     # The bake boot needs a switch with a route to the distribution mirrors. There is no
@@ -4477,7 +4898,182 @@ function Start-LinuxInteractiveConfiguration {
 
     $applyUpdates = $false
     $bakeExtraPackages = @()
+    $bakeUseDhcp = $true
+    $bakeIpAddress = ""
+    $bakePrefixLength = 24
+    $bakeGateway = ""
+    $bakeDnsServers = @()
+    $bakeVlanId = 0
+    $bakeMirrorRegion = "default"
+
     if ($switchName -ne "__skip__") {
+        # The bake VM has to reach the distribution mirrors, and a switch alone does not
+        # promise that. A lab with no DHCP leaves apt retrying mirrors it cannot see,
+        # cloud-init's final stage never finishes, power_state never fires, and the VM
+        # sits at a login prompt looking like a hang - which is exactly what it did.
+        $addressItems = @(
+            [PSCustomObject]@{ Id = "dhcp";   Label = "DHCP - the network hands out an address" }
+            [PSCustomObject]@{ Id = "static"; Label = "Static address - enter it here" }
+        )
+        $addressChoice = Show-Menu -Title "How does the bake VM get an address?" -Items $addressItems `
+            -Heading "Bake addressing" -HeadingHint "It only has to last one boot, but it does have to reach the mirrors" `
+            -StatusLines ([ordered]@{ distro = $entry.Name; switch = $switchName })
+        if ($null -eq $addressChoice) { return $null }
+        $bakeUseDhcp = ($addressChoice -eq "dhcp")
+
+        Show-MenuHeader -Title "Bake network" -StatusLines ([ordered]@{
+            distro    = $entry.Name
+            switch    = $switchName
+            addressing = $(if ($bakeUseDhcp) { "DHCP" } else { "static" })
+        })
+        Write-Studio -Text "  These settings are thrown away with the bake VM." -Key "muted"
+        Write-Studio -Text "  The gold keeps none of them - every VM built from it is addressed on its own card." -Key "muted"
+        Write-Host ""
+
+        Write-BladeFooterAbove -ReserveLines $(if ($bakeUseDhcp) { 1 } else { 5 })
+
+        if (-not $bakeUseDhcp) {
+            $bakeIpAddress = Read-ConsoleIpAddress -Prompt "  IP address"
+            $bakePrefixLength = Read-BoundedInt -Prompt "  Prefix length" -DefaultValue 24 -MinValue 1 -MaxValue 32
+            $bakeGateway = Read-ConsoleIpAddress -Prompt "  Default gateway" -AllowEmpty
+            $dnsRaw = Read-Host "  DNS servers (space separated)"
+            foreach ($dnsEntry in @($dnsRaw -split "[\s,]+")) {
+                $trimmedDns = ([string]$dnsEntry).Trim()
+                if (-not [string]::IsNullOrWhiteSpace($trimmedDns)) { $bakeDnsServers += $trimmedDns }
+            }
+        }
+
+        # VLAN is asked either way: a tagged port with DHCP behind it still needs the tag.
+        $bakeVlanId = Read-BoundedInt -Prompt "  VLAN ID (0 for untagged)" -DefaultValue 0 -MinValue 0 -MaxValue 4094
+
+        # Review, then continue or fix one field. Typed-in addresses are the one place in
+        # this blade where a single wrong character costs a whole bake - the VM boots,
+        # apt cannot resolve anything, and the run only says so half an hour later. So
+        # they get read back before they are used, and any one of them can be changed
+        # without walking through the other four again.
+        while ($true) {
+            $dnsShown = if ($bakeDnsServers.Count -gt 0) { $bakeDnsServers -join " " } else { "(none)" }
+            $gatewayShown = if ([string]::IsNullOrWhiteSpace($bakeGateway)) { "(none)" } else { $bakeGateway }
+            $vlanShown = if ($bakeVlanId -gt 0) { [string]$bakeVlanId } else { "untagged" }
+
+            # Settings first, then a blank line, then the way out. Continue sits under
+            # what it is confirming rather than above it, and it starts selected so the
+            # common answer is one keypress.
+            $reviewItems = @()
+            $reviewItems += [PSCustomObject]@{ Id = "mode"; Label = ("Addressing        {0}" -f $(if ($bakeUseDhcp) { "DHCP" } else { "static" })) }
+            if (-not $bakeUseDhcp) {
+                $reviewItems += [PSCustomObject]@{ Id = "ip";      Label = ("IP address        {0}" -f $bakeIpAddress) }
+                $reviewItems += [PSCustomObject]@{ Id = "prefix";  Label = ("Prefix length     /{0}" -f $bakePrefixLength) }
+                $reviewItems += [PSCustomObject]@{ Id = "gateway"; Label = ("Default gateway   {0}" -f $gatewayShown) }
+                $reviewItems += [PSCustomObject]@{ Id = "dns";     Label = ("DNS servers       {0}" -f $dnsShown) }
+            }
+            $reviewItems += [PSCustomObject]@{ Id = "vlan"; Label = ("VLAN              {0}" -f $vlanShown) }
+            $reviewItems += [PSCustomObject]@{ Id = "__gap__"; Label = ""; Separator = $true }
+            $reviewItems += [PSCustomObject]@{ Id = "__ok__"; Label = "Continue with these settings" }
+
+            $reviewHint = "Enter on a row to change it, or continue"
+            if (-not $bakeUseDhcp -and $bakeDnsServers.Count -eq 0) {
+                # Not a hard block - a mirror named by IP would still work - but apt
+                # resolves host names, so this is the setting that quietly kills a bake.
+                $reviewHint = "No DNS server - apt resolves by name, so the bake will almost certainly fail"
+            }
+
+            $reviewChoice = Show-Menu -Title "Review the bake network" -Items $reviewItems `
+                -SelectedIndex ($reviewItems.Count - 1) `
+                -Heading "Bake network" -HeadingHint $reviewHint `
+                -StatusLines ([ordered]@{ distro = $entry.Name; switch = $switchName })
+            if ($null -eq $reviewChoice) { return $null }
+            if ($reviewChoice -eq "__ok__") {
+                if (-not $bakeUseDhcp -and [string]::IsNullOrWhiteSpace($bakeIpAddress)) {
+                    # Static with no address is the one combination that cannot proceed:
+                    # netplan would be handed an empty addresses list.
+                    continue
+                }
+                break
+            }
+
+            Show-MenuHeader -Title "Bake network" -StatusLines ([ordered]@{
+                distro     = $entry.Name
+                switch     = $switchName
+                addressing = $(if ($bakeUseDhcp) { "DHCP" } else { "static" })
+            })
+            Write-Host ""
+
+            switch ($reviewChoice) {
+                "mode" {
+                    $bakeUseDhcp = -not $bakeUseDhcp
+                    if ($bakeUseDhcp) {
+                        # Keep what was typed rather than discarding it: switching back
+                        # to static should not mean typing the address again.
+                        Write-Studio -Text "  Addressing switched to DHCP - the static values are kept in case you switch back." -Key "muted"
+                        Write-Host ""
+                        Write-Studio -Text ("  " + ("-" * 62)) -Key "muted"
+                    }
+                    else {
+                        if ([string]::IsNullOrWhiteSpace($bakeIpAddress)) {
+                            $bakeIpAddress = Read-ConsoleIpAddress -Prompt "  IP address"
+                            Write-Host ""
+                            Write-Studio -Text ("  " + ("-" * 62)) -Key "muted"
+                        }
+                    }
+                }
+                "ip" {
+                    Write-BladeFooterAbove -ReserveLines 1
+                    $bakeIpAddress = Read-ConsoleIpAddress -Prompt "  IP address" -DefaultValue $bakeIpAddress
+                }
+                "prefix" {
+                    Write-BladeFooterAbove -ReserveLines 1
+                    $bakePrefixLength = Read-BoundedInt -Prompt "  Prefix length" -DefaultValue $bakePrefixLength -MinValue 1 -MaxValue 32
+                }
+                "gateway" {
+                    Write-BladeFooterAbove -ReserveLines 1
+                    $bakeGateway = Read-ConsoleIpAddress -Prompt "  Default gateway (blank for none)" -AllowEmpty
+                }
+                "dns" {
+                    Write-BladeFooterAbove -ReserveLines 1
+                    $dnsRaw = Read-Host "  DNS servers (space separated)"
+                    $bakeDnsServers = @()
+                    foreach ($dnsEntry in @($dnsRaw -split "[\s,]+")) {
+                        $trimmedDns = ([string]$dnsEntry).Trim()
+                        if (-not [string]::IsNullOrWhiteSpace($trimmedDns)) { $bakeDnsServers += $trimmedDns }
+                    }
+                }
+                "vlan" {
+                    Write-BladeFooterAbove -ReserveLines 1
+                    $bakeVlanId = Read-BoundedInt -Prompt "  VLAN ID (0 for untagged)" -DefaultValue $bakeVlanId -MinValue 0 -MaxValue 4094
+                }
+            }
+        }
+
+        # Which mirror apt talks to. The stock cloud image points at archive.ubuntu.com
+        # or deb.debian.org, and a badly routed one turns a kernel install into a long
+        # wait - which is what a slow bake usually is.
+        $mirrorItems = @([PSCustomObject]@{ Id = "default"; Label = "Default - archive.ubuntu.com / deb.debian.org" })
+        foreach ($region in @(Get-AptMirrorCatalog)) {
+            # NOT $host. That is the automatic variable holding the host object, and
+            # PowerShell resolves variables dynamically - shadowing it here would hand a
+            # string to every function called from this scope, including the one that
+            # reads $Host.UI to decide whether the console can do colour.
+            $mirrorHost = if ($entry.Distro -eq "ubuntu") { [string]$region.Ubuntu } else { [string]$region.Debian }
+            # A region with no mirror for THIS distribution is not offered: picking it
+            # would silently fall back, which looks like the setting did nothing.
+            if ([string]::IsNullOrWhiteSpace($mirrorHost)) { continue }
+            $mirrorItems += [PSCustomObject]@{ Id = $region.Code; Label = "$($region.Name)  -  $mirrorHost" }
+        }
+
+        # Default from the region the format locale already named - de-DE means Germany,
+        # and typing that twice is the kind of question a picker should answer itself.
+        $localeCountry = ""
+        $localeParts = $locale -split "-"
+        if ($localeParts.Count -ge 2) { $localeCountry = $localeParts[$localeParts.Count - 1].ToLowerInvariant() }
+        $mirrorDefault = [array]::IndexOf(@($mirrorItems.Id), $localeCountry)
+        if ($mirrorDefault -lt 0) { $mirrorDefault = 0 }
+
+        $bakeMirrorRegion = Show-Menu -Title "Which apt mirror should the bake use?" -Items $mirrorItems -SelectedIndex $mirrorDefault `
+            -Heading "Package mirror" -HeadingHint "Pre-selected from the regional format. It is baked into the gold, so every VM inherits it" `
+            -StatusLines ([ordered]@{ distro = $entry.Name; switch = $switchName })
+        if ($null -eq $bakeMirrorRegion) { return $null }
+
         $updateItems = @(
             [PSCustomObject]@{ Id = "no";  Label = "No - install only what the image is missing" }
             [PSCustomObject]@{ Id = "yes"; Label = "Yes - full package upgrade (slower, and the gold ages the moment it is built)" }
@@ -4491,8 +5087,7 @@ function Start-LinuxInteractiveConfiguration {
         Write-Studio -Text "  Anything every VM from this gold should already have." -Key "muted"
         Write-Studio -Text "  Space separated. Blank for none." -Key "muted"
         Write-Host ""
-        Write-Studio -Text ("  " + ("-" * 62)) -Key "muted"
-        Write-Host ""
+        Write-BladeFooterAbove -ReserveLines 1
         $extraRaw = Read-Host "  Extra packages"
         if (-not [string]::IsNullOrWhiteSpace($extraRaw)) {
             $bakeExtraPackages = @($extraRaw -split "[\s,]+" | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
@@ -4503,6 +5098,77 @@ function Start-LinuxInteractiveConfiguration {
     if ([string]::IsNullOrWhiteSpace($outputDirectory)) {
         $outputDirectory = Join-Path -Path $PSScriptRoot -ChildPath "vhdx"
     }
+    # Worked out once: the summary shows it and the config carries it, and two
+    # Join-Path calls for one path is one of them waiting to disagree with the other.
+    $cacheDirectory = Join-Path -Path $PSScriptRoot -ChildPath "lnx-images"
+
+    # Final confirmation, the same shape the Windows path uses: every setting rendered
+    # above a Continue/Cancel menu, so the last thing before a build that downloads
+    # hundreds of megabytes and boots a VM is a chance to read it back.
+    $renderLinuxSummary = {
+        Write-Studio -Text "  Image" -Key "fg"
+        Write-FastfetchInfoRow -Label "distribution" -Value $entry.Name -LabelWidth 24 -IndentWidth 2
+        Write-FastfetchInfoRow -Label "gold name"    -Value "$($entry.GoldName).vhdx" -LabelWidth 24 -IndentWidth 2
+        Write-FastfetchInfoRow -Label "source"       -Value $entry.Url -LabelWidth 24 -IndentWidth 2
+        Write-FastfetchInfoRow -Label "image cache"  -Value $cacheDirectory -LabelWidth 24 -IndentWidth 2
+        Write-FastfetchInfoRow -Label "output"       -Value $outputDirectory -LabelWidth 24 -IndentWidth 2
+        Write-Host ""
+
+        Write-Studio -Text "  Region" -Key "fg"
+        Write-FastfetchInfoRow -Label "language (LANG)" -Value (Get-LinuxLocaleName -LocaleTag $language) -LabelWidth 24 -IndentWidth 2
+        Write-FastfetchInfoRow -Label "format (LC_*)"   -Value (Get-LinuxLocaleName -LocaleTag $locale) -LabelWidth 24 -IndentWidth 2
+        Write-FastfetchInfoRow -Label "keyboard"        -Value (Get-LinuxKeymap -LocaleTag $keyboard) -LabelWidth 24 -IndentWidth 2
+        Write-FastfetchInfoRow -Label "time zone"       -Value $timeZone -LabelWidth 24 -IndentWidth 2
+        Write-Host ""
+
+        Write-Studio -Text "  Disk" -Key "fg"
+        Write-FastfetchInfoRow -Label "gold size" -Value "$diskGB GB" -LabelWidth 24 -IndentWidth 2
+        Write-FastfetchInfoRow -Label "vhdx type" -Value "Dynamic" -LabelWidth 24 -IndentWidth 2
+        Write-FastfetchInfoRow -Label "applies to" -Value "Every VM that differences off this gold" -LabelWidth 24 -IndentWidth 2
+        Write-Host ""
+
+        Write-Studio -Text "  Bake" -Key "fg"
+        if ([string]::IsNullOrWhiteSpace($switchName) -or $switchName -eq "__skip__") {
+            Write-FastfetchInfoRow -Label "bake boot" -Value "Skipped - stock kernel, no hyperv-daemons" -LabelWidth 24 -IndentWidth 2
+        }
+        else {
+            Write-FastfetchInfoRow -Label "switch"   -Value $switchName -LabelWidth 24 -IndentWidth 2
+            if ($bakeUseDhcp) {
+                Write-FastfetchInfoRow -Label "addressing" -Value "DHCP" -LabelWidth 24 -IndentWidth 2
+            }
+            else {
+                Write-FastfetchInfoRow -Label "addressing" -Value "$bakeIpAddress/$bakePrefixLength" -LabelWidth 24 -IndentWidth 2
+                Write-FastfetchInfoRow -Label "gateway" -Value $(if ([string]::IsNullOrWhiteSpace($bakeGateway)) { "(none)" } else { $bakeGateway }) -LabelWidth 24 -IndentWidth 2
+                Write-FastfetchInfoRow -Label "dns" -Value $(if (@($bakeDnsServers).Count -gt 0) { @($bakeDnsServers) -join " " } else { "(none)" }) -LabelWidth 24 -IndentWidth 2
+            }
+            Write-FastfetchInfoRow -Label "vlan" -Value $(if ($bakeVlanId -gt 0) { [string]$bakeVlanId } else { "untagged" }) -LabelWidth 24 -IndentWidth 2
+
+            $mirrorShown = Get-AptMirrorUri -Entry $entry -RegionCode $bakeMirrorRegion
+            if ([string]::IsNullOrWhiteSpace($mirrorShown)) { $mirrorShown = "distribution default" }
+            Write-FastfetchInfoRow -Label "apt mirror" -Value $mirrorShown -LabelWidth 24 -IndentWidth 2
+
+            Write-FastfetchInfoRow -Label "installs" -Value (@($entry.BakePackages) -join ", ") -LabelWidth 24 -IndentWidth 2
+            $languagePackShown = Get-UbuntuLanguagePack -Entry $entry -LanguageTag $language
+            if (-not [string]::IsNullOrWhiteSpace($languagePackShown)) {
+                Write-FastfetchInfoRow -Label "language pack" -Value $languagePackShown -LabelWidth 24 -IndentWidth 2
+            }
+            if (@($bakeExtraPackages).Count -gt 0) {
+                Write-FastfetchInfoRow -Label "extra packages" -Value (@($bakeExtraPackages) -join ", ") -LabelWidth 24 -IndentWidth 2
+            }
+            Write-FastfetchInfoRow -Label "apply updates" -Value $(if ($applyUpdates) { "Yes - full package upgrade" } else { "No" }) -LabelWidth 24 -IndentWidth 2
+        }
+        Write-Host ""
+        Write-Studio -Text ("  " + ("-" * 62)) -Key "muted"
+        Write-Host ""
+    }
+
+    $confirmItems = @(
+        [PSCustomObject]@{ Id = "continue"; Label = "Continue - start the build" }
+        [PSCustomObject]@{ Id = "cancel";   Label = "Cancel" }
+    )
+    $decision = Show-Menu -Title "Confirm build settings" -Subtitle "Review everything below, then continue" `
+        -Items $confirmItems -SelectedIndex 0 -PreItems $renderLinuxSummary
+    if ($decision -ne "continue") { return $null }
 
     return [PSCustomObject]@{
         OsFamily        = "Linux"
@@ -4513,10 +5179,17 @@ function Start-LinuxInteractiveConfiguration {
         TimeZone        = $timeZone
         DiskSizeGB      = $diskGB
         OutputDirectory = $outputDirectory
-        CacheDirectory  = (Join-Path -Path $PSScriptRoot -ChildPath "lnx-images")
+        CacheDirectory  = $cacheDirectory
         BakeSwitchName  = $(if ($switchName -eq "__skip__") { "" } else { $switchName })
         BakeApplyUpdates = $applyUpdates
         BakeExtraPackages = $bakeExtraPackages
+        BakeUseDhcp      = $bakeUseDhcp
+        BakeIpAddress    = $bakeIpAddress
+        BakePrefixLength = $bakePrefixLength
+        BakeGateway      = $bakeGateway
+        BakeDnsServers   = $bakeDnsServers
+        BakeVlanId       = $bakeVlanId
+        BakeMirrorRegion = $bakeMirrorRegion
     }
 }
 
@@ -4582,7 +5255,7 @@ function Invoke-LinuxGoldRun {
     }
 
     $baked = Invoke-LinuxBakeBoot -Entry $entry -VhdxPath $vhdxPath -SwitchName ([string]$Config.BakeSwitchName) `
-        -ApplyUpdates ([bool]$Config.BakeApplyUpdates) -ExtraPackages $bakePackages
+        -Config $Config -ApplyUpdates ([bool]$Config.BakeApplyUpdates) -ExtraPackages $bakePackages
     if (-not $baked) {
         Write-Log "'$vhdxPath' was built but the bake did not finish - do not deploy it as it stands" -Tag "Error"
         return $false
