@@ -1,0 +1,7 @@
+# Keep the folder, never the contents. A config.json carries local administrator
+# passwords, a domain join password and an Arc service principal secret, all in clear -
+# none of that belongs in a public repository.
+*
+!.gitignore
+!.gitkeep
+!README.md
