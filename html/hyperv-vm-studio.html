@@ -718,6 +718,31 @@
     background-repeat: no-repeat; background-position: left 9px center; background-size: 15px 15px;
   }
   .list-row .btn.icon, .list-row .btn.danger-text { flex-shrink: 0; }
+  /* Group chips. One chip is one group, because an AD group name carries spaces as a
+     matter of course - "Domain Admins" - and a comma-separated box cannot tell a
+     separator from a character somebody typed inside a name. */
+  .chip-list { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
+  /* Square like everything else here - the page is built on a 2px radius, and a pill
+     reads as borrowed from somewhere with rounder ideas. The accent shows as a rule
+     down the leading edge rather than a tint over the whole thing, which is how a
+     selected row is marked elsewhere. */
+  .chip {
+    display: inline-flex; align-items: center; gap: 2px;
+    padding: 3px 3px 3px 8px; border-radius: var(--radius);
+    font-size: 12px; line-height: 1.5; color: var(--fg); white-space: nowrap;
+    background: var(--bg-subtle);
+    border: 1px solid var(--border);
+    border-left: 2px solid color-mix(in srgb, var(--accent) 70%, transparent);
+  }
+  .chip-x {
+    display: inline-flex; align-items: center; justify-content: center;
+    width: 18px; height: 18px; padding: 0; border: 0; border-radius: var(--radius);
+    background: transparent; color: var(--fg-muted); cursor: pointer; line-height: 1;
+  }
+  .chip-x:hover { background: var(--bg-hover); color: var(--danger); }
+  .chip-add { display: flex; align-items: center; gap: 6px; }
+  .chip-add > input { flex: 1; min-width: 0; }
+  .chip-add > .btn.icon { width: 32px; height: 32px; flex-shrink: 0; }
 
   .pill.tag {
     font-size: 10px; font-weight: 700; letter-spacing: .3px; text-transform: uppercase;
@@ -2842,45 +2867,6 @@ const CLIENT_FEATURE_CATALOG = [
   }
 ];
 
-/* The Linux half of the picker. Nothing here is Install-WindowsFeature and nothing
-   here is apt: every entry is a switch in the cloud-init seed, which is the only
-   thing this tool ever writes into a Linux VM. Software to install belongs in the
-   Extra packages card next door - this list is for decisions the seed itself makes,
-   and it is built to grow. */
-const LINUX_FEATURE_CATALOG = [
-  {
-    id: "openssh-server",
-    label: "OpenSSH server",
-    icon: "key.svg",
-    defaultOn: true,
-    /* Deliberately not a package install. Both cloud images ship openssh-server
-       running, so an apt transaction here would put a mirror the VM may not be able
-       to reach in front of every Linux build, for something that is already there.
-       The seed enables the unit instead: a no-op on an image that has it, and the
-       one line that matters on an image that does not. */
-    runcmd: "systemctl enable --now ssh 2>/dev/null || systemctl enable --now sshd 2>/dev/null || true",
-    info: "Makes sure sshd is enabled and running at the end of the first boot. Both cloud images here ship it that way already, so this is a no-op on them and the seed installs nothing - a distribution that does not carry openssh-server wants the package added in Extra packages as well. Off means the seed leaves the unit alone, which on these images still leaves SSH listening: it is not a switch that turns SSH off."
-  },
-  {
-    id: "ssh-password-auth",
-    label: "Password authentication over SSH",
-    icon: "users.svg",
-    defaultOn: true,
-    info: "Writes ssh_pwauth, which is what lets the local password in over the network as well as at the Hyper-V console. On is how every Linux VM this tool has built so far behaves. Off is key-only over SSH - worth having on anything that leaves a lab, and a VM whose key is wrong is then reachable at the console and nowhere else."
-  }
-];
-
-/* An array means somebody has decided; no array at all means nobody has, so the
-   catalogue's own defaults answer - which is what keeps a design written before this
-   card existed behaving exactly as it did. */
-function linuxFeatureIds(s) {
-  if (Array.isArray(s.linuxFeatures)) {
-    return s.linuxFeatures.filter(id => LINUX_FEATURE_CATALOG.some(f => f.id === id));
-  }
-  return LINUX_FEATURE_CATALOG.filter(f => f.defaultOn).map(f => f.id);
-}
-function hasLinuxFeature(s, id) { return linuxFeatureIds(s).indexOf(id) !== -1; }
-
 const ROLE_PRESETS = {
   // Server Manager's "Quick Start" deployment, as role services: broker, web access and
   // session host on one box, plus the tools carrying the RemoteDesktop PowerShell module
@@ -3585,7 +3571,9 @@ function createDomainJoinAccount(partial) {
     id: "",
     domain: "",
     joinUser: "",
-    joinPassword: ""
+    joinPassword: "",
+    sudoGroups: [],
+    loginGroups: []
   }, partial || {});
   delete a.name;
   return a;
@@ -3657,6 +3645,10 @@ function effectiveDomainJoinMode(s) {
   const dj = (s && s.domainJoin) || {};
   if (dj.mode === "deferred" || dj.mode === "specialize") return dj.mode;
   const img = findImage(s && s.imageId);
+  // A Linux join runs from cloud-init on first boot; there is no specialize pass for
+  // it to sit inside and no SYSTEM task to defer it to, so the timing question does
+  // not apply and must not be exported as though it did.
+  if (isLinuxImage(img)) return "";
   return (img.kind === "client" && String(dj.ouPath || "").trim()) ? "deferred" : "specialize";
 }
 
@@ -3687,10 +3679,6 @@ function azureArcAllVmsPrincipal() {
   return (state.azureArcPrincipals || []).length === 1 ? state.azureArcPrincipals[0] : null;
 }
 function effectiveDomainJoinAccount(s) {
-  // A Linux VM never joins, not even under "use for every VM". Joining one means
-  // realmd/sssd and a completely different mechanism from the answer file and the
-  // deferred SYSTEM task, and none of that exists yet.
-  if (isLinuxServer(s)) return null;
   const globalAcc = domainJoinAllVmsAccount();
   if (globalAcc) return globalAcc;
   const dj = (s && s.domainJoin) || {};
@@ -3707,8 +3695,8 @@ function effectiveAzureArcPrincipal(s) {
 function serversForDomainJoinAccount(accountId) {
   const key = String(accountId || "").trim();
   const globalAcc = domainJoinAllVmsAccount();
-  if (globalAcc && (globalAcc.id === key || globalAcc._id === key)) return state.servers.filter(s => s.name && !isLinuxServer(s));
-  return state.servers.filter(s => s.domainJoin && s.domainJoin.enabled && (s.domainJoin.accountId === key) && !isLinuxServer(s));
+  if (globalAcc && (globalAcc.id === key || globalAcc._id === key)) return state.servers.filter(s => s.name);
+  return state.servers.filter(s => s.domainJoin && s.domainJoin.enabled && (s.domainJoin.accountId === key));
 }
 
 function serversForArcPrincipal(principalId) {
@@ -5161,7 +5149,6 @@ function buildConfig() {
       if (pkgs.length) row.packages = pkgs;
       /* Always written, empty list included: absent means a file older than the
          picker, and Build-Vms.ps1 reads that as the behaviour it used to have. */
-      row.linuxFeatures = linuxFeatureIds(s);
     }
     // "Use for every VM" resolves at export time into per-VM rows, exactly like the
     // cluster blade's addAllVms - Build-Vms.ps1 only ever sees per-VM domainJoin/azureArc.
@@ -5185,6 +5172,21 @@ function buildConfig() {
         if (acc.joinUser) row.domainJoin.joinUser = acc.joinUser;
         if (acc.joinPassword) row.domainJoin.joinPassword = acc.joinPassword;
       }
+    }
+    /* The group lists are Linux's business only, and they are resolved HERE rather
+       than in Build-Vms.ps1 for the same reason the credentials are: one place that
+       knows about accounts, overrides and defaults, and a config.json that says what
+       will happen rather than what to look up. An empty list is omitted entirely, so
+       an untouched field leaves the realm default alone. */
+    if (row.domainJoin && isLinuxServer(s)) {
+      delete row.domainJoin.mode;
+      const acc = findDomainJoinAccount(row.domainJoin.accountId);
+      const names = (list) => (Array.isArray(list) ? list : []).map(x => String(x).trim()).filter(Boolean);
+      const own = names(s.djSudoGroups);
+      const sudo = own.length ? own : names(acc && acc.sudoGroups);
+      const login = names(acc && acc.loginGroups);
+      if (sudo.length) row.domainJoin.sudoGroups = sudo;
+      if (login.length) row.domainJoin.loginGroups = login;
     }
     // Explicit true/false either way: Build-Vms.ps1 only falls back to the host-wide
     // addAfterCreate when a VM carries no cluster block at all (pre-blade configs).
@@ -5729,6 +5731,76 @@ function pathField(key, value, placeholder, extraAttrs) {
       <button class="btn icon" type="button" data-name-edit="gs:${esc(key)}"
               title="${unlocked ? "Done" : "Edit path"}" aria-label="${unlocked ? "Done" : "Edit path"}">${unlocked ? checkIcon() : pencilIcon()}</button>
     </div>`;
+}
+
+function plusIcon() {
+  return `<svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" aria-hidden="true"><path d="M8 3.2v9.6M3.2 8h9.6"/></svg>`;
+}
+function chipRemoveIcon() {
+  return `<svg width="11" height="11" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" aria-hidden="true"><path d="M4 4l8 8M12 4l-8 8"/></svg>`;
+}
+
+/* A list of domain groups, typed one at a time and kept as chips.
+
+   Not a comma-separated text box: an AD group name has spaces in it more often than
+   not, and a box that splits on commas cannot tell "Domain Admins, Backup Operators"
+   from one group whose name a comma happens to sit inside. A chip is a whole name,
+   entered deliberately, and the only character it cannot contain is a newline.
+
+   What gets typed is what the domain calls the group. The down-level form is accepted
+   too and the prefix is dropped: a Linux box joined with realmd resolves groups
+   fully qualified against the realm (use_fully_qualified_names), so AD\Domain Admins
+   reaches sssd as "Domain Admins@<realm>" and never as anything with a backslash. */
+function groupChipList(opts) {
+  const list = Array.isArray(opts.values) ? opts.values : [];
+  const chips = list.map((group, i) => `
+    <span class="chip">${esc(group)}<button class="chip-x" type="button" data-grp-del="${esc(opts.key)}" data-grp-i="${i}"
+      title="Remove ${esc(group)}" aria-label="Remove ${esc(group)}">${chipRemoveIcon()}</button></span>`).join("");
+  // The list sits UNDER the box that fills it, so a chip lands where the eye already is
+  // after pressing +. One line of hint either way: while the list is empty it says what
+  // empty MEANS, which is the part that decides whether to type anything at all.
+  return `
+    <div class="chip-add">
+      <input data-grp-input="${esc(opts.key)}" placeholder="${esc(opts.placeholder || "")}" spellcheck="false" autocomplete="off">
+      <button class="btn icon" type="button" data-grp-add="${esc(opts.key)}" title="Add this group" aria-label="Add this group">${plusIcon()}</button>
+    </div>
+    ${list.length ? `<div class="chip-list">${chips}</div>` : ""}
+    <span class="hint">${esc(list.length ? (opts.hint || "") : (opts.empty || ""))}</span>`;
+}
+
+/* Where a chip list writes to. "dja:<id>:<field>" is an account's own list, "s:<id>"
+   the per-VM sudo override - the same key spelling the buttons carry. */
+function groupChipTarget(key) {
+  const parts = String(key || "").split(":");
+  if (parts[0] === "dja") {
+    const account = (state.domainJoinAccounts || []).find(x => x._id === parts[1]);
+    return account ? { owner: account, field: parts[2] } : null;
+  }
+  if (parts[0] === "s") {
+    const server = state.servers.find(x => x._id === parts[1]);
+    return server ? { owner: server, field: "djSudoGroups" } : null;
+  }
+  return null;
+}
+
+/* A typed name on its way into the list. The backslash form is unwound here rather
+   than at export so the chip shows what the VM will actually look up, and a name that
+   is already qualified is left exactly as it is. */
+function normalizeGroupName(text) {
+  let name = String(text || "").replace(/\s+/g, " ").trim();
+  const slash = name.lastIndexOf("\\");
+  if (slash >= 0) name = name.slice(slash + 1).trim();
+  return name;
+}
+
+function addGroupChip(key, text) {
+  const target = groupChipTarget(key);
+  const name = normalizeGroupName(text);
+  if (!target || !name) return false;
+  const list = Array.isArray(target.owner[target.field]) ? target.owner[target.field] : [];
+  if (list.some(x => String(x).toLowerCase() === name.toLowerCase())) return false;
+  target.owner[target.field] = list.concat([name]);
+  return true;
 }
 
 function trashIcon() {
@@ -6768,33 +6840,6 @@ function supportsAppRemoval(imageId) {
 /* The Linux answer to Roles & features. It sits on the card wherever the Windows
    one would, and it renders with the same row as the RSAT list - a picker somebody
    has already learned once should not have to be learned twice. */
-function renderLinuxFeaturesSection(s) {
-  if (!isLinuxServer(s)) return "";
-  const open = isNestedOpen(s._id + "-lnxfeat", false);
-  const selected = linuxFeatureIds(s);
-  return `
-    <div class="section collapsible ${open ? "" : "collapsed"}">
-      <div class="section-head" data-nested="${esc(s._id)}-lnxfeat">
-        <span class="section-chevron">${chevron()}</span>
-        <img src="${iconSrc("extensions.svg")}"> Optional features
-        ${infoTip("Optional features", "Switches in the cloud-init seed rather than packages - what the first boot does, not what it downloads. Packages go in the card below.")}
-        <span class="section-meta">${selected.length} of ${LINUX_FEATURE_CATALOG.length} selected</span>
-      </div>
-      <div class="section-body">
-        <p class="hint" style="margin:12px 0 10px">Written into the cloud-init seed and applied on the first boot. Nothing here needs a mirror.</p>
-        <div class="role-tree">
-          ${LINUX_FEATURE_CATALOG.map(f => renderFeatureListRow({
-            on: hasLinuxFeature(s, f.id),
-            icon: f.icon,
-            label: f.label,
-            item: f,
-            attrs: `data-lnxfeat-toggle="${esc(s._id)}" data-lnxfeat="${esc(f.id)}"`
-          })).join("")}
-        </div>
-      </div>
-    </div>`;
-}
-
 function renderServerRolesSection(s) {
   const img = findImage(s.imageId);
   // Azure Local gets a section explaining why it has no roles. A Linux machine gets
@@ -7473,7 +7518,6 @@ function renderServerCard(s) {
         </div>
       </div>
 
-      ${renderLinuxFeaturesSection(s)}
 
       <div class="section collapsible ${cpuOpen ? "" : "collapsed"}">
         <div class="section-head" data-nested="${esc(s._id)}-cpu">
@@ -7608,6 +7652,15 @@ function renderServerCard(s) {
             })()}
             <button class="btn" type="button" data-pkg-add="${esc(s._id)}" style="align-self:flex-start;margin-top:4px"><img src="${iconSrc("extensions.svg")}" alt=""> Add package</button>
           </div>
+          ${!effectiveDomainJoinAccount(s) ? "" : `
+          <div style="margin-top:16px">
+            ${field(`<span class="field-label">Domain sudo groups ${infoTip("Domain sudo groups", "Overrides the list on the join account, for this VM only. No chips inherits it. This grants sudo; who may log in at all stays the join account's business.")}</span>`,
+              `${groupChipList({ key: `s:${s._id}`, values: s.djSudoGroups, placeholder: "Domain Admins",
+                empty: ((effectiveDomainJoinAccount(s).sudoGroups || []).length
+                  ? `Inherits ${(effectiveDomainJoinAccount(s).sudoGroups || []).join(", ")} from the join account.`
+                  : "Inherits the join account, which lists no groups."),
+                hint: "Replaces the account's list for this VM only." })}`)}
+          </div>`}
         </div>
       </div>`}
 
@@ -7767,6 +7820,16 @@ function renderDomainJoinBlade() {
               ${field("Domain", `<input data-dja="${esc(a._id)}" data-dk="domain" value="${esc(a.domain||"")}" placeholder="ad.example.invalid" class="${inv(`dja:${a._id}:domain`)}"${invAria(`dja:${a._id}:domain`)}>`)}
               ${field("Join user", `<input data-dja="${esc(a._id)}" data-dk="joinUser" value="${esc(a.joinUser||"")}" placeholder="Administrator@ad.example.invalid" class="${inv(`dja:${a._id}:joinUser`)}"${invAria(`dja:${a._id}:joinUser`)}>`)}
               ${field("Join password", `<input type="password" data-dja="${esc(a._id)}" data-dk="joinPassword" value="${esc(a.joinPassword||"")}" placeholder="••••••••" autocomplete="new-password" class="${inv(`dja:${a._id}:joinPassword`)}"${invAria(`dja:${a._id}:joinPassword`)}>`)}
+            </div>
+            <div class="grid-2" style="margin-top:12px">
+              ${field(`<span class="field-label">Linux sudo groups ${infoTip("Linux sudo groups", "Domain groups that get sudo on a Linux VM joined with this account, written to /etc/sudoers.d/90-domain-sudo. Each one is looked up with getent on the VM first and skipped with a message if it does not resolve, and the finished file is checked with visudo before it is installed - an invalid file there does not disable one rule, it can stop sudo working at all. A name without @ gets this domain appended, because sssd resolves fully qualified after a realm join, and a space inside a name is escaped for sudoers. Windows VMs ignore this.")}</span>`,
+                `${groupChipList({ key: `dja:${a._id}:sudoGroups`, values: a.sudoGroups, placeholder: "Domain Admins",
+                  empty: "No groups — no domain user gets sudo. Type one and press + or Enter.",
+                  hint: "Linux only: this grants sudo, not login. Spaces in a name are fine." })}`)}
+              ${field(`<span class="field-label">Linux login groups ${infoTip("Linux login groups", "Domain groups allowed to log in at all: realm deny --all, then realm permit for each name here. Leave it empty and the VM keeps what a plain realm join gives, which is that EVERY domain user may log in. Windows VMs ignore this.")}</span>`,
+                `${groupChipList({ key: `dja:${a._id}:loginGroups`, values: a.loginGroups, placeholder: "linux-users",
+                  empty: "No groups — the realm default stands and every domain user may log in.",
+                  hint: "Only these groups may log in at all. Spaces in a name are fine." })}`)}
             </div>
             <div class="section-head" style="margin:14px 0 6px">Attach virtual machines</div>
             ${ai === 0 ? `<div class="toggle-grid" style="grid-template-columns:1fr;margin-bottom:10px">
@@ -9270,6 +9333,32 @@ document.getElementById("main").addEventListener("click", e => {
     return;
   }
 
+  // Group chips: the + button takes what is in the box beside it, the x drops one.
+  const grpAdd = e.target.closest("[data-grp-add]");
+  if (grpAdd) {
+    const key = grpAdd.getAttribute("data-grp-add");
+    const input = document.querySelector(`[data-grp-input="${CSS.escape(key)}"]`);
+    if (input) {
+      const added = addGroupChip(key, input.value);
+      // Cleared either way: a duplicate is not an error worth leaving the box dirty for.
+      input.value = "";
+      if (added) { render(); }
+      const back = document.querySelector(`[data-grp-input="${CSS.escape(key)}"]`);
+      if (back) back.focus();
+    }
+    return;
+  }
+  const grpDel = e.target.closest("[data-grp-del]");
+  if (grpDel) {
+    const target = groupChipTarget(grpDel.getAttribute("data-grp-del"));
+    const index = Number(grpDel.getAttribute("data-grp-i"));
+    if (target) {
+      const list = Array.isArray(target.owner[target.field]) ? target.owner[target.field].slice() : [];
+      if (index >= 0 && index < list.length) { list.splice(index, 1); target.owner[target.field] = list; render(); }
+    }
+    return;
+  }
+
   // Disk file-name cell: pencil unlocks the input, revert drops the custom name.
   const nameEdit = e.target.closest("[data-name-edit]");
   if (nameEdit) {
@@ -9889,21 +9978,6 @@ document.getElementById("main").addEventListener("click", e => {
     return;
   }
 
-  const lnxFeatToggle = e.target.closest("[data-lnxfeat-toggle]");
-  if (lnxFeatToggle && !e.target.closest(".tip-warn") && !e.target.closest(".tip-info") && !e.target.closest(".warn-banner")) {
-    const s = state.servers.find(x => x._id === lnxFeatToggle.getAttribute("data-lnxfeat-toggle"));
-    const feat = lnxFeatToggle.getAttribute("data-lnxfeat");
-    if (s && feat) {
-      const on = !hasLinuxFeature(s, feat);
-      const ids = linuxFeatureIds(s).filter(id => id !== feat);
-      if (on) ids.push(feat);
-      /* The first toggle is also what turns the catalogue default into a decision -
-         from here on the array is what the design says, defaults included. */
-      s.linuxFeatures = LINUX_FEATURE_CATALOG.filter(f => ids.indexOf(f.id) !== -1).map(f => f.id);
-      render();
-    }
-    return;
-  }
 
   const clientFeatToggle = e.target.closest("[data-clientfeat-toggle]");
   if (clientFeatToggle && !e.target.closest(".tip-warn") && !e.target.closest(".tip-info") && !e.target.closest(".warn-banner")) {
@@ -10053,6 +10127,18 @@ document.getElementById("main").addEventListener("keydown", e => {
   if (e.target && e.target.id === "newSwitchName") {
     e.preventDefault();
     addAvailableSwitchFromInput();
+  }
+  // Enter does what the + does - a list typed one name at a time should not need the mouse.
+  const chipKey = e.target && e.target.getAttribute && e.target.getAttribute("data-grp-input");
+  if (chipKey) {
+    e.preventDefault();
+    const added = addGroupChip(chipKey, e.target.value);
+    e.target.value = "";
+    if (added) {
+      render();
+      const back = document.querySelector(`[data-grp-input="${CSS.escape(chipKey)}"]`);
+      if (back) back.focus();
+    }
   }
 });
 
@@ -11058,9 +11144,9 @@ function closeMemberPicker() {
 function renderMemberPickerList() {
   const ctx = state.memberPicker;
   const filter = (document.getElementById("memberPickerFilter").value || "").toLowerCase().trim();
-  // The domain-join and Arc pickers must not offer a Linux VM; the VHD Set picker may,
-  // because a shared disk does not care what boots off it.
-  const excludeLinux = (ctx.mode === "domainJoin" || ctx.mode === "azureArc");
+  // Arc is still Windows-only here; domain join is not any more - a Linux VM joins
+  // through realmd and sssd, which the seed sets up.
+  const excludeLinux = (ctx.mode === "azureArc");
   const names = state.servers.filter(s => s.name && !(excludeLinux && isLinuxServer(s))).map(s => s.name);
   const list = document.getElementById("memberPickerList");
   const filtered = names.filter(n => !filter || n.includes(filter));
