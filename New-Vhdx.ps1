@@ -3580,7 +3580,12 @@ function Get-LinuxImageCatalog {
             DefaultDiskGB = 64
             # Debian ships no grub-pc in ANY trixie cloud variant, so it is UEFI only.
             Generation    = 2
-            BakePackages  = @("hyperv-daemons")
+            # hyperv-daemons for the integration services, and the keyboard machinery
+            # because Debian's genericcloud image ships NONE of it - no kbd, no
+            # console-setup, no keyboard-configuration - so cloud-init's keyboard module
+            # has nothing to work with and the keymap silently does nothing. Ubuntu's
+            # image already carries all three.
+            BakePackages  = @("hyperv-daemons", "kbd", "console-setup", "keyboard-configuration")
         }
     )
 }
@@ -3706,6 +3711,7 @@ function Write-LinuxGoldManifest {
     param(
         [Parameter(Mandatory = $true)][string]$VhdPath,
         [Parameter(Mandatory = $true)][object]$Entry,
+        [string]$Language,
         [string]$Locale,
         [string]$KeyboardLayout,
         [string]$TimeZone,
@@ -3720,6 +3726,10 @@ function Write-LinuxGoldManifest {
         imageName      = $Entry.Name
         target         = "HyperV"
         generation     = $Entry.Generation
+        # language and locale are SEPARATE on Linux: language becomes LANG, locale
+        # becomes the LC_* format family. A reader that conflates them gets German
+        # error messages it did not ask for.
+        language       = $Language
         locale         = $Locale
         keyboardLayout = $KeyboardLayout
         timeZone       = $TimeZone
@@ -3863,11 +3873,77 @@ function Import-LinuxTimeZoneCatalog {
         # rounds. India would read UTC+06:30 instead of +05:30, and every half-hour and
         # three-quarter-hour zone with it.
         $label = "{0,-32} UTC{1}{2:00}:{3:00}" -f $zone.id, $sign, [int][Math]::Floor($offset / 60), ($offset % 60)
-        $zones += [PSCustomObject]@{ Id = [string]$zone.id; Label = $label }
+        $zones += [PSCustomObject]@{
+            Id        = [string]$zone.id
+            Label     = $label
+            Countries = @($zone.countries)
+        }
     }
 
     $script:LinuxTimeZones = @($zones)
     Write-Log "Loaded $($zones.Count) IANA time zones" -Tag "Debug"
+}
+
+function Get-UbuntuLanguagePack {
+    # language-pack-de for de-DE, and nothing at all for English or for Debian. Returns
+    # an empty string when no package is needed.
+    param([object]$Entry, [string]$LanguageTag)
+
+    if ($null -eq $Entry -or $Entry.Distro -ne "ubuntu") { return "" }
+    if ([string]::IsNullOrWhiteSpace($LanguageTag)) { return "" }
+
+    $language = ($LanguageTag -split "-")[0].ToLowerInvariant()
+    # en is already there: the image is built in English.
+    if ($language -eq "en") { return "" }
+    return "language-pack-$language"
+}
+
+function Get-DefaultLinuxTimeZone {
+    <#
+        The zone a picker should open on, worked out from the regional format's own
+        country - de-DE opens on Europe/Berlin, en-GB on Europe/London.
+
+        zone1970.tab lists the countries each zone covers and puts the zone's PRIMARY
+        country first, which is the whole reason the catalog keeps that array: Europe/Berlin
+        covers DE first, while Europe/Zurich also lists DE further down. Matching the
+        first entry gets the country's own zone rather than a neighbour's.
+
+        Returns an empty string when nothing matches, and the caller falls back.
+    #>
+    param([string]$LocaleTag)
+
+    if ([string]::IsNullOrWhiteSpace($LocaleTag)) { return "" }
+    $parts = $LocaleTag -split "-"
+    if ($parts.Count -lt 2) { return "" }
+    $country = $parts[$parts.Count - 1].ToUpperInvariant()
+
+    # A country with several zones is listed alphabetically, which makes the United
+    # States open on America/Adak - a handful of Aleutian islands - and Brazil on
+    # America/Araguaina. Neither is a defensible default, and the file carries nothing
+    # that says which zone a country mostly lives in, so the big ones are named here.
+    $primary = @{
+        "US" = "America/New_York";  "BR" = "America/Sao_Paulo";  "CA" = "America/Toronto"
+        "AU" = "Australia/Sydney";  "RU" = "Europe/Moscow";      "CN" = "Asia/Shanghai"
+        "MX" = "America/Mexico_City"; "ES" = "Europe/Madrid";    "PT" = "Europe/Lisbon"
+        "ID" = "Asia/Jakarta";      "AR" = "America/Argentina/Buenos_Aires"
+        "CL" = "America/Santiago";  "NZ" = "Pacific/Auckland";   "KZ" = "Asia/Almaty"
+        "UA" = "Europe/Kyiv";       "CD" = "Africa/Kinshasa";    "PF" = "Pacific/Tahiti"
+    }
+    if ($primary.ContainsKey($country)) {
+        $named = $primary[$country]
+        foreach ($zone in @($script:LinuxTimeZones)) {
+            if ([string]$zone.Id -eq $named) { return $named }
+        }
+    }
+
+    foreach ($zone in @($script:LinuxTimeZones)) {
+        if (@($zone.Countries).Count -gt 0 -and [string]$zone.Countries[0] -eq $country) { return [string]$zone.Id }
+    }
+    # Nothing has this country as its primary - take any zone that covers it at all.
+    foreach ($zone in @($script:LinuxTimeZones)) {
+        if (@($zone.Countries) -contains $country) { return [string]$zone.Id }
+    }
+    return ""
 }
 
 function Get-LinuxLocaleName {
@@ -4250,8 +4326,17 @@ function Start-LinuxInteractiveConfiguration {
     if ($null -eq $distroId) { return $null }
     $entry = $catalog | Where-Object { $_.Id -eq $distroId } | Select-Object -First 1
 
-    # Locale. The same catalog the Windows path uses - the tag is translated to a glibc
-    # name at the point it is written into the seed, not here.
+    # Three separate questions, because on Linux they really are three separate things.
+    #
+    # glibc splits what Windows calls "display language" and "regional format" across
+    # LC_* variables: LANG (and LC_MESSAGES under it) decides what language a program
+    # SPEAKS, while LC_TIME, LC_NUMERIC, LC_MONETARY, LC_PAPER and the rest decide how
+    # it FORMATS. Setting one locale sets both, which is why asking once was wrong -
+    # wanting German dates without German error messages is the normal case, and it is
+    # exactly what a single `locale:` line cannot express.
+    #
+    # All three pick from the same catalog. What differs is which variable each one
+    # ends up in, and that is decided in Get-CloudInitUserData rather than here.
     $localeItems = @()
     foreach ($tag in (Get-OrderedLocaleTags)) {
         # -Locale, not -LocaleTag. Get-LocaleDisplayName is a simple function, so an
@@ -4261,30 +4346,58 @@ function Start-LinuxInteractiveConfiguration {
         # the two spellings sitting next to each other are what made this easy to write.
         $localeItems += [PSCustomObject]@{ Id = $tag; Label = "$tag - $(Get-LocaleDisplayName -Locale $tag)" }
     }
+    # 1. Language - LANG, so what the system SAYS. en-US by default: English logs stay
+    # greppable and every upstream error message matches what a search engine has seen.
+    $languageDefault = [array]::IndexOf(@($localeItems.Id), "en-US")
+    if ($languageDefault -lt 0) { $languageDefault = 0 }
+    $language = Show-Menu -Title "Select the system language" -Items $localeItems -SelectedIndex $languageDefault `
+        -Heading "Language" -HeadingHint "LANG - the language of messages, logs and man pages. Leave it on en-US unless you want translated error text" `
+        -StatusLines ([ordered]@{ distro = $entry.Name })
+    if ($null -eq $language) { return $null }
+
+    # 2. Locale - the LC_* format family, so what the system SHOWS. Dates, decimal
+    # separators, currency, paper size.
     $localeDefault = [array]::IndexOf(@($localeItems.Id), $CurrentLocale)
     if ($localeDefault -lt 0) { $localeDefault = 0 }
-    $locale = Show-Menu -Title "Select the system locale" -Items $localeItems -SelectedIndex $localeDefault `
-        -Heading "Locale" -HeadingHint "Written into the gold as LANG" `
-        -StatusLines ([ordered]@{ distro = $entry.Name })
+    $locale = Show-Menu -Title "Select the regional format" -Items $localeItems -SelectedIndex $localeDefault `
+        -Heading "Locale" -HeadingHint "LC_TIME, LC_NUMERIC, LC_MONETARY and the rest - dates, numbers and currency, not the language" `
+        -StatusLines ([ordered]@{ distro = $entry.Name; language = (Get-LinuxLocaleName -LocaleTag $language) })
     if ($null -eq $locale) { return $null }
 
+    # 3. Keyboard - the console keymap.
     $keyboardDefault = [array]::IndexOf(@($localeItems.Id), $CurrentKeyboard)
     if ($keyboardDefault -lt 0) { $keyboardDefault = $localeDefault }
     $keyboard = Show-Menu -Title "Select the console keyboard layout" -Items $localeItems -SelectedIndex $keyboardDefault `
         -Heading "Keyboard" -HeadingHint "The console keymap - irrelevant over SSH, it matters at the Hyper-V console" `
-        -StatusLines ([ordered]@{ distro = $entry.Name; locale = (Get-LinuxLocaleName -LocaleTag $locale) })
+        -StatusLines ([ordered]@{
+            distro   = $entry.Name
+            language = (Get-LinuxLocaleName -LocaleTag $language)
+            format   = (Get-LinuxLocaleName -LocaleTag $locale)
+        })
     if ($null -eq $keyboard) { return $null }
 
-    $timeZoneDefault = [array]::IndexOf(@($script:LinuxTimeZones.Id), "UTC")
+    # 313 zones sorted by region put UTC near the bottom and Europe in the middle, which
+    # meant scrolling a long way to reach the one this lab actually uses. The default is
+    # the configured locale's own zone where that can be worked out, Europe/Berlin
+    # otherwise - and either way Home/End still reach the ends of the list.
+    $timeZoneDefault = [array]::IndexOf(@($script:LinuxTimeZones.Id), (Get-DefaultLinuxTimeZone -LocaleTag $locale))
+    if ($timeZoneDefault -lt 0) { $timeZoneDefault = [array]::IndexOf(@($script:LinuxTimeZones.Id), "Europe/Berlin") }
+    if ($timeZoneDefault -lt 0) { $timeZoneDefault = [array]::IndexOf(@($script:LinuxTimeZones.Id), "UTC") }
     if ($timeZoneDefault -lt 0) { $timeZoneDefault = 0 }
     $timeZone = Show-Menu -Title "Select the time zone" -Items $script:LinuxTimeZones -SelectedIndex $timeZoneDefault `
         -Heading "Time zone" -HeadingHint "IANA name, as cloud-init and systemd want it" `
-        -StatusLines ([ordered]@{ distro = $entry.Name; locale = (Get-LinuxLocaleName -LocaleTag $locale) })
+        -StatusLines ([ordered]@{
+            distro   = $entry.Name
+            language = (Get-LinuxLocaleName -LocaleTag $language)
+            format   = (Get-LinuxLocaleName -LocaleTag $locale)
+            keyboard = (Get-LinuxKeymap -LocaleTag $keyboard)
+        })
     if ($null -eq $timeZone) { return $null }
 
     Show-MenuHeader -Title "Disk" -StatusLines ([ordered]@{
         distro   = $entry.Name
-        locale   = (Get-LinuxLocaleName -LocaleTag $locale)
+        language = (Get-LinuxLocaleName -LocaleTag $language)
+        format   = (Get-LinuxLocaleName -LocaleTag $locale)
         keyboard = (Get-LinuxKeymap -LocaleTag $keyboard)
         timezone = $timeZone
     })
@@ -4342,6 +4455,7 @@ function Start-LinuxInteractiveConfiguration {
     return [PSCustomObject]@{
         OsFamily        = "Linux"
         Entry           = $entry
+        Language        = $language
         Locale          = $locale
         KeyboardLayout  = $keyboard
         TimeZone        = $timeZone
@@ -4363,7 +4477,7 @@ function Invoke-LinuxGoldRun {
     $entry = $Config.Entry
 
     Write-Log "Building $($entry.Name) as '$($entry.GoldName)'" -Tag "Info"
-    Write-Log "Locale: $(Get-LinuxLocaleName -LocaleTag $Config.Locale) | Keymap: $(Get-LinuxKeymap -LocaleTag $Config.KeyboardLayout) | Time zone: $($Config.TimeZone)" -Tag "Info"
+    Write-Log "Language: $(Get-LinuxLocaleName -LocaleTag $Config.Language) | Format: $(Get-LinuxLocaleName -LocaleTag $Config.Locale) | Keymap: $(Get-LinuxKeymap -LocaleTag $Config.KeyboardLayout) | Time zone: $($Config.TimeZone)" -Tag "Info"
     Write-Log "Disk: $($Config.DiskSizeGB) GB | Output: $($Config.OutputDirectory)" -Tag "Info"
 
     foreach ($command in @("Convert-VHD", "Resize-VHD")) {
@@ -4392,7 +4506,7 @@ function Invoke-LinuxGoldRun {
     }
 
     $null = Write-LinuxGoldManifest -VhdPath $vhdxPath -Entry $entry `
-        -Locale $Config.Locale -KeyboardLayout $Config.KeyboardLayout `
+        -Language $Config.Language -Locale $Config.Locale -KeyboardLayout $Config.KeyboardLayout `
         -TimeZone $Config.TimeZone -SourceChecksum $checksum
 
     if ([string]::IsNullOrWhiteSpace([string]$Config.BakeSwitchName)) {
@@ -4403,8 +4517,20 @@ function Invoke-LinuxGoldRun {
         return $true
     }
 
+    # Ubuntu keeps translations out of the packages and in language-pack-<lang>, and its
+    # cloud image ships none of them - so a gold asked for a language other than English
+    # would set LANG and still speak English. Debian ships translations inside the
+    # packages themselves and needs nothing extra. The bake is where this belongs: it is
+    # the one boot with a network.
+    $bakePackages = @($Config.BakeExtraPackages)
+    $languagePack = Get-UbuntuLanguagePack -Entry $entry -LanguageTag ([string]$Config.Language)
+    if (-not [string]::IsNullOrWhiteSpace($languagePack)) {
+        Write-Log "Adding $languagePack so the gold can actually speak $($Config.Language)" -Tag "Info"
+        $bakePackages += $languagePack
+    }
+
     $baked = Invoke-LinuxBakeBoot -Entry $entry -VhdxPath $vhdxPath -SwitchName ([string]$Config.BakeSwitchName) `
-        -ApplyUpdates ([bool]$Config.BakeApplyUpdates) -ExtraPackages @($Config.BakeExtraPackages)
+        -ApplyUpdates ([bool]$Config.BakeApplyUpdates) -ExtraPackages $bakePackages
     if (-not $baked) {
         Write-Log "'$vhdxPath' was built but the bake did not finish - do not deploy it as it stands" -Tag "Error"
         return $false

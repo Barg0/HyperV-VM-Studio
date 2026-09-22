@@ -1,8 +1,9 @@
 {
- "default": "UTC",
- "generated": "2026-09-22T07:22:23Z",
- "source": "IANA tzdb zone1970.tab (tzdata tzdata 2026d-1)",
- "offsetNote": "offsetMinutes is the zone's UTC offset on 2026-01-15, shown so the picker can label a zone; it is NOT used to select one, and a southern-hemisphere zone is on summer time at that date",
+ "default": "Europe/Berlin",
+ "generated": "2026-09-22T08:01:13Z",
+ "source": "IANA tzdb zone.tab (tzdata 2026d-1)",
+ "sourceNote": "zone.tab, NOT zone1970.tab: the 1970 file merges countries whose rules have matched since 1970, so Sweden resolves to Europe/Berlin there. A picker should offer Europe/Stockholm.",
+ "offsetNote": "offsetMinutes is the UTC offset on 2026-01-15, shown as a label only; a southern-hemisphere zone is on summer time at that date",
  "zones": [
   {
    "id": "Africa/Abidjan",
@@ -10,18 +11,27 @@
    "city": "Abidjan",
    "offsetMinutes": 0,
    "countries": [
-    "CI",
-    "BF",
-    "GH",
-    "GM",
-    "GN",
-    "IS",
-    "ML",
-    "MR",
-    "SH",
-    "SL",
-    "SN",
-    "TG"
+    "CI"
+   ],
+   "note": ""
+  },
+  {
+   "id": "Africa/Accra",
+   "region": "Africa",
+   "city": "Accra",
+   "offsetMinutes": 0,
+   "countries": [
+    "GH"
+   ],
+   "note": ""
+  },
+  {
+   "id": "Africa/Addis_Ababa",
+   "region": "Africa",
+   "city": "Addis Ababa",
+   "offsetMinutes": 180,
+   "countries": [
+    "ET"
    ],
    "note": ""
   },
@@ -36,12 +46,82 @@
    "note": ""
   },
   {
+   "id": "Africa/Asmara",
+   "region": "Africa",
+   "city": "Asmara",
+   "offsetMinutes": 180,
+   "countries": [
+    "ER"
+   ],
+   "note": ""
+  },
+  {
+   "id": "Africa/Bamako",
+   "region": "Africa",
+   "city": "Bamako",
+   "offsetMinutes": 0,
+   "countries": [
+    "ML"
+   ],
+   "note": ""
+  },
+  {
+   "id": "Africa/Bangui",
+   "region": "Africa",
+   "city": "Bangui",
+   "offsetMinutes": 60,
+   "countries": [
+    "CF"
+   ],
+   "note": ""
+  },
+  {
+   "id": "Africa/Banjul",
+   "region": "Africa",
+   "city": "Banjul",
+   "offsetMinutes": 0,
+   "countries": [
+    "GM"
+   ],
+   "note": ""
+  },
+  {
    "id": "Africa/Bissau",
    "region": "Africa",
    "city": "Bissau",
    "offsetMinutes": 0,
    "countries": [
     "GW"
+   ],
+   "note": ""
+  },
+  {
+   "id": "Africa/Blantyre",
+   "region": "Africa",
+   "city": "Blantyre",
+   "offsetMinutes": 120,
+   "countries": [
+    "MW"
+   ],
+   "note": ""
+  },
+  {
+   "id": "Africa/Brazzaville",
+   "region": "Africa",
+   "city": "Brazzaville",
+   "offsetMinutes": 60,
+   "countries": [
+    "CG"
+   ],
+   "note": ""
+  },
+  {
+   "id": "Africa/Bujumbura",
+   "region": "Africa",
+   "city": "Bujumbura",
+   "offsetMinutes": 120,
+   "countries": [
+    "BI"
    ],
    "note": ""
   },
@@ -76,6 +156,56 @@
    "note": "Ceuta, Melilla"
   },
   {
+   "id": "Africa/Conakry",
+   "region": "Africa",
+   "city": "Conakry",
+   "offsetMinutes": 0,
+   "countries": [
+    "GN"
+   ],
+   "note": ""
+  },
+  {
+   "id": "Africa/Dakar",
+   "region": "Africa",
+   "city": "Dakar",
+   "offsetMinutes": 0,
+   "countries": [
+    "SN"
+   ],
+   "note": ""
+  },
+  {
+   "id": "Africa/Dar_es_Salaam",
+   "region": "Africa",
+   "city": "Dar es Salaam",
+   "offsetMinutes": 180,
+   "countries": [
+    "TZ"
+   ],
+   "note": ""
+  },
+  {
+   "id": "Africa/Djibouti",
+   "region": "Africa",
+   "city": "Djibouti",
+   "offsetMinutes": 180,
+   "countries": [
+    "DJ"
+   ],
+   "note": ""
+  },
+  {
+   "id": "Africa/Douala",
+   "region": "Africa",
+   "city": "Douala",
+   "offsetMinutes": 60,
+   "countries": [
+    "CM"
+   ],
+   "note": ""
+  },
+  {
    "id": "Africa/El_Aaiun",
    "region": "Africa",
    "city": "El Aaiun",
@@ -86,14 +216,42 @@
    "note": ""
   },
   {
+   "id": "Africa/Freetown",
+   "region": "Africa",
+   "city": "Freetown",
+   "offsetMinutes": 0,
+   "countries": [
+    "SL"
+   ],
+   "note": ""
+  },
+  {
+   "id": "Africa/Gaborone",
+   "region": "Africa",
+   "city": "Gaborone",
+   "offsetMinutes": 120,
+   "countries": [
+    "BW"
+   ],
+   "note": ""
+  },
+  {
+   "id": "Africa/Harare",
+   "region": "Africa",
+   "city": "Harare",
+   "offsetMinutes": 120,
+   "countries": [
+    "ZW"
+   ],
+   "note": ""
+  },
+  {
    "id": "Africa/Johannesburg",
    "region": "Africa",
    "city": "Johannesburg",
    "offsetMinutes": 120,
    "countries": [
-    "ZA",
-    "LS",
-    "SZ"
+    "ZA"
    ],
    "note": ""
   },
@@ -108,6 +266,16 @@
    "note": ""
   },
   {
+   "id": "Africa/Kampala",
+   "region": "Africa",
+   "city": "Kampala",
+   "offsetMinutes": 180,
+   "countries": [
+    "UG"
+   ],
+   "note": ""
+  },
+  {
    "id": "Africa/Khartoum",
    "region": "Africa",
    "city": "Khartoum",
@@ -118,23 +286,94 @@
    "note": ""
   },
   {
+   "id": "Africa/Kigali",
+   "region": "Africa",
+   "city": "Kigali",
+   "offsetMinutes": 120,
+   "countries": [
+    "RW"
+   ],
+   "note": ""
+  },
+  {
+   "id": "Africa/Kinshasa",
+   "region": "Africa",
+   "city": "Kinshasa",
+   "offsetMinutes": 60,
+   "countries": [
+    "CD"
+   ],
+   "note": "Dem. Rep. of Congo (west)"
+  },
+  {
    "id": "Africa/Lagos",
    "region": "Africa",
    "city": "Lagos",
    "offsetMinutes": 60,
    "countries": [
-    "NG",
-    "AO",
-    "BJ",
-    "CD",
-    "CF",
-    "CG",
-    "CM",
-    "GA",
-    "GQ",
-    "NE"
+    "NG"
    ],
-   "note": "West Africa Time"
+   "note": ""
+  },
+  {
+   "id": "Africa/Libreville",
+   "region": "Africa",
+   "city": "Libreville",
+   "offsetMinutes": 60,
+   "countries": [
+    "GA"
+   ],
+   "note": ""
+  },
+  {
+   "id": "Africa/Lome",
+   "region": "Africa",
+   "city": "Lome",
+   "offsetMinutes": 0,
+   "countries": [
+    "TG"
+   ],
+   "note": ""
+  },
+  {
+   "id": "Africa/Luanda",
+   "region": "Africa",
+   "city": "Luanda",
+   "offsetMinutes": 60,
+   "countries": [
+    "AO"
+   ],
+   "note": ""
+  },
+  {
+   "id": "Africa/Lubumbashi",
+   "region": "Africa",
+   "city": "Lubumbashi",
+   "offsetMinutes": 120,
+   "countries": [
+    "CD"
+   ],
+   "note": "Dem. Rep. of Congo (east)"
+  },
+  {
+   "id": "Africa/Lusaka",
+   "region": "Africa",
+   "city": "Lusaka",
+   "offsetMinutes": 120,
+   "countries": [
+    "ZM"
+   ],
+   "note": ""
+  },
+  {
+   "id": "Africa/Malabo",
+   "region": "Africa",
+   "city": "Malabo",
+   "offsetMinutes": 60,
+   "countries": [
+    "GQ"
+   ],
+   "note": ""
   },
   {
    "id": "Africa/Maputo",
@@ -142,16 +381,39 @@
    "city": "Maputo",
    "offsetMinutes": 120,
    "countries": [
-    "MZ",
-    "BI",
-    "BW",
-    "CD",
-    "MW",
-    "RW",
-    "ZM",
-    "ZW"
+    "MZ"
    ],
-   "note": "Central Africa Time"
+   "note": ""
+  },
+  {
+   "id": "Africa/Maseru",
+   "region": "Africa",
+   "city": "Maseru",
+   "offsetMinutes": 120,
+   "countries": [
+    "LS"
+   ],
+   "note": ""
+  },
+  {
+   "id": "Africa/Mbabane",
+   "region": "Africa",
+   "city": "Mbabane",
+   "offsetMinutes": 120,
+   "countries": [
+    "SZ"
+   ],
+   "note": ""
+  },
+  {
+   "id": "Africa/Mogadishu",
+   "region": "Africa",
+   "city": "Mogadishu",
+   "offsetMinutes": 180,
+   "countries": [
+    "SO"
+   ],
+   "note": ""
   },
   {
    "id": "Africa/Monrovia",
@@ -169,16 +431,7 @@
    "city": "Nairobi",
    "offsetMinutes": 180,
    "countries": [
-    "KE",
-    "DJ",
-    "ER",
-    "ET",
-    "KM",
-    "MG",
-    "SO",
-    "TZ",
-    "UG",
-    "YT"
+    "KE"
    ],
    "note": ""
   },
@@ -189,6 +442,46 @@
    "offsetMinutes": 60,
    "countries": [
     "TD"
+   ],
+   "note": ""
+  },
+  {
+   "id": "Africa/Niamey",
+   "region": "Africa",
+   "city": "Niamey",
+   "offsetMinutes": 60,
+   "countries": [
+    "NE"
+   ],
+   "note": ""
+  },
+  {
+   "id": "Africa/Nouakchott",
+   "region": "Africa",
+   "city": "Nouakchott",
+   "offsetMinutes": 0,
+   "countries": [
+    "MR"
+   ],
+   "note": ""
+  },
+  {
+   "id": "Africa/Ouagadougou",
+   "region": "Africa",
+   "city": "Ouagadougou",
+   "offsetMinutes": 0,
+   "countries": [
+    "BF"
+   ],
+   "note": ""
+  },
+  {
+   "id": "Africa/Porto-Novo",
+   "region": "Africa",
+   "city": "Porto-Novo",
+   "offsetMinutes": 60,
+   "countries": [
+    "BJ"
    ],
    "note": ""
   },
@@ -253,6 +546,26 @@
    "note": "Alaska (most areas)"
   },
   {
+   "id": "America/Anguilla",
+   "region": "America",
+   "city": "Anguilla",
+   "offsetMinutes": -240,
+   "countries": [
+    "AI"
+   ],
+   "note": ""
+  },
+  {
+   "id": "America/Antigua",
+   "region": "America",
+   "city": "Antigua",
+   "offsetMinutes": -240,
+   "countries": [
+    "AG"
+   ],
+   "note": ""
+  },
+  {
    "id": "America/Araguaina",
    "region": "America",
    "city": "Araguaina",
@@ -290,7 +603,7 @@
    "countries": [
     "AR"
    ],
-   "note": "most areas: CB, CC, CN, ER, FM, MN, SE, SF"
+   "note": "Argentina (most areas: CB, CC, CN, ER, FM, MN, SE, SF)"
   },
   {
    "id": "America/Argentina/Jujuy",
@@ -370,7 +683,7 @@
    "countries": [
     "AR"
    ],
-   "note": "Tucumán (TM)"
+   "note": "Tucuman (TM)"
   },
   {
    "id": "America/Argentina/Ushuaia",
@@ -383,6 +696,16 @@
    "note": "Tierra del Fuego (TF)"
   },
   {
+   "id": "America/Aruba",
+   "region": "America",
+   "city": "Aruba",
+   "offsetMinutes": -240,
+   "countries": [
+    "AW"
+   ],
+   "note": ""
+  },
+  {
    "id": "America/Asuncion",
    "region": "America",
    "city": "Asuncion",
@@ -391,6 +714,16 @@
     "PY"
    ],
    "note": ""
+  },
+  {
+   "id": "America/Atikokan",
+   "region": "America",
+   "city": "Atikokan",
+   "offsetMinutes": -300,
+   "countries": [
+    "CA"
+   ],
+   "note": "EST - ON (Atikokan), NU (Coral H)"
   },
   {
    "id": "America/Bahia",
@@ -410,7 +743,7 @@
    "countries": [
     "MX"
    ],
-   "note": "Bahía de Banderas"
+   "note": "Bahia de Banderas"
   },
   {
    "id": "America/Barbados",
@@ -430,7 +763,7 @@
    "countries": [
     "BR"
    ],
-   "note": "Pará (east), Amapá"
+   "note": "Para (east), Amapa"
   },
   {
    "id": "America/Belize",
@@ -441,6 +774,16 @@
     "BZ"
    ],
    "note": ""
+  },
+  {
+   "id": "America/Blanc-Sablon",
+   "region": "America",
+   "city": "Blanc-Sablon",
+   "offsetMinutes": -240,
+   "countries": [
+    "CA"
+   ],
+   "note": "AST - QC (Lower North Shore)"
   },
   {
    "id": "America/Boa_Vista",
@@ -523,6 +866,16 @@
    "note": ""
   },
   {
+   "id": "America/Cayman",
+   "region": "America",
+   "city": "Cayman",
+   "offsetMinutes": -300,
+   "countries": [
+    "KY"
+   ],
+   "note": ""
+  },
+  {
    "id": "America/Chicago",
    "region": "America",
    "city": "Chicago",
@@ -570,7 +923,17 @@
    "countries": [
     "CL"
    ],
-   "note": "Aysén Region"
+   "note": "Aysen Region"
+  },
+  {
+   "id": "America/Creston",
+   "region": "America",
+   "city": "Creston",
+   "offsetMinutes": -420,
+   "countries": [
+    "CA"
+   ],
+   "note": "MST - BC (Creston)"
   },
   {
    "id": "America/Cuiaba",
@@ -581,6 +944,16 @@
     "BR"
    ],
    "note": "Mato Grosso"
+  },
+  {
+   "id": "America/Curacao",
+   "region": "America",
+   "city": "Curacao",
+   "offsetMinutes": -240,
+   "countries": [
+    "CW"
+   ],
+   "note": ""
   },
   {
    "id": "America/Danmarkshavn",
@@ -631,6 +1004,16 @@
     "US"
    ],
    "note": "Eastern - MI (most areas)"
+  },
+  {
+   "id": "America/Dominica",
+   "region": "America",
+   "city": "Dominica",
+   "offsetMinutes": -240,
+   "countries": [
+    "DM"
+   ],
+   "note": ""
   },
   {
    "id": "America/Edmonton",
@@ -709,6 +1092,26 @@
    "offsetMinutes": -300,
    "countries": [
     "TC"
+   ],
+   "note": ""
+  },
+  {
+   "id": "America/Grenada",
+   "region": "America",
+   "city": "Grenada",
+   "offsetMinutes": -240,
+   "countries": [
+    "GD"
+   ],
+   "note": ""
+  },
+  {
+   "id": "America/Guadeloupe",
+   "region": "America",
+   "city": "Guadeloupe",
+   "offsetMinutes": -240,
+   "countries": [
+    "GP"
    ],
    "note": ""
   },
@@ -913,6 +1316,16 @@
    "note": "Eastern - KY (Wayne)"
   },
   {
+   "id": "America/Kralendijk",
+   "region": "America",
+   "city": "Kralendijk",
+   "offsetMinutes": -240,
+   "countries": [
+    "BQ"
+   ],
+   "note": ""
+  },
+  {
    "id": "America/La_Paz",
    "region": "America",
    "city": "La Paz",
@@ -941,6 +1354,16 @@
     "US"
    ],
    "note": "Pacific"
+  },
+  {
+   "id": "America/Lower_Princes",
+   "region": "America",
+   "city": "Lower Princes",
+   "offsetMinutes": -240,
+   "countries": [
+    "SX"
+   ],
+   "note": ""
   },
   {
    "id": "America/Maceio",
@@ -973,6 +1396,16 @@
    "note": "Amazonas (east)"
   },
   {
+   "id": "America/Marigot",
+   "region": "America",
+   "city": "Marigot",
+   "offsetMinutes": -240,
+   "countries": [
+    "MF"
+   ],
+   "note": ""
+  },
+  {
    "id": "America/Martinique",
    "region": "America",
    "city": "Martinique",
@@ -990,7 +1423,7 @@
    "countries": [
     "MX"
    ],
-   "note": "Coahuila, Nuevo León, Tamaulipas (US border)"
+   "note": "Coahuila, Nuevo Leon, Tamaulipas (US border)"
   },
   {
    "id": "America/Mazatlan",
@@ -1020,7 +1453,7 @@
    "countries": [
     "MX"
    ],
-   "note": "Campeche, Yucatán"
+   "note": "Campeche, Yucatan"
   },
   {
    "id": "America/Metlakatla",
@@ -1070,7 +1503,7 @@
    "countries": [
     "MX"
    ],
-   "note": "Durango; Coahuila, Nuevo León, Tamaulipas (most areas)"
+   "note": "Durango; Coahuila, Nuevo Leon, Tamaulipas (most areas)"
   },
   {
    "id": "America/Montevideo",
@@ -1079,6 +1512,26 @@
    "offsetMinutes": -180,
    "countries": [
     "UY"
+   ],
+   "note": ""
+  },
+  {
+   "id": "America/Montserrat",
+   "region": "America",
+   "city": "Montserrat",
+   "offsetMinutes": -240,
+   "countries": [
+    "MS"
+   ],
+   "note": ""
+  },
+  {
+   "id": "America/Nassau",
+   "region": "America",
+   "city": "Nassau",
+   "offsetMinutes": -300,
+   "countries": [
+    "BS"
    ],
    "note": ""
   },
@@ -1168,11 +1621,9 @@
    "city": "Panama",
    "offsetMinutes": -300,
    "countries": [
-    "PA",
-    "CA",
-    "KY"
+    "PA"
    ],
-   "note": "EST - ON (Atikokan), NU (Coral H)"
+   "note": ""
   },
   {
    "id": "America/Paramaribo",
@@ -1190,10 +1641,19 @@
    "city": "Phoenix",
    "offsetMinutes": -420,
    "countries": [
-    "US",
-    "CA"
+    "US"
    ],
-   "note": "MST - AZ (most areas), Creston BC"
+   "note": "MST - AZ (except Navajo)"
+  },
+  {
+   "id": "America/Port_of_Spain",
+   "region": "America",
+   "city": "Port of Spain",
+   "offsetMinutes": -240,
+   "countries": [
+    "TT"
+   ],
+   "note": ""
   },
   {
    "id": "America/Port-au-Prince",
@@ -1213,7 +1673,7 @@
    "countries": [
     "BR"
    ],
-   "note": "Rondônia"
+   "note": "Rondonia"
   },
   {
    "id": "America/Puerto_Rico",
@@ -1221,28 +1681,9 @@
    "city": "Puerto Rico",
    "offsetMinutes": -240,
    "countries": [
-    "PR",
-    "AG",
-    "CA",
-    "AI",
-    "AW",
-    "BL",
-    "BQ",
-    "CW",
-    "DM",
-    "GD",
-    "GP",
-    "KN",
-    "LC",
-    "MF",
-    "MS",
-    "SX",
-    "TT",
-    "VC",
-    "VG",
-    "VI"
+    "PR"
    ],
-   "note": "AST - QC (Lower North Shore)"
+   "note": ""
   },
   {
    "id": "America/Punta_Arenas",
@@ -1312,7 +1753,7 @@
    "countries": [
     "BR"
    ],
-   "note": "Pará (west)"
+   "note": "Para (west)"
   },
   {
    "id": "America/Santiago",
@@ -1365,6 +1806,16 @@
    "note": "Alaska - Sitka area"
   },
   {
+   "id": "America/St_Barthelemy",
+   "region": "America",
+   "city": "St Barthelemy",
+   "offsetMinutes": -240,
+   "countries": [
+    "BL"
+   ],
+   "note": ""
+  },
+  {
    "id": "America/St_Johns",
    "region": "America",
    "city": "St Johns",
@@ -1373,6 +1824,46 @@
     "CA"
    ],
    "note": "Newfoundland, Labrador (SE)"
+  },
+  {
+   "id": "America/St_Kitts",
+   "region": "America",
+   "city": "St Kitts",
+   "offsetMinutes": -240,
+   "countries": [
+    "KN"
+   ],
+   "note": ""
+  },
+  {
+   "id": "America/St_Lucia",
+   "region": "America",
+   "city": "St Lucia",
+   "offsetMinutes": -240,
+   "countries": [
+    "LC"
+   ],
+   "note": ""
+  },
+  {
+   "id": "America/St_Thomas",
+   "region": "America",
+   "city": "St Thomas",
+   "offsetMinutes": -240,
+   "countries": [
+    "VI"
+   ],
+   "note": ""
+  },
+  {
+   "id": "America/St_Vincent",
+   "region": "America",
+   "city": "St Vincent",
+   "offsetMinutes": -240,
+   "countries": [
+    "VC"
+   ],
+   "note": ""
   },
   {
    "id": "America/Swift_Current",
@@ -1420,10 +1911,19 @@
    "city": "Toronto",
    "offsetMinutes": -300,
    "countries": [
-    "CA",
-    "BS"
+    "CA"
    ],
    "note": "Eastern - ON & QC (most areas)"
+  },
+  {
+   "id": "America/Tortola",
+   "region": "America",
+   "city": "Tortola",
+   "offsetMinutes": -240,
+   "countries": [
+    "VG"
+   ],
+   "note": ""
   },
   {
    "id": "America/Vancouver",
@@ -1486,6 +1986,16 @@
    "note": "Davis"
   },
   {
+   "id": "Antarctica/DumontDUrville",
+   "region": "Antarctica",
+   "city": "DumontDUrville",
+   "offsetMinutes": 600,
+   "countries": [
+    "AQ"
+   ],
+   "note": "Dumont-d'Urville"
+  },
+  {
    "id": "Antarctica/Macquarie",
    "region": "Antarctica",
    "city": "Macquarie",
@@ -1504,6 +2014,16 @@
     "AQ"
    ],
    "note": "Mawson"
+  },
+  {
+   "id": "Antarctica/McMurdo",
+   "region": "Antarctica",
+   "city": "McMurdo",
+   "offsetMinutes": 780,
+   "countries": [
+    "AQ"
+   ],
+   "note": "New Zealand time - McMurdo, South Pole"
   },
   {
    "id": "Antarctica/Palmer",
@@ -1526,6 +2046,16 @@
    "note": "Rothera"
   },
   {
+   "id": "Antarctica/Syowa",
+   "region": "Antarctica",
+   "city": "Syowa",
+   "offsetMinutes": 180,
+   "countries": [
+    "AQ"
+   ],
+   "note": "Syowa"
+  },
+  {
    "id": "Antarctica/Troll",
    "region": "Antarctica",
    "city": "Troll",
@@ -1544,6 +2074,26 @@
     "AQ"
    ],
    "note": "Vostok"
+  },
+  {
+   "id": "Arctic/Longyearbyen",
+   "region": "Arctic",
+   "city": "Longyearbyen",
+   "offsetMinutes": 60,
+   "countries": [
+    "SJ"
+   ],
+   "note": ""
+  },
+  {
+   "id": "Asia/Aden",
+   "region": "Asia",
+   "city": "Aden",
+   "offsetMinutes": 180,
+   "countries": [
+    "YE"
+   ],
+   "note": ""
   },
   {
    "id": "Asia/Almaty",
@@ -1583,7 +2133,7 @@
    "countries": [
     "KZ"
    ],
-   "note": "Mangghystaū/Mankistau"
+   "note": "Mangghystau/Mankistau"
   },
   {
    "id": "Asia/Aqtobe",
@@ -1593,7 +2143,7 @@
    "countries": [
     "KZ"
    ],
-   "note": "Aqtöbe/Aktobe"
+   "note": "Aqtobe/Aktobe"
   },
   {
    "id": "Asia/Ashgabat",
@@ -1613,7 +2163,7 @@
    "countries": [
     "KZ"
    ],
-   "note": "Atyraū/Atirau/Gur’yev"
+   "note": "Atyrau/Atirau/Gur'yev"
   },
   {
    "id": "Asia/Baghdad",
@@ -1622,6 +2172,16 @@
    "offsetMinutes": 180,
    "countries": [
     "IQ"
+   ],
+   "note": ""
+  },
+  {
+   "id": "Asia/Bahrain",
+   "region": "Asia",
+   "city": "Bahrain",
+   "offsetMinutes": 180,
+   "countries": [
+    "BH"
    ],
    "note": ""
   },
@@ -1641,13 +2201,9 @@
    "city": "Bangkok",
    "offsetMinutes": 420,
    "countries": [
-    "TH",
-    "CX",
-    "KH",
-    "LA",
-    "VN"
+    "TH"
    ],
-   "note": "north Vietnam"
+   "note": ""
   },
   {
    "id": "Asia/Barnaul",
@@ -1676,6 +2232,16 @@
    "offsetMinutes": 360,
    "countries": [
     "KG"
+   ],
+   "note": ""
+  },
+  {
+   "id": "Asia/Brunei",
+   "region": "Asia",
+   "city": "Brunei",
+   "offsetMinutes": 480,
+   "countries": [
+    "BN"
    ],
    "note": ""
   },
@@ -1735,13 +2301,9 @@
    "city": "Dubai",
    "offsetMinutes": 240,
    "countries": [
-    "AE",
-    "OM",
-    "RE",
-    "SC",
-    "TF"
+    "AE"
    ],
-   "note": "Crozet"
+   "note": ""
   },
   {
    "id": "Asia/Dushanbe",
@@ -1791,7 +2353,7 @@
    "countries": [
     "VN"
    ],
-   "note": "south Vietnam"
+   "note": ""
   },
   {
    "id": "Asia/Hong_Kong",
@@ -1811,7 +2373,7 @@
    "countries": [
     "MN"
    ],
-   "note": "Bayan-Ölgii, Hovd, Uvs"
+   "note": "Bayan-Olgii, Hovd, Uvs"
   },
   {
    "id": "Asia/Irkutsk",
@@ -1924,15 +2486,34 @@
    "note": "MSK+04 - Krasnoyarsk area"
   },
   {
+   "id": "Asia/Kuala_Lumpur",
+   "region": "Asia",
+   "city": "Kuala Lumpur",
+   "offsetMinutes": 480,
+   "countries": [
+    "MY"
+   ],
+   "note": "Malaysia (peninsula)"
+  },
+  {
    "id": "Asia/Kuching",
    "region": "Asia",
    "city": "Kuching",
    "offsetMinutes": 480,
    "countries": [
-    "MY",
-    "BN"
+    "MY"
    ],
    "note": "Sabah, Sarawak"
+  },
+  {
+   "id": "Asia/Kuwait",
+   "region": "Asia",
+   "city": "Kuwait",
+   "offsetMinutes": 180,
+   "countries": [
+    "KW"
+   ],
+   "note": ""
   },
   {
    "id": "Asia/Macau",
@@ -1971,6 +2552,16 @@
    "offsetMinutes": 480,
    "countries": [
     "PH"
+   ],
+   "note": ""
+  },
+  {
+   "id": "Asia/Muscat",
+   "region": "Asia",
+   "city": "Muscat",
+   "offsetMinutes": 240,
+   "countries": [
+    "OM"
    ],
    "note": ""
   },
@@ -2025,6 +2616,16 @@
    "note": "West Kazakhstan"
   },
   {
+   "id": "Asia/Phnom_Penh",
+   "region": "Asia",
+   "city": "Phnom Penh",
+   "offsetMinutes": 420,
+   "countries": [
+    "KH"
+   ],
+   "note": ""
+  },
+  {
    "id": "Asia/Pontianak",
    "region": "Asia",
    "city": "Pontianak",
@@ -2050,8 +2651,7 @@
    "city": "Qatar",
    "offsetMinutes": 180,
    "countries": [
-    "QA",
-    "BH"
+    "QA"
    ],
    "note": ""
   },
@@ -2081,12 +2681,9 @@
    "city": "Riyadh",
    "offsetMinutes": 180,
    "countries": [
-    "SA",
-    "AQ",
-    "KW",
-    "YE"
+    "SA"
    ],
-   "note": "Syowa"
+   "note": ""
   },
   {
    "id": "Asia/Sakhalin",
@@ -2134,11 +2731,9 @@
    "city": "Singapore",
    "offsetMinutes": 480,
    "countries": [
-    "SG",
-    "AQ",
-    "MY"
+    "SG"
    ],
-   "note": "peninsular Malaysia, Concordia"
+   "note": ""
   },
   {
    "id": "Asia/Srednekolymsk",
@@ -2206,10 +2801,9 @@
    "city": "Tokyo",
    "offsetMinutes": 540,
    "countries": [
-    "JP",
-    "AU"
+    "JP"
    ],
-   "note": "Eyre Bird Observatory"
+   "note": ""
   },
   {
    "id": "Asia/Tomsk",
@@ -2252,6 +2846,16 @@
    "note": "MSK+07 - Oymyakonsky"
   },
   {
+   "id": "Asia/Vientiane",
+   "region": "Asia",
+   "city": "Vientiane",
+   "offsetMinutes": 420,
+   "countries": [
+    "LA"
+   ],
+   "note": ""
+  },
+  {
    "id": "Asia/Vladivostok",
    "region": "Asia",
    "city": "Vladivostok",
@@ -2277,8 +2881,7 @@
    "city": "Yangon",
    "offsetMinutes": 390,
    "countries": [
-    "MM",
-    "CC"
+    "MM"
    ],
    "note": ""
   },
@@ -2363,12 +2966,32 @@
    "note": "Madeira Islands"
   },
   {
+   "id": "Atlantic/Reykjavik",
+   "region": "Atlantic",
+   "city": "Reykjavik",
+   "offsetMinutes": 0,
+   "countries": [
+    "IS"
+   ],
+   "note": ""
+  },
+  {
    "id": "Atlantic/South_Georgia",
    "region": "Atlantic",
    "city": "South Georgia",
    "offsetMinutes": -120,
    "countries": [
     "GS"
+   ],
+   "note": ""
+  },
+  {
+   "id": "Atlantic/St_Helena",
+   "region": "Atlantic",
+   "city": "St Helena",
+   "offsetMinutes": 0,
+   "countries": [
+    "SH"
    ],
    "note": ""
   },
@@ -2493,6 +3116,16 @@
    "note": "New South Wales (most areas)"
   },
   {
+   "id": "Europe/Amsterdam",
+   "region": "Europe",
+   "city": "Amsterdam",
+   "offsetMinutes": 60,
+   "countries": [
+    "NL"
+   ],
+   "note": ""
+  },
+  {
    "id": "Europe/Andorra",
    "region": "Europe",
    "city": "Andorra",
@@ -2528,12 +3161,7 @@
    "city": "Belgrade",
    "offsetMinutes": 60,
    "countries": [
-    "RS",
-    "BA",
-    "HR",
-    "ME",
-    "MK",
-    "SI"
+    "RS"
    ],
    "note": ""
   },
@@ -2543,13 +3171,19 @@
    "city": "Berlin",
    "offsetMinutes": 60,
    "countries": [
-    "DE",
-    "DK",
-    "NO",
-    "SE",
-    "SJ"
+    "DE"
    ],
    "note": "most of Germany"
+  },
+  {
+   "id": "Europe/Bratislava",
+   "region": "Europe",
+   "city": "Bratislava",
+   "offsetMinutes": 60,
+   "countries": [
+    "SK"
+   ],
+   "note": ""
   },
   {
    "id": "Europe/Brussels",
@@ -2557,9 +3191,7 @@
    "city": "Brussels",
    "offsetMinutes": 60,
    "countries": [
-    "BE",
-    "LU",
-    "NL"
+    "BE"
    ],
    "note": ""
   },
@@ -2584,12 +3216,32 @@
    "note": ""
   },
   {
+   "id": "Europe/Busingen",
+   "region": "Europe",
+   "city": "Busingen",
+   "offsetMinutes": 60,
+   "countries": [
+    "DE"
+   ],
+   "note": "Busingen"
+  },
+  {
    "id": "Europe/Chisinau",
    "region": "Europe",
    "city": "Chisinau",
    "offsetMinutes": 120,
    "countries": [
     "MD"
+   ],
+   "note": ""
+  },
+  {
+   "id": "Europe/Copenhagen",
+   "region": "Europe",
+   "city": "Copenhagen",
+   "offsetMinutes": 60,
+   "countries": [
+    "DK"
    ],
    "note": ""
   },
@@ -2614,13 +3266,32 @@
    "note": ""
   },
   {
+   "id": "Europe/Guernsey",
+   "region": "Europe",
+   "city": "Guernsey",
+   "offsetMinutes": 0,
+   "countries": [
+    "GG"
+   ],
+   "note": ""
+  },
+  {
    "id": "Europe/Helsinki",
    "region": "Europe",
    "city": "Helsinki",
    "offsetMinutes": 120,
    "countries": [
-    "FI",
-    "AX"
+    "FI"
+   ],
+   "note": ""
+  },
+  {
+   "id": "Europe/Isle_of_Man",
+   "region": "Europe",
+   "city": "Isle of Man",
+   "offsetMinutes": 0,
+   "countries": [
+    "IM"
    ],
    "note": ""
   },
@@ -2631,6 +3302,16 @@
    "offsetMinutes": 180,
    "countries": [
     "TR"
+   ],
+   "note": ""
+  },
+  {
+   "id": "Europe/Jersey",
+   "region": "Europe",
+   "city": "Jersey",
+   "offsetMinutes": 0,
+   "countries": [
+    "JE"
    ],
    "note": ""
   },
@@ -2675,15 +3356,32 @@
    "note": "Portugal (mainland)"
   },
   {
+   "id": "Europe/Ljubljana",
+   "region": "Europe",
+   "city": "Ljubljana",
+   "offsetMinutes": 60,
+   "countries": [
+    "SI"
+   ],
+   "note": ""
+  },
+  {
    "id": "Europe/London",
    "region": "Europe",
    "city": "London",
    "offsetMinutes": 0,
    "countries": [
-    "GB",
-    "GG",
-    "IM",
-    "JE"
+    "GB"
+   ],
+   "note": ""
+  },
+  {
+   "id": "Europe/Luxembourg",
+   "region": "Europe",
+   "city": "Luxembourg",
+   "offsetMinutes": 60,
+   "countries": [
+    "LU"
    ],
    "note": ""
   },
@@ -2708,12 +3406,32 @@
    "note": ""
   },
   {
+   "id": "Europe/Mariehamn",
+   "region": "Europe",
+   "city": "Mariehamn",
+   "offsetMinutes": 120,
+   "countries": [
+    "AX"
+   ],
+   "note": ""
+  },
+  {
    "id": "Europe/Minsk",
    "region": "Europe",
    "city": "Minsk",
    "offsetMinutes": 180,
    "countries": [
     "BY"
+   ],
+   "note": ""
+  },
+  {
+   "id": "Europe/Monaco",
+   "region": "Europe",
+   "city": "Monaco",
+   "offsetMinutes": 60,
+   "countries": [
+    "MC"
    ],
    "note": ""
   },
@@ -2728,13 +3446,32 @@
    "note": "MSK+00 - Moscow area"
   },
   {
+   "id": "Europe/Oslo",
+   "region": "Europe",
+   "city": "Oslo",
+   "offsetMinutes": 60,
+   "countries": [
+    "NO"
+   ],
+   "note": ""
+  },
+  {
    "id": "Europe/Paris",
    "region": "Europe",
    "city": "Paris",
    "offsetMinutes": 60,
    "countries": [
-    "FR",
-    "MC"
+    "FR"
+   ],
+   "note": ""
+  },
+  {
+   "id": "Europe/Podgorica",
+   "region": "Europe",
+   "city": "Podgorica",
+   "offsetMinutes": 60,
+   "countries": [
+    "ME"
    ],
    "note": ""
   },
@@ -2744,8 +3481,7 @@
    "city": "Prague",
    "offsetMinutes": 60,
    "countries": [
-    "CZ",
-    "SK"
+    "CZ"
    ],
    "note": ""
   },
@@ -2765,9 +3501,7 @@
    "city": "Rome",
    "offsetMinutes": 60,
    "countries": [
-    "IT",
-    "SM",
-    "VA"
+    "IT"
    ],
    "note": ""
   },
@@ -2780,6 +3514,26 @@
     "RU"
    ],
    "note": "MSK+01 - Samara, Udmurtia"
+  },
+  {
+   "id": "Europe/San_Marino",
+   "region": "Europe",
+   "city": "San Marino",
+   "offsetMinutes": 60,
+   "countries": [
+    "SM"
+   ],
+   "note": ""
+  },
+  {
+   "id": "Europe/Sarajevo",
+   "region": "Europe",
+   "city": "Sarajevo",
+   "offsetMinutes": 60,
+   "countries": [
+    "BA"
+   ],
+   "note": ""
   },
   {
    "id": "Europe/Saratov",
@@ -2797,10 +3551,19 @@
    "city": "Simferopol",
    "offsetMinutes": 180,
    "countries": [
-    "RU",
     "UA"
    ],
    "note": "Crimea"
+  },
+  {
+   "id": "Europe/Skopje",
+   "region": "Europe",
+   "city": "Skopje",
+   "offsetMinutes": 60,
+   "countries": [
+    "MK"
+   ],
+   "note": ""
   },
   {
    "id": "Europe/Sofia",
@@ -2809,6 +3572,16 @@
    "offsetMinutes": 120,
    "countries": [
     "BG"
+   ],
+   "note": ""
+  },
+  {
+   "id": "Europe/Stockholm",
+   "region": "Europe",
+   "city": "Stockholm",
+   "offsetMinutes": 60,
+   "countries": [
+    "SE"
    ],
    "note": ""
   },
@@ -2841,6 +3614,26 @@
     "RU"
    ],
    "note": "MSK+01 - Ulyanovsk"
+  },
+  {
+   "id": "Europe/Vaduz",
+   "region": "Europe",
+   "city": "Vaduz",
+   "offsetMinutes": 60,
+   "countries": [
+    "LI"
+   ],
+   "note": ""
+  },
+  {
+   "id": "Europe/Vatican",
+   "region": "Europe",
+   "city": "Vatican",
+   "offsetMinutes": 60,
+   "countries": [
+    "VA"
+   ],
+   "note": ""
   },
   {
    "id": "Europe/Vienna",
@@ -2883,16 +3676,34 @@
    "note": ""
   },
   {
+   "id": "Europe/Zagreb",
+   "region": "Europe",
+   "city": "Zagreb",
+   "offsetMinutes": 60,
+   "countries": [
+    "HR"
+   ],
+   "note": ""
+  },
+  {
    "id": "Europe/Zurich",
    "region": "Europe",
    "city": "Zurich",
    "offsetMinutes": 60,
    "countries": [
-    "CH",
-    "DE",
-    "LI"
+    "CH"
    ],
-   "note": "Büsingen"
+   "note": ""
+  },
+  {
+   "id": "Indian/Antananarivo",
+   "region": "Indian",
+   "city": "Antananarivo",
+   "offsetMinutes": 180,
+   "countries": [
+    "MG"
+   ],
+   "note": ""
   },
   {
    "id": "Indian/Chagos",
@@ -2905,15 +3716,64 @@
    "note": ""
   },
   {
+   "id": "Indian/Christmas",
+   "region": "Indian",
+   "city": "Christmas",
+   "offsetMinutes": 420,
+   "countries": [
+    "CX"
+   ],
+   "note": ""
+  },
+  {
+   "id": "Indian/Cocos",
+   "region": "Indian",
+   "city": "Cocos",
+   "offsetMinutes": 390,
+   "countries": [
+    "CC"
+   ],
+   "note": ""
+  },
+  {
+   "id": "Indian/Comoro",
+   "region": "Indian",
+   "city": "Comoro",
+   "offsetMinutes": 180,
+   "countries": [
+    "KM"
+   ],
+   "note": ""
+  },
+  {
+   "id": "Indian/Kerguelen",
+   "region": "Indian",
+   "city": "Kerguelen",
+   "offsetMinutes": 300,
+   "countries": [
+    "TF"
+   ],
+   "note": ""
+  },
+  {
+   "id": "Indian/Mahe",
+   "region": "Indian",
+   "city": "Mahe",
+   "offsetMinutes": 240,
+   "countries": [
+    "SC"
+   ],
+   "note": ""
+  },
+  {
    "id": "Indian/Maldives",
    "region": "Indian",
    "city": "Maldives",
    "offsetMinutes": 300,
    "countries": [
-    "MV",
-    "TF"
+    "MV"
    ],
-   "note": "Kerguelen, St Paul I, Amsterdam I"
+   "note": ""
   },
   {
    "id": "Indian/Mauritius",
@@ -2922,6 +3782,26 @@
    "offsetMinutes": 240,
    "countries": [
     "MU"
+   ],
+   "note": ""
+  },
+  {
+   "id": "Indian/Mayotte",
+   "region": "Indian",
+   "city": "Mayotte",
+   "offsetMinutes": 180,
+   "countries": [
+    "YT"
+   ],
+   "note": ""
+  },
+  {
+   "id": "Indian/Reunion",
+   "region": "Indian",
+   "city": "Reunion",
+   "offsetMinutes": 240,
+   "countries": [
+    "RE"
    ],
    "note": ""
   },
@@ -2941,10 +3821,9 @@
    "city": "Auckland",
    "offsetMinutes": 780,
    "countries": [
-    "NZ",
-    "AQ"
+    "NZ"
    ],
-   "note": "New Zealand time"
+   "note": "most of New Zealand"
   },
   {
    "id": "Pacific/Bougainville",
@@ -2965,6 +3844,16 @@
     "NZ"
    ],
    "note": "Chatham Islands"
+  },
+  {
+   "id": "Pacific/Chuuk",
+   "region": "Pacific",
+   "city": "Chuuk",
+   "offsetMinutes": 600,
+   "countries": [
+    "FM"
+   ],
+   "note": "Chuuk/Truk, Yap"
   },
   {
    "id": "Pacific/Easter",
@@ -3007,6 +3896,16 @@
    "note": ""
   },
   {
+   "id": "Pacific/Funafuti",
+   "region": "Pacific",
+   "city": "Funafuti",
+   "offsetMinutes": 720,
+   "countries": [
+    "TV"
+   ],
+   "note": ""
+  },
+  {
    "id": "Pacific/Galapagos",
    "region": "Pacific",
    "city": "Galapagos",
@@ -3014,7 +3913,7 @@
    "countries": [
     "EC"
    ],
-   "note": "Galápagos Islands"
+   "note": "Galapagos Islands"
   },
   {
    "id": "Pacific/Gambier",
@@ -3032,10 +3931,9 @@
    "city": "Guadalcanal",
    "offsetMinutes": 660,
    "countries": [
-    "SB",
-    "FM"
+    "SB"
    ],
-   "note": "Pohnpei"
+   "note": ""
   },
   {
    "id": "Pacific/Guam",
@@ -3043,8 +3941,7 @@
    "city": "Guam",
    "offsetMinutes": 600,
    "countries": [
-    "GU",
-    "MP"
+    "GU"
    ],
    "note": ""
   },
@@ -3099,6 +3996,16 @@
    "note": "Kwajalein"
   },
   {
+   "id": "Pacific/Majuro",
+   "region": "Pacific",
+   "city": "Majuro",
+   "offsetMinutes": 720,
+   "countries": [
+    "MH"
+   ],
+   "note": "most of Marshall Islands"
+  },
+  {
    "id": "Pacific/Marquesas",
    "region": "Pacific",
    "city": "Marquesas",
@@ -3107,6 +4014,16 @@
     "PF"
    ],
    "note": "Marquesas Islands"
+  },
+  {
+   "id": "Pacific/Midway",
+   "region": "Pacific",
+   "city": "Midway",
+   "offsetMinutes": -660,
+   "countries": [
+    "UM"
+   ],
+   "note": "Midway Islands"
   },
   {
    "id": "Pacific/Nauru",
@@ -3154,10 +4071,9 @@
    "city": "Pago Pago",
    "offsetMinutes": -660,
    "countries": [
-    "AS",
-    "UM"
+    "AS"
    ],
-   "note": "Midway"
+   "note": ""
   },
   {
    "id": "Pacific/Palau",
@@ -3180,16 +4096,24 @@
    "note": ""
   },
   {
+   "id": "Pacific/Pohnpei",
+   "region": "Pacific",
+   "city": "Pohnpei",
+   "offsetMinutes": 660,
+   "countries": [
+    "FM"
+   ],
+   "note": "Pohnpei/Ponape"
+  },
+  {
    "id": "Pacific/Port_Moresby",
    "region": "Pacific",
    "city": "Port Moresby",
    "offsetMinutes": 600,
    "countries": [
-    "PG",
-    "AQ",
-    "FM"
+    "PG"
    ],
-   "note": "Papua New Guinea (most areas), Chuuk, Yap, Dumont d’Urville"
+   "note": "most of Papua New Guinea"
   },
   {
    "id": "Pacific/Rarotonga",
@@ -3198,6 +4122,16 @@
    "offsetMinutes": -600,
    "countries": [
     "CK"
+   ],
+   "note": ""
+  },
+  {
+   "id": "Pacific/Saipan",
+   "region": "Pacific",
+   "city": "Saipan",
+   "offsetMinutes": 600,
+   "countries": [
+    "MP"
    ],
    "note": ""
   },
@@ -3217,13 +4151,9 @@
    "city": "Tarawa",
    "offsetMinutes": 720,
    "countries": [
-    "KI",
-    "MH",
-    "TV",
-    "UM",
-    "WF"
+    "KI"
    ],
-   "note": "Gilberts, Marshalls, Wake"
+   "note": "Gilbert Islands"
   },
   {
    "id": "Pacific/Tongatapu",
@@ -3232,6 +4162,26 @@
    "offsetMinutes": 780,
    "countries": [
     "TO"
+   ],
+   "note": ""
+  },
+  {
+   "id": "Pacific/Wake",
+   "region": "Pacific",
+   "city": "Wake",
+   "offsetMinutes": 720,
+   "countries": [
+    "UM"
+   ],
+   "note": "Wake Island"
+  },
+  {
+   "id": "Pacific/Wallis",
+   "region": "Pacific",
+   "city": "Wallis",
+   "offsetMinutes": 720,
+   "countries": [
+    "WF"
    ],
    "note": ""
   },
