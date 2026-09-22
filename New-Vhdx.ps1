@@ -2532,8 +2532,8 @@ function Start-InteractiveConfiguration {
     # The first blade. Everything below this point is the Windows path; Linux returns
     # its own configuration object and the caller branches on OsFamily.
     $familyItems = @(
-        [PSCustomObject]@{ Id = "Windows"; Label = "Windows  - from installation media (ISO)" }
-        [PSCustomObject]@{ Id = "Linux";   Label = "Linux    - from a distribution cloud image (downloaded)" }
+        [PSCustomObject]@{ Id = "Windows"; Label = "Windows" }
+        [PSCustomObject]@{ Id = "Linux";   Label = "Linux" }
     )
     $familyId = Show-Menu -Title "What kind of gold is this?" -Items $familyItems `
         -Heading "Operating system" -HeadingHint "Windows builds from an ISO; Linux fetches a cloud image"
@@ -2963,6 +2963,9 @@ function Write-DownloadProgressLine {
         [int64]$BytesRead,
         [int64]$TotalBytes,
         [double]$BytesPerSecond,
+        # Only ever seen when the total is unknown - everything else on the line is the
+        # same whether the bytes came off a mirror or off another disk.
+        [string]$Activity = "downloading",
         [switch]$Final
     )
 
@@ -2987,7 +2990,13 @@ function Write-DownloadProgressLine {
         elseif ($BytesPerSecond -gt 0)  { $eta = "ETA {0,-7}" -f (Format-Duration -Seconds (($TotalBytes - $BytesRead) / $BytesPerSecond)) }
         else                            { $eta = "ETA {0,-7}" -f "--:--" }
 
-        $stats = ("{0,4}%  " -f $percent) + $counts + "  " + $rate + "  " + $eta
+        # The percentage is the one number somebody reads at a glance, so it carries the
+        # foreground the brackets do. Everything after it - the byte counts, the rate,
+        # the ETA - is detail and stays muted. Split only at drawing time: the width
+        # calculation below needs the whole line's length either way.
+        $percentText = "{0,4}%" -f $percent
+        $statsRest = "  " + $counts + "  " + $rate + "  " + $eta
+        $stats = $percentText + $statsRest
 
         # The bar gets whatever is left. Two for the brackets, two for the leading
         # indent, one so the line never lands in the last cell - writing there wraps
@@ -3007,7 +3016,8 @@ function Write-DownloadProgressLine {
         Write-Studio -Text ("#" * $filled) -Key "accent" -NoNewline
         Write-Studio -Text ("-" * ($barWidth - $filled)) -Key "border" -NoNewline
         Write-Studio -Text "]" -Key "fg" -NoNewline
-        Write-Studio -Text $stats -Key "muted" -NoNewline
+        Write-Studio -Text $percentText -Key "fg" -NoNewline
+        Write-Studio -Text $statsRest -Key "muted" -NoNewline
         $drawn = 3 + $barWidth + $stats.Length
     }
     else {
@@ -3015,9 +3025,9 @@ function Write-DownloadProgressLine {
         # no percentage to show and no end to predict, so the line says what it knows.
         $stats = "  " + (Format-ByteSize -Bytes $BytesRead) + $rate
         Write-Host "`r" -NoNewline
-        Write-Studio -Text "  [ downloading ]" -Key "fg" -NoNewline
+        Write-Studio -Text "  [ $Activity ]" -Key "fg" -NoNewline
         Write-Studio -Text $stats -Key "muted" -NoNewline
-        $drawn = 16 + $stats.Length
+        $drawn = 6 + $Activity.Length + $stats.Length
     }
 
     # Pad out whatever the previous, longer line left behind.
@@ -3025,6 +3035,108 @@ function Write-DownloadProgressLine {
     if ($slack -gt 0) { Write-Host (" " * $slack) -NoNewline }
 
     if ($Final) { Write-Host "" }
+}
+
+function Copy-FileWithProgress {
+    <#
+        Copy-Item with the download bar in front of it.
+
+        Worth the code for one reason: the files this copies are golds. A non-
+        differencing VM copies a 32 GB disk, and Copy-Item says nothing at all while it
+        does - so a build that is working looks identical to a build that has hung, for
+        several minutes at a time.
+
+        Same loop as the downloader and the same bar: read a buffer, write it, redraw on
+        a clock rather than per buffer. 4 MiB rather than the downloader's 256 KiB,
+        because this is disk to disk and the syscalls cost more than the bytes.
+
+        Falls back to Copy-Item when the console cannot draw - and on failure deletes the
+        half-written destination, so a copy that died cannot be mistaken for a disk.
+    #>
+    param(
+        [Parameter(Mandatory = $true)][string]$Source,
+        [Parameter(Mandatory = $true)][string]$Destination,
+        [string]$Activity = "copying",
+        [int]$BufferSize = 4194304
+    )
+
+    if (-not (Test-MenuHostSupported)) {
+        Copy-Item -LiteralPath $Source -Destination $Destination -Force -ErrorAction Stop
+        return
+    }
+
+    $sourceInfo = Get-Item -LiteralPath $Source -ErrorAction Stop
+    $totalBytes = [int64]$sourceInfo.Length
+
+    $directory = Split-Path -Path $Destination -Parent
+    if ($directory -and -not (Test-Path -LiteralPath $directory)) {
+        New-Item -ItemType Directory -Path $directory -Force | Out-Null
+    }
+
+    $inStream = $null
+    $outStream = $null
+    $completed = $false
+    try {
+        $inStream = [System.IO.File]::Open($Source, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Read, [System.IO.FileShare]::Read)
+        $outStream = [System.IO.File]::Open($Destination, [System.IO.FileMode]::Create, [System.IO.FileAccess]::Write, [System.IO.FileShare]::None)
+
+        $buffer = [byte[]]::new($BufferSize)
+        $copied = [int64]0
+        $clock = [System.Diagnostics.Stopwatch]::StartNew()
+        $lastDraw = [double]0
+
+        $sampleTimes = New-Object System.Collections.ArrayList
+        $sampleBytes = New-Object System.Collections.ArrayList
+        $windowSeconds = 3.0
+
+        Write-Host ""
+        Write-DownloadProgressLine -BytesRead 0 -TotalBytes $totalBytes -BytesPerSecond 0 -Activity $Activity
+
+        while ($true) {
+            $read = $inStream.Read($buffer, 0, $BufferSize)
+            if ($read -le 0) { break }
+            $outStream.Write($buffer, 0, $read)
+            $copied += $read
+
+            $now = $clock.Elapsed.TotalSeconds
+            [void]$sampleTimes.Add($now)
+            [void]$sampleBytes.Add($copied)
+            while ($sampleTimes.Count -gt 2 -and ($now - $sampleTimes[0]) -gt $windowSeconds) {
+                $sampleTimes.RemoveAt(0)
+                $sampleBytes.RemoveAt(0)
+            }
+
+            if ((($now - $lastDraw) * 1000) -ge 80) {
+                $lastDraw = $now
+                $rate = 0.0
+                $span = $now - $sampleTimes[0]
+                if ($span -gt 0.2) { $rate = ($copied - $sampleBytes[0]) / $span }
+                Write-DownloadProgressLine -BytesRead $copied -TotalBytes $totalBytes -BytesPerSecond $rate -Activity $Activity
+            }
+        }
+
+        $outStream.Flush()
+        $clock.Stop()
+
+        $average = 0.0
+        if ($clock.Elapsed.TotalSeconds -gt 0) { $average = $copied / $clock.Elapsed.TotalSeconds }
+        Write-DownloadProgressLine -BytesRead $copied -TotalBytes $totalBytes -BytesPerSecond $average -Activity $Activity -Final
+        Write-Host ""
+
+        if ($copied -ne $totalBytes) {
+            throw "Copied $copied of $totalBytes bytes from '$Source'"
+        }
+        $completed = $true
+        Write-Log "Copied $(Format-ByteSize -Bytes $copied) in $(Format-Duration -Seconds $clock.Elapsed.TotalSeconds) ($(Format-ByteSize -Bytes ([int64]$average))/s)" -Tag "ok"
+    }
+    finally {
+        if ($inStream) { $inStream.Dispose() }
+        if ($outStream) { $outStream.Dispose() }
+        # A half-copied gold is worse than no gold: it is a file that looks like a disk.
+        if (-not $completed -and (Test-Path -LiteralPath $Destination)) {
+            Remove-Item -LiteralPath $Destination -Force -ErrorAction SilentlyContinue
+        }
+    }
 }
 
 function Invoke-ImageDownload {
@@ -3663,7 +3775,7 @@ function Get-LinuxImageCatalog {
         [PSCustomObject]@{
             Id            = "ubuntu-2604"
             Name          = "Ubuntu 26.04 LTS (Resolute)"
-            GoldName      = "hv-ubuntu-2604"
+            ImageId       = "ubuntu2604"
             Distro        = "ubuntu"
             Version       = "26.04"
             Url           = "https://cloud-images.ubuntu.com/releases/26.04/release/ubuntu-26.04-server-cloudimg-amd64.img"
@@ -3679,7 +3791,7 @@ function Get-LinuxImageCatalog {
         [PSCustomObject]@{
             Id            = "ubuntu-2404"
             Name          = "Ubuntu 24.04 LTS (Noble)"
-            GoldName      = "hv-ubuntu-2404"
+            ImageId       = "ubuntu2404"
             Distro        = "ubuntu"
             Version       = "24.04"
             Url           = "https://cloud-images.ubuntu.com/releases/24.04/release/ubuntu-24.04-server-cloudimg-amd64.img"
@@ -3693,7 +3805,7 @@ function Get-LinuxImageCatalog {
         [PSCustomObject]@{
             Id            = "debian-13"
             Name          = "Debian 13 (Trixie)"
-            GoldName      = "hv-debian-13"
+            ImageId       = "debian13"
             Distro        = "debian"
             Version       = "13"
             # genericcloud, NOT the variant Debian calls `nocloud`. That one contains no
@@ -3839,12 +3951,22 @@ function Write-LinuxGoldManifest {
     param(
         [Parameter(Mandatory = $true)][string]$VhdPath,
         [Parameter(Mandatory = $true)][object]$Entry,
+        [string]$Target = "HyperV",
         [string]$Language,
         [string]$Locale,
         [string]$KeyboardLayout,
         [string]$TimeZone,
+        [string]$VhdType,
         [string]$SourceChecksum
     )
+
+    if ($Target -eq "AzureLocal") {
+        # Same rule as Write-GoldImageManifest: Build-Vms.ps1 reads the sidecar beside a
+        # gold it picked, and it only ever picks hv-*. An azl- gold has no reader, so a
+        # manifest there would imply a consumer that does not exist.
+        Write-Log "Azure Local gold - no sidecar manifest written (nothing reads one on that path)" -Tag "Info"
+        return $true
+    }
 
     $manifestPath = "$VhdPath.json"
     $manifest = [ordered]@{
@@ -3852,8 +3974,9 @@ function Write-LinuxGoldManifest {
         distro         = $Entry.Distro
         distroVersion  = $Entry.Version
         imageName      = $Entry.Name
-        target         = "HyperV"
+        target         = $Target
         generation     = $Entry.Generation
+        vhdType        = $VhdType
         # language and locale are SEPARATE on Linux: language becomes LANG, locale
         # becomes the LC_* format family. A reader that conflates them gets German
         # error messages it did not ask for.
@@ -3898,16 +4021,22 @@ function New-LinuxGoldImage {
         [Parameter(Mandatory = $true)][string]$ImagePath,
         [Parameter(Mandatory = $true)][string]$OutputDirectory,
         [Parameter(Mandatory = $true)][int]$DiskSizeGB,
+        [ValidateSet("Dynamic", "Fixed")][string]$VhdType = "Dynamic",
+        [string]$GoldName,
         [string]$WorkDirectory
     )
+
+    # The caller always names the gold now, because the name carries the language and
+    # only the caller knows it. The bare imageId is a last resort, not a default.
+    if ([string]::IsNullOrWhiteSpace($GoldName)) { $GoldName = [string]$Entry.ImageId }
 
     if ([string]::IsNullOrWhiteSpace($WorkDirectory)) { $WorkDirectory = $OutputDirectory }
     if (-not (Test-Path -LiteralPath $OutputDirectory)) {
         New-Item -ItemType Directory -Path $OutputDirectory -Force | Out-Null
     }
 
-    $vhdxPath = Join-Path -Path $OutputDirectory -ChildPath ("{0}.vhdx" -f $Entry.GoldName)
-    $intermediateVhd = Join-Path -Path $WorkDirectory -ChildPath ("{0}.tmp.vhd" -f $Entry.GoldName)
+    $vhdxPath = Join-Path -Path $OutputDirectory -ChildPath ("{0}.vhdx" -f $GoldName)
+    $intermediateVhd = Join-Path -Path $WorkDirectory -ChildPath ("{0}.tmp.vhd" -f $GoldName)
 
     if (Test-Path -LiteralPath $vhdxPath) {
         Write-Log "Replacing the existing gold '$vhdxPath'" -Tag "Info"
@@ -3927,14 +4056,16 @@ function New-LinuxGoldImage {
             # Debian also publishes a bare .raw. Nothing to decode - it only needs the
             # footer, so it takes the same path from here on.
             Write-Log "Copying the raw disk image" -Tag "Run"
-            Copy-Item -LiteralPath $ImagePath -Destination $intermediateVhd -Force
+            Copy-FileWithProgress -Source $ImagePath -Destination $intermediateVhd -Activity "copying image"
             $virtualSize = (Get-Item -LiteralPath $intermediateVhd).Length
         }
 
         Add-FixedVhdFooter -RawPath $intermediateVhd -DiskSize $virtualSize
 
-        Write-Log "Converting to a dynamic VHDX" -Tag "Run"
-        Convert-VHD -Path $intermediateVhd -DestinationPath $vhdxPath -VHDType Dynamic -ErrorAction Stop
+        # Fixed writes the whole file out here rather than growing on demand, so this
+        # step and the resize below are both slower and land the full size on disk.
+        Write-Log "Converting to a $($VhdType.ToLowerInvariant()) VHDX" -Tag "Run"
+        Convert-VHD -Path $intermediateVhd -DestinationPath $vhdxPath -VHDType $VhdType -ErrorAction Stop
 
         $targetBytes = [int64]$DiskSizeGB * 1GB
         if ($targetBytes -gt $virtualSize) {
@@ -4010,6 +4141,73 @@ function Import-LinuxTimeZoneCatalog {
 
     $script:LinuxTimeZones = @($zones)
     Write-Log "Loaded $($zones.Count) IANA time zones" -Tag "Debug"
+}
+
+function Get-LinuxGoldFeatureCatalog {
+    <#
+        The Linux half of the optional features picker, and the same idea as the Windows
+        one next door: decisions baked into the gold once, rather than repeated per VM.
+
+        Nothing here installs a package. Every entry is a file the bake writes or a line
+        it edits, so none of them need a mirror to be reachable - which matters, because
+        a feature that only works when apt does is a feature that fails on the day the
+        network is the problem.
+
+        Ubuntu-only entries carry Distro; the picker leaves them out for Debian rather
+        than offering a tick that would do nothing.
+    #>
+
+    return @(
+        [PSCustomObject]@{
+            Id        = "aliases"
+            Label     = "Shell aliases (ll, la, l, cls, .., cd.., colour ls/grep)"
+            DefaultOn = $true
+            Distro    = ""
+        }
+        [PSCustomObject]@{
+            # Off by default: both images ship it commented out, and a gold should not
+            # quietly disagree with the distribution about how a shell looks. Still on
+            # the list for anyone who wants it - it is one tick.
+            Id        = "colorprompt"
+            Label     = "Colour prompt (force_color_prompt)"
+            DefaultOn = $false
+            Distro    = ""
+        }
+        [PSCustomObject]@{
+            # Measured, not assumed: /etc/default/motd-news ships ENABLED=1 with
+            # URLS="https://motd.ubuntu.com" and WAIT=5, so every login on an isolated
+            # network waits up to five seconds on a fetch that cannot succeed. The
+            # adverts beside it are the Pro/ESM contract line, landscape sysinfo, the
+            # updates-available count and the HWE end-of-life notice.
+            # Off by default like the colour prompt: it edits files the distribution
+            # ships and disables scripts it installed, which is a decision to take on
+            # purpose rather than to inherit. The five-second login stall is the reason
+            # to take it, and it is one tick away.
+            Id        = "quietmotd"
+            Label     = "Quiet the login banner (no motd-news fetch, no Pro/ESM adverts)"
+            DefaultOn = $false
+            Distro    = "ubuntu"
+        }
+    )
+}
+
+function Get-LinuxGoldName {
+    <#
+        The gold's file name: <hv|azl>-<language>-<imageId>, which is the SAME three
+        segments Get-VhdxFileName builds for Windows - hv-enus-ubuntu2604 beside
+        hv-dede-ws2025-datacenter-core.
+
+        That is not cosmetic. Get-GoldNameParts in Build-Vms.ps1 parses exactly this
+        shape, so a Linux gold is resolved by the ordinary imageId lookup and takes part
+        in language selection like any other: two golds of one distribution in two
+        languages can sit in the folder and be told apart.
+    #>
+    param([object]$Entry, [string]$Target, [string]$Language)
+
+    $prefix = "azl"
+    if ($Target -ne "AzureLocal") { $prefix = "hv" }
+    $slug = Get-LanguageSlug -ImageLanguage $Language
+    return ("{0}-{1}-{2}" -f $prefix, $slug, $Entry.ImageId).ToLowerInvariant()
 }
 
 function Get-AptMirrorCatalog {
@@ -4205,128 +4403,76 @@ function Get-LinuxKeymap {
     return "us"
 }
 
-function Get-IsoStreamWriterType {
+function New-CloudInitSeedDisk {
     <#
-        IMAPI2FS hands back its finished image as a COM IStream, and PowerShell cannot
-        get at it: casting the __ComObject to
-        System.Runtime.InteropServices.ComTypes.IStream throws
+        Writes the cloud-init seed as a small FAT32 VHDX instead of an ISO.
 
-            Cannot convert the "System.__ComObject" value of type "System.__ComObject"
-            to type "System.Runtime.InteropServices.ComTypes.IStream"
+        cloud-init's NoCloud datasource does not care which of the two it gets. Its own
+        code looks for `TYPE=vfat` FIRST and `TYPE=iso9660` second, then intersects that
+        with a case-insensitive `LABEL=cidata` - so a formatted disk and a mastered disc
+        are equally valid seeds. Given the choice, a VHDX is the better one here: this
+        project produces VHDX, a VM ends up with disks rather than a disc drive nobody
+        asked for, and it needs no IMAPI2FS, no COM and no compiled IStream helper.
 
-        because the PowerShell cast operator does not QueryInterface a runtime callable
-        wrapper for an interface it was not already typed as. C#'s `as` does, which is
-        why every published IMAPI script goes through a compiled helper. This is that
-        helper, and it is the whole reason it exists.
+        The label must be exactly CIDATA. Without it the datasource does not recognise
+        the volume and the VM boots unprovisioned, with nothing said about why.
 
-        Added once per session and cached: a resume run reaches this a second time, and
-        Add-Type throws on a type that already exists rather than returning it.
-    #>
-    $existing = "VhdxBuild.IsoStreamWriter" -as [type]
-    if ($existing) { return $existing }
-
-    Add-Type -TypeDefinition @"
-using System;
-using System.IO;
-using System.Runtime.InteropServices;
-using System.Runtime.InteropServices.ComTypes;
-
-namespace VhdxBuild {
-    public static class IsoStreamWriter {
-        public static void Write(object comStream, string path, int blockSize) {
-            IStream stream = comStream as IStream;
-            if (stream == null) {
-                throw new InvalidOperationException("The IMAPI2FS result image did not expose IStream.");
-            }
-            if (blockSize <= 0) { blockSize = 2048; }
-
-            // IStream.Read reports how much it read through unmanaged memory rather
-            // than a return value, so the count needs somewhere to live.
-            IntPtr readCount = Marshal.AllocHGlobal(4);
-            try {
-                using (FileStream file = File.Create(path)) {
-                    byte[] buffer = new byte[blockSize];
-                    while (true) {
-                        stream.Read(buffer, blockSize, readCount);
-                        int got = Marshal.ReadInt32(readCount);
-                        if (got <= 0) { break; }
-                        file.Write(buffer, 0, got);
-                    }
-                    file.Flush();
-                }
-            }
-            finally {
-                Marshal.FreeHGlobal(readCount);
-                // No ReleaseComObject: `as` hands back the SAME runtime callable wrapper
-                // the caller still holds, and releasing it here would leave them with a
-                // separated RCW - a confusing failure a garbage collection would have
-                // avoided by itself. The stream is in memory and small.
-            }
-        }
-    }
-}
-"@ -ErrorAction Stop
-
-    return ("VhdxBuild.IsoStreamWriter" -as [type])
-}
-
-function New-CidataIsoFile {
-    <#
-        The CIDATA seed ISO, written with IMAPI2FS - the disc-mastering COM component
-        that has shipped in Windows since Vista. No mkisofs, no oscdimg.
-
-        The volume label must be exactly CIDATA or cloud-init's NoCloud datasource does
-        not recognise the disc, and the VM then boots unprovisioned with nothing said
-        about why.
-
-        A near-copy of the function in Build-Vms.ps1. Neither script dot-sources the
-        other - they already each carry their own Write-Log - so the two travel
-        together and have to be kept in step.
+        64 MB because Windows will not format FAT32 much below 32 MB, and a dynamic
+        VHDX only occupies what it holds - which for three small text files is nothing.
     #>
     param(
-        [Parameter(Mandatory = $true)][string]$IsoPath,
+        [Parameter(Mandatory = $true)][string]$VhdxPath,
         [Parameter(Mandatory = $true)][string]$UserData,
         [Parameter(Mandatory = $true)][string]$MetaData,
         [string]$NetworkConfig
     )
 
-    $stagingDirectory = Join-Path -Path ([System.IO.Path]::GetTempPath()) -ChildPath ("cidata-" + [Guid]::NewGuid().ToString("N"))
-    New-Item -ItemType Directory -Path $stagingDirectory -Force | Out-Null
+    $directory = Split-Path -Path $VhdxPath -Parent
+    if ($directory -and -not (Test-Path -LiteralPath $directory)) {
+        New-Item -ItemType Directory -Path $directory -Force | Out-Null
+    }
+    if (Test-Path -LiteralPath $VhdxPath) { Remove-Item -LiteralPath $VhdxPath -Force }
 
+    $mounted = $false
     try {
-        # LF endings and no BOM: cloud-init parses YAML, and a BOM makes the first line
-        # unparseable.
+        New-VHD -Path $VhdxPath -SizeBytes 64MB -Dynamic -ErrorAction Stop | Out-Null
+
+        $disk = Mount-VHD -Path $VhdxPath -Passthru -ErrorAction Stop
+        $mounted = $true
+
+        # MBR, not GPT: this is a data volume the firmware never boots from, and MBR
+        # keeps it to one partition with no reserved space to reason about.
+        Initialize-Disk -Number $disk.Number -PartitionStyle MBR -ErrorAction Stop | Out-Null
+        $partition = New-Partition -DiskNumber $disk.Number -UseMaximumSize -AssignDriveLetter -ErrorAction Stop
+        $null = Format-Volume -Partition $partition -FileSystem FAT32 -NewFileSystemLabel "CIDATA" `
+            -Confirm:$false -Force -ErrorAction Stop
+
+        # Re-read it: the drive letter is assigned by the partition call above, and the
+        # object captured before the format does not always carry it.
+        $partition = Get-Partition -DiskNumber $disk.Number | Where-Object { $_.DriveLetter } | Select-Object -First 1
+        if (-not $partition -or -not $partition.DriveLetter) {
+            throw "The seed volume was created but Windows assigned it no drive letter"
+        }
+        $root = "$($partition.DriveLetter):\"
+
+        # LF endings and no BOM. cloud-init parses YAML, and a BOM at the top of
+        # user-data makes the first line unparseable.
         $encoding = New-Object System.Text.UTF8Encoding($false)
-        [System.IO.File]::WriteAllText((Join-Path $stagingDirectory "user-data"), ($UserData -replace "`r`n", "`n"), $encoding)
-        [System.IO.File]::WriteAllText((Join-Path $stagingDirectory "meta-data"), ($MetaData -replace "`r`n", "`n"), $encoding)
+        [System.IO.File]::WriteAllText((Join-Path $root "user-data"), ($UserData -replace "`r`n", "`n"), $encoding)
+        [System.IO.File]::WriteAllText((Join-Path $root "meta-data"), ($MetaData -replace "`r`n", "`n"), $encoding)
         if (-not [string]::IsNullOrWhiteSpace($NetworkConfig)) {
-            [System.IO.File]::WriteAllText((Join-Path $stagingDirectory "network-config"), ($NetworkConfig -replace "`r`n", "`n"), $encoding)
+            [System.IO.File]::WriteAllText((Join-Path $root "network-config"), ($NetworkConfig -replace "`r`n", "`n"), $encoding)
         }
 
-        $image = New-Object -ComObject IMAPI2FS.MsftFileSystemImage
-        $image.FileSystemsToCreate = 3   # ISO9660 (1) + Joliet (2)
-        $image.VolumeName = "CIDATA"
-        $image.Root.AddTree($stagingDirectory, $false)
-
-        $result = $image.CreateResultImage()
-
-        $directory = Split-Path -Path $IsoPath -Parent
-        if ($directory -and -not (Test-Path -LiteralPath $directory)) {
-            New-Item -ItemType Directory -Path $directory -Force | Out-Null
-        }
-        if (Test-Path -LiteralPath $IsoPath) { Remove-Item -LiteralPath $IsoPath -Force }
-
-        # The IStream -> file copy lives in a compiled helper because PowerShell cannot
-        # cast the COM object to IStream at all - see Get-IsoStreamWriterType.
-        $writer = Get-IsoStreamWriterType
-        $writer::Write($result.ImageStream, $IsoPath, [int]$result.BlockSize)
-
-        Write-Log "Wrote seed ISO '$IsoPath'" -Tag "Run"
-        return $IsoPath
+        Write-Log "Wrote cloud-init seed disk '$VhdxPath'" -Tag "Run"
+        return $VhdxPath
     }
     finally {
-        if (Test-Path -LiteralPath $stagingDirectory) {
-            Remove-Item -LiteralPath $stagingDirectory -Recurse -Force -ErrorAction SilentlyContinue
+        if ($mounted) {
+            # Always, and before anything else touches the file: a seed still mounted on
+            # the host is a file the VM cannot be given.
+            try { Dismount-VHD -Path $VhdxPath -ErrorAction Stop }
+            catch { Write-Log "Could not dismount the seed disk '$VhdxPath': $($_.Exception.Message)" -Tag "Error" }
         }
     }
 }
@@ -4353,8 +4499,13 @@ function Get-BakeUserData {
         [object]$Entry,
         [bool]$ApplyUpdates,
         [string[]]$ExtraPackages,
-        [string]$MirrorUri
+        [string]$MirrorUri,
+        [string[]]$Features = @()
     )
+
+    $wantAliases = (@($Features) -contains "aliases")
+    $wantColorPrompt = (@($Features) -contains "colorprompt")
+    $wantQuietMotd = (@($Features) -contains "quietmotd")
 
     $packages = @()
     foreach ($package in @($Entry.BakePackages)) {
@@ -4369,9 +4520,17 @@ function Get-BakeUserData {
     [void]$lines.Add("#cloud-config")
     # A console login, purely so a bake that stalls can be looked at. The first run that
     # hung sat at a login prompt nobody could get past, which turned a five-minute
-    # diagnosis into guesswork. cloud-init clean and the machine-id truncation below
-    # remove this account's traces from the gold, and every VM built from the gold gets
-    # its own user from its own seed.
+    # diagnosis into guesswork.
+    #
+    # It is DELETED at the end of the bake, and that deletion is not optional.
+    # `cloud-init clean` does not remove users - its source only clears logs, the
+    # generated net and ssh config, /var/lib/cloud and machine-id - so without an
+    # explicit userdel this account, with this password and passwordless sudo, would
+    # survive into the gold and into every VM built from it. Reachable over SSH, too,
+    # now that the bake fixes Ubuntu's password-auth drop-in.
+    #
+    # The deletion runs LAST on purpose: a bake that hangs never reaches it, so the
+    # login is still there on exactly the runs where it is needed.
     [void]$lines.Add("users:")
     [void]$lines.Add("  - name: bake")
     [void]$lines.Add("    groups: [sudo]")
@@ -4426,6 +4585,29 @@ function Get-BakeUserData {
         [void]$lines.Add("packages:")
         foreach ($package in $packages) { [void]$lines.Add("  - '$package'") }
     }
+    if ($wantAliases) {
+        # profile.d covers an SSH session, which is a login shell, and every user that
+        # already exists. /etc/skel is what the per-VM user gets: cloud-init creates that
+        # account on FIRST BOOT, which is after this bake, so skel reaches it - and skel
+        # is also what covers a non-login interactive shell, where profile.d is not read.
+        # Hence both, and the skel line sources the same file rather than copying it, so
+        # there is one place to read and no chance of the two drifting.
+        [void]$lines.Add("write_files:")
+        [void]$lines.Add("  - path: /etc/profile.d/99-hv-studio-aliases.sh")
+        [void]$lines.Add("    permissions: '0644'")
+        [void]$lines.Add("    content: |")
+        [void]$lines.Add("      # Baked by HyperV-VM-Studio. Same aliases on every distribution this builds,")
+        [void]$lines.Add("      # which is the point: Ubuntu ships ll/la/l and Debian ships them commented out.")
+        [void]$lines.Add("      alias ls='ls --color=auto'")
+        [void]$lines.Add("      alias grep='grep --color=auto'")
+        [void]$lines.Add("      alias ll='ls -alF'")
+        [void]$lines.Add("      alias la='ls -A'")
+        [void]$lines.Add("      alias l='ls -CF'")
+        [void]$lines.Add("      alias cls='clear'")
+        [void]$lines.Add("      alias ..='cd ..'")
+        [void]$lines.Add("      alias cd..='cd ..'")
+    }
+
     [void]$lines.Add("runcmd:")
     # Everything below prints to the console, which is ttyS0 on these images, which is
     # the pipe the host is reading.
@@ -4435,11 +4617,50 @@ function Get-BakeUserData {
     # shell literally.
     [void]$lines.Add('  - [ sh, -c, ''echo BAKE-KERNEL $(uname -r)'' ]')
     [void]$lines.Add("  - [ sh, -c, 'dpkg -l | grep -c hyperv || true' ]")
+
+    # No sshd edits here, and that is a correction rather than an omission.
+    #
+    # An earlier version commented `PasswordAuthentication` out of the image's
+    # /etc/ssh/sshd_config.d/60-cloudimg-settings.conf, on the reading that cloud-init
+    # wrote ssh_pwauth into the MAIN sshd_config and therefore lost to that drop-in.
+    # That reading was wrong. cloud-init's update_ssh_config calls
+    # _ensure_cloud_init_ssh_config_file first, which - whenever sshd_config carries the
+    # `Include sshd_config.d/*.conf` line - redirects the write to
+    # /etc/ssh/sshd_config.d/50-cloud-init.conf. 50 sorts before 60, sshd keeps the
+    # FIRST value it obtains, so cloud-init's file already wins. `ssh_pwauth` in the
+    # per-VM seed works on these images with nothing baked in to help it.
+    #
+    # Removing that edit also removes a way to be less safe: with the vendor line
+    # commented out, a VM that ever boots WITHOUT a seed would fall back to sshd's own
+    # default of yes, rather than staying closed the way the image shipped.
+    [void]$lines.Add("  - [ sh, -c, 'systemctl enable --now ssh 2>/dev/null || systemctl enable --now sshd 2>/dev/null || true' ]")
     # Generalize: the gold must carry no identity of its own.
+    if ($wantAliases) {
+        [void]$lines.Add('  - [ sh, -c, "grep -q 99-hv-studio-aliases /etc/skel/.bashrc || echo \". /etc/profile.d/99-hv-studio-aliases.sh\" >> /etc/skel/.bashrc" ]')
+    }
+    if ($wantColorPrompt) {
+        # Both images ship this line commented out; uncommenting it in skel is what the
+        # per-VM user inherits when cloud-init creates the account at first boot.
+        [void]$lines.Add('  - [ sh, -c, "sed -i s/^#force_color_prompt=yes/force_color_prompt=yes/ /etc/skel/.bashrc || true" ]')
+    }
+    if ($wantQuietMotd) {
+        # ENABLED=0 stops the fetch itself; the chmod stops the scripts that print the
+        # adverts. 00-header and the reboot-required notice are deliberately left alone -
+        # the first says what the machine is and the second is the one line on a login
+        # banner that has ever mattered.
+        [void]$lines.Add('  - [ sh, -c, "sed -i s/^ENABLED=1/ENABLED=0/ /etc/default/motd-news 2>/dev/null || true" ]')
+        [void]$lines.Add('  - [ sh, -c, "chmod -x /etc/update-motd.d/50-motd-news /etc/update-motd.d/91-contract-ua-esm-status /etc/update-motd.d/50-landscape-sysinfo /etc/update-motd.d/90-updates-available /etc/update-motd.d/95-hwe-eol /etc/update-motd.d/10-help-text 2>/dev/null || true" ]')
+    }
     [void]$lines.Add("  - [ cloud-init, clean, '--logs', '--machine-id' ]")
     [void]$lines.Add("  - [ sh, -c, 'rm -f /etc/ssh/ssh_host_*' ]")
     [void]$lines.Add("  - [ sh, -c, 'rm -f /etc/netplan/50-cloud-init.yaml' ]")
     [void]$lines.Add("  - [ sh, -c, 'truncate -s 0 /etc/machine-id' ]")
+    # The diagnostic account goes here, at the end, once everything that might have
+    # needed it has succeeded. -f because the account may own a running process, -r to
+    # take its home directory with it, and the sudoers drop-in is cloud-init's own file
+    # for the users it provisioned - it names this account and nothing else.
+    [void]$lines.Add("  - [ sh, -c, 'userdel -f -r bake 2>/dev/null || true' ]")
+    [void]$lines.Add("  - [ sh, -c, 'rm -f /etc/sudoers.d/90-cloud-init-users' ]")
     # Both, on purpose. /dev/console resolves to whichever console= came LAST on the
     # kernel command line, so on an image that ends up with console=tty1 the sentinel
     # would land on the video console and never reach the pipe the host is reading -
@@ -4626,9 +4847,9 @@ function Invoke-LinuxBakeBoot {
         [int]$TimeoutMinutes = 30
     )
 
-    $vmName = "bake-" + $Entry.GoldName + "-" + ([Guid]::NewGuid().ToString("N").Substring(0, 6))
+    $vmName = "bake-" + $Entry.ImageId + "-" + ([Guid]::NewGuid().ToString("N").Substring(0, 6))
     $pipeName = "bake-" + [Guid]::NewGuid().ToString("N").Substring(0, 12)
-    $isoPath = [System.IO.Path]::ChangeExtension($VhdxPath, ".bake.iso")
+    $seedPath = [System.IO.Path]::ChangeExtension($VhdxPath, ".bake-seed.vhdx")
     $created = $false
 
     try {
@@ -4682,16 +4903,23 @@ function Invoke-LinuxBakeBoot {
             Write-Log "apt mirror: $mirrorUri" -Tag "Info"
         }
 
-        $userData = Get-BakeUserData -Entry $Entry -ApplyUpdates $ApplyUpdates -ExtraPackages $ExtraPackages -MirrorUri $mirrorUri
+        $bakeFeatures = @()
+        if ($Config) { $bakeFeatures = @($Config.BakeFeatures) }
+        if (@($bakeFeatures).Count -gt 0) { Write-Log "Baking optional features: $(@($bakeFeatures) -join ', ')" -Tag "Info" }
+
+        $userData = Get-BakeUserData -Entry $Entry -ApplyUpdates $ApplyUpdates -ExtraPackages $ExtraPackages -MirrorUri $mirrorUri -Features $bakeFeatures
         $metaData = "instance-id: bake-" + [DateTime]::UtcNow.ToString("yyyyMMddHHmmss") + "`nlocal-hostname: bake`n"
-        $null = New-CidataIsoFile -IsoPath $isoPath -UserData $userData -MetaData $metaData -NetworkConfig $networkConfig
+        $null = New-CloudInitSeedDisk -VhdxPath $seedPath -UserData $userData -MetaData $metaData -NetworkConfig $networkConfig
 
-        Add-VMDvdDrive -VMName $vmName -Path $isoPath -ErrorAction Stop
-
-        # The boot order has to name the disk: a Generation 2 VM offered a DVD will try
-        # it first, and a CIDATA disc is not bootable.
-        $bootDisk = Get-VMHardDiskDrive -VMName $vmName -ErrorAction Stop | Select-Object -First 1
+        # The boot device is named BEFORE the seed is attached, and by path rather than
+        # by position: with two disks on the controller, "the first one" stops meaning
+        # the gold, and a VM that boots the 64 MB seed finds no operating system on it.
+        $bootDisk = Get-VMHardDiskDrive -VMName $vmName -ErrorAction Stop |
+            Where-Object { $_.Path -eq $VhdxPath } | Select-Object -First 1
+        if ($null -eq $bootDisk) { throw "The bake VM has no disk at '$VhdxPath' to boot from" }
         Set-VMFirmware -VMName $vmName -FirstBootDevice $bootDisk -ErrorAction Stop
+
+        Add-VMHardDiskDrive -VMName $vmName -Path $seedPath -ErrorAction Stop
 
         Set-VMComPort -VMName $vmName -Number 1 -Path "\\.\pipe\$pipeName" -ErrorAction Stop
 
@@ -4717,7 +4945,16 @@ function Invoke-LinuxBakeBoot {
             return $false
         }
 
-        $logPath = [System.IO.Path]::ChangeExtension($VhdxPath, ".bake.log")
+        # Beside the run's own log, not beside the gold. The vhdx folder holds disks
+        # and their sidecars; a 127 KB console transcript is neither, and leaving it
+        # there means every gold ships with a stray file that looks like part of it.
+        # Named for the gold and stamped, so several bakes of the same image do not
+        # overwrite each other the way a fixed name would.
+        $logPath = Join-Path -Path $logFileDirectory -ChildPath (
+            "{0}-bake-{1}.log" -f [System.IO.Path]::GetFileNameWithoutExtension($VhdxPath), (Get-Date -Format "yyyyMMdd-HHmm"))
+        if (-not (Test-Path -LiteralPath $logFileDirectory)) {
+            New-Item -ItemType Directory -Path $logFileDirectory -Force | Out-Null
+        }
         try {
             [System.IO.File]::WriteAllText($logPath, $transcript, (New-Object System.Text.UTF8Encoding($false)))
             Write-Log "Bake console transcript written to '$logPath'" -Tag "Info"
@@ -4760,8 +4997,8 @@ function Invoke-LinuxBakeBoot {
                 Write-Log "Could not remove the bake VM '$vmName': $($_.Exception.Message) - remove it by hand before using this gold" -Tag "Error"
             }
         }
-        if (Test-Path -LiteralPath $isoPath) {
-            Remove-Item -LiteralPath $isoPath -Force -ErrorAction SilentlyContinue
+        if (Test-Path -LiteralPath $seedPath) {
+            Remove-Item -LiteralPath $seedPath -Force -ErrorAction SilentlyContinue
         }
     }
 }
@@ -4784,18 +5021,46 @@ function Start-LinuxInteractiveConfiguration {
         [string]$CurrentOutputDirectory
     )
 
-    Import-LinuxTimeZoneCatalog
-
     $catalog = @(Get-LinuxImageCatalog)
     $distroItems = @()
     foreach ($entry in $catalog) {
-        $distroItems += [PSCustomObject]@{ Id = $entry.Id; Label = "$($entry.Name)  ->  $($entry.GoldName)" }
+        $distroItems += [PSCustomObject]@{ Id = $entry.Id; Label = $entry.Name }
     }
 
     $distroId = Show-Menu -Title "Select a Linux distribution" -Items $distroItems `
         -Heading "Distribution" -HeadingHint "The cloud image this gold is built from"
     if ($null -eq $distroId) { return $null }
     $entry = $catalog | Where-Object { $_.Id -eq $distroId } | Select-Object -First 1
+
+    # The same question the Windows path asks, and it decides the same two things: the
+    # gold's prefix, and whether a sidecar manifest is written at all.
+    $targetItems = @(
+        [PSCustomObject]@{ Id = "HyperV";     Label = "Hyper-V" }
+        [PSCustomObject]@{ Id = "AzureLocal"; Label = "Azure Local" }
+    )
+    $targetDefault = 0
+    if ($CurrentTarget -eq "AzureLocal") { $targetDefault = 1 }
+    $targetId = Show-Menu -Title "Select deployment target" -Items $targetItems -SelectedIndex $targetDefault `
+        -Heading "Target platform" -HeadingHint "Where this gold will be deployed - it decides the gold's name prefix" `
+        -StatusLines ([ordered]@{ distro = $entry.Name })
+    if ($null -eq $targetId) { return $null }
+    # Worked out after the language blade below, because the name now carries it.
+    $goldName = ""
+
+    if ($targetId -eq "AzureLocal") {
+        # Worth saying once, plainly. Build-Vms.ps1 enumerates hv-*.vhdx and nothing
+        # else, so an azl- gold never meets this project's seed machinery: whatever
+        # Azure Local does for cloud-init is what that VM gets. The bake still runs -
+        # it happens on this Hyper-V host - so the kernel, the daemons and the SSH
+        # settings baked in are the only ones such a VM will ever have.
+        Show-MenuHeader -Title "Azure Local" -StatusLines ([ordered]@{ distro = $entry.Name })
+        Write-Studio -Text "  An Azure Local gold is not provisioned by Build-Vms.ps1 - it only builds hv-* golds." -Key "muted"
+        Write-Studio -Text "  No per-VM seed is written for it, and no sidecar manifest: nothing on that path reads one." -Key "muted"
+        Write-Studio -Text "  What the bake puts in is all such a VM carries, so pick the bake options with that in mind." -Key "muted"
+        Write-Host ""
+        Write-Studio -Text ("  " + ("-" * 62)) -Key "muted"
+        Write-Host ""
+    }
 
     # Three separate questions, because on Linux they really are three separate things.
     #
@@ -4817,7 +5082,8 @@ function Start-LinuxInteractiveConfiguration {
         # the two spellings sitting next to each other are what made this easy to write.
         $localeItems += [PSCustomObject]@{ Id = $tag; Label = "$tag - $(Get-LocaleDisplayName -Locale $tag)" }
     }
-    # 1. Language - LANG, so what the system SAYS. en-US by default: English logs stay
+    # 1. Language - LANG, so what the system SAYS, and the gold's middle segment.
+    # en-US by default: English logs stay
     # greppable and every upstream error message matches what a search engine has seen.
     $languageDefault = [array]::IndexOf(@($localeItems.Id), "en-US")
     if ($languageDefault -lt 0) { $languageDefault = 0 }
@@ -4825,6 +5091,7 @@ function Start-LinuxInteractiveConfiguration {
         -Heading "Language" -HeadingHint "LANG - the language of messages, logs and man pages. Leave it on en-US unless you want translated error text" `
         -StatusLines ([ordered]@{ distro = $entry.Name })
     if ($null -eq $language) { return $null }
+    $goldName = Get-LinuxGoldName -Entry $entry -Target $targetId -Language $language
 
     # 2. Locale - the LC_* format family, so what the system SHOWS. Dates, decimal
     # separators, currency, paper size.
@@ -4847,7 +5114,15 @@ function Start-LinuxInteractiveConfiguration {
         })
     if ($null -eq $keyboard) { return $null }
 
-    # 313 zones sorted by region put UTC near the bottom and Europe in the middle, which
+    # Loaded HERE rather than at the top of this function. It parses a 54 KB catalogue
+    # into 419 objects and logs a line when it is done, and at the top that line landed
+    # on the PREVIOUS menu's screen - so choosing Linux printed a log row, paused, and
+    # only then cleared and drew the next blade. Three paints for one keypress, which
+    # reads as a flicker. Here the pause belongs to the blade that needs the data, and
+    # the log line is cleared by the menu that follows it.
+    Import-LinuxTimeZoneCatalog
+
+    # 419 zones sorted by region put UTC near the bottom and Europe in the middle, which
     # meant scrolling a long way to reach the one this lab actually uses. The default is
     # the configured locale's own zone where that can be worked out, Europe/Berlin
     # otherwise - and either way Home/End still reach the ends of the list.
@@ -4865,22 +5140,23 @@ function Start-LinuxInteractiveConfiguration {
         })
     if ($null -eq $timeZone) { return $null }
 
-    Show-MenuHeader -Title "Disk" -StatusLines ([ordered]@{
-        distro   = $entry.Name
-        language = (Get-LinuxLocaleName -LocaleTag $language)
-        format   = (Get-LinuxLocaleName -LocaleTag $locale)
-        keyboard = (Get-LinuxKeymap -LocaleTag $keyboard)
-        timezone = $timeZone
-    })
-    # Show-MenuHeader already ends on a blank line - adding another gave the block two.
-    # Every VM differences off this gold and a differencing child cannot be resized
-    # independently of its parent, so this number is the size of every machine built
-    # from it - not a default a VM may override later.
-    Write-Studio -Text "  The gold's disk size is the disk size of every VM built from it." -Key "muted"
-    Write-Studio -Text "  A differencing child cannot be resized away from its parent." -Key "muted"
-    Write-Host ""
-    Write-BladeFooterAbove -ReserveLines 1
-    $diskGB = Read-BoundedInt -Prompt "  Disk size (GB)" -DefaultValue $entry.DefaultDiskGB -MinValue 8 -MaxValue 2048
+    # The same single-screen form the Windows path uses - size and provisioning type
+    # together - rather than a second way of asking the same two questions. Fixed and
+    # Dynamic mean exactly what they mean for a Windows gold, and both targets take
+    # either: an Azure Local gold is a VHDX like any other.
+    $vhdxConfig = Show-VhdxConfigForm -Title "Configure VHDX" `
+        -Subtitle "The gold's disk size is every VM's disk size - a differencing child cannot be resized away from its parent" `
+        -StatusLines ([ordered]@{
+            distro   = $entry.Name
+            target   = $targetId
+            language = (Get-LinuxLocaleName -LocaleTag $language)
+            format   = (Get-LinuxLocaleName -LocaleTag $locale)
+            timezone = $timeZone
+        }) `
+        -DefaultSizeGB $entry.DefaultDiskGB -MinSizeGB 8 -MaxSizeGB 2048 -DefaultType "Dynamic"
+    if ($null -eq $vhdxConfig) { return $null }
+    $diskGB = $vhdxConfig.SizeGB
+    $vhdType = $vhdxConfig.Type
 
     # The bake boot needs a switch with a route to the distribution mirrors. There is no
     # way to install a kernel without one, so the question is asked rather than guessed,
@@ -5094,6 +5370,31 @@ function Start-LinuxInteractiveConfiguration {
         }
     }
 
+    # Optional features, the Linux counterpart to the Windows picker. Asked even when
+    # the bake is skipped: these are file edits, not package installs, so they cost
+    # nothing and work without a mirror - but they DO need a boot to be applied, so a
+    # skipped bake means a skipped feature, and the picker says so rather than pretending.
+    $bakeFeatures = @()
+    if ($switchName -ne "__skip__") {
+        $featureItems = @()
+        foreach ($feature in @(Get-LinuxGoldFeatureCatalog)) {
+            if (-not [string]::IsNullOrWhiteSpace($feature.Distro) -and $feature.Distro -ne $entry.Distro) { continue }
+            $featureItems += [PSCustomObject]@{
+                Id       = $feature.Id
+                Label    = $feature.Label
+                Selected = [bool]$feature.DefaultOn
+                Section  = "Optional"
+            }
+        }
+        if ($featureItems.Count -gt 0) {
+            $bakeFeatures = Show-MultiSelectMenu -Title "Optional features" -Items $featureItems -AllowEmpty `
+                -Subtitle "Space toggles selection - all of these are baked into the gold, not per VM" `
+                -ContinueLabel "Continue" `
+                -StatusLines ([ordered]@{ distro = $entry.Name; gold = "$goldName.vhdx" })
+            if ($null -eq $bakeFeatures) { return $null }
+        }
+    }
+
     $outputDirectory = $CurrentOutputDirectory
     if ([string]::IsNullOrWhiteSpace($outputDirectory)) {
         $outputDirectory = Join-Path -Path $PSScriptRoot -ChildPath "vhdx"
@@ -5108,7 +5409,8 @@ function Start-LinuxInteractiveConfiguration {
     $renderLinuxSummary = {
         Write-Studio -Text "  Image" -Key "fg"
         Write-FastfetchInfoRow -Label "distribution" -Value $entry.Name -LabelWidth 24 -IndentWidth 2
-        Write-FastfetchInfoRow -Label "gold name"    -Value "$($entry.GoldName).vhdx" -LabelWidth 24 -IndentWidth 2
+        Write-FastfetchInfoRow -Label "target"       -Value $targetId -LabelWidth 24 -IndentWidth 2
+        Write-FastfetchInfoRow -Label "gold name"    -Value "$goldName.vhdx" -LabelWidth 24 -IndentWidth 2
         Write-FastfetchInfoRow -Label "source"       -Value $entry.Url -LabelWidth 24 -IndentWidth 2
         Write-FastfetchInfoRow -Label "image cache"  -Value $cacheDirectory -LabelWidth 24 -IndentWidth 2
         Write-FastfetchInfoRow -Label "output"       -Value $outputDirectory -LabelWidth 24 -IndentWidth 2
@@ -5123,7 +5425,7 @@ function Start-LinuxInteractiveConfiguration {
 
         Write-Studio -Text "  Disk" -Key "fg"
         Write-FastfetchInfoRow -Label "gold size" -Value "$diskGB GB" -LabelWidth 24 -IndentWidth 2
-        Write-FastfetchInfoRow -Label "vhdx type" -Value "Dynamic" -LabelWidth 24 -IndentWidth 2
+        Write-FastfetchInfoRow -Label "vhdx type" -Value $vhdType -LabelWidth 24 -IndentWidth 2
         Write-FastfetchInfoRow -Label "applies to" -Value "Every VM that differences off this gold" -LabelWidth 24 -IndentWidth 2
         Write-Host ""
 
@@ -5156,6 +5458,15 @@ function Start-LinuxInteractiveConfiguration {
                 Write-FastfetchInfoRow -Label "extra packages" -Value (@($bakeExtraPackages) -join ", ") -LabelWidth 24 -IndentWidth 2
             }
             Write-FastfetchInfoRow -Label "apply updates" -Value $(if ($applyUpdates) { "Yes - full package upgrade" } else { "No" }) -LabelWidth 24 -IndentWidth 2
+            $featureShown = "none"
+            if (@($bakeFeatures).Count -gt 0) {
+                $featureLabels = @()
+                foreach ($feature in @(Get-LinuxGoldFeatureCatalog)) {
+                    if (@($bakeFeatures) -contains $feature.Id) { $featureLabels += $feature.Id }
+                }
+                $featureShown = $featureLabels -join ", "
+            }
+            Write-FastfetchInfoRow -Label "features" -Value $featureShown -LabelWidth 24 -IndentWidth 2
         }
         Write-Host ""
         Write-Studio -Text ("  " + ("-" * 62)) -Key "muted"
@@ -5173,11 +5484,14 @@ function Start-LinuxInteractiveConfiguration {
     return [PSCustomObject]@{
         OsFamily        = "Linux"
         Entry           = $entry
+        Target          = $targetId
+        GoldName        = $goldName
         Language        = $language
         Locale          = $locale
         KeyboardLayout  = $keyboard
         TimeZone        = $timeZone
         DiskSizeGB      = $diskGB
+        VhdType         = $vhdType
         OutputDirectory = $outputDirectory
         CacheDirectory  = $cacheDirectory
         BakeSwitchName  = $(if ($switchName -eq "__skip__") { "" } else { $switchName })
@@ -5190,6 +5504,7 @@ function Start-LinuxInteractiveConfiguration {
         BakeDnsServers   = $bakeDnsServers
         BakeVlanId       = $bakeVlanId
         BakeMirrorRegion = $bakeMirrorRegion
+        BakeFeatures     = $bakeFeatures
     }
 }
 
@@ -5201,9 +5516,16 @@ function Invoke-LinuxGoldRun {
 
     $entry = $Config.Entry
 
-    Write-Log "Building $($entry.Name) as '$($entry.GoldName)'" -Tag "Info"
+    $target = [string]$Config.Target
+    if ([string]::IsNullOrWhiteSpace($target)) { $target = "HyperV" }
+    $goldName = [string]$Config.GoldName
+    if ([string]::IsNullOrWhiteSpace($goldName)) {
+        $goldName = Get-LinuxGoldName -Entry $entry -Target $target -Language ([string]$Config.Language)
+    }
+
+    Write-Log "Building $($entry.Name) as '$goldName' for $target" -Tag "Info"
     Write-Log "Language: $(Get-LinuxLocaleName -LocaleTag $Config.Language) | Format: $(Get-LinuxLocaleName -LocaleTag $Config.Locale) | Keymap: $(Get-LinuxKeymap -LocaleTag $Config.KeyboardLayout) | Time zone: $($Config.TimeZone)" -Tag "Info"
-    Write-Log "Disk: $($Config.DiskSizeGB) GB | Output: $($Config.OutputDirectory)" -Tag "Info"
+    Write-Log "Disk: $($Config.DiskSizeGB) GB $(if ($Config.VhdType) { $Config.VhdType } else { "Dynamic" }) | Output: $($Config.OutputDirectory)" -Tag "Info"
 
     foreach ($command in @("Convert-VHD", "Resize-VHD")) {
         if (-not (Get-Command -Name $command -ErrorAction SilentlyContinue)) {
@@ -5223,16 +5545,18 @@ function Invoke-LinuxGoldRun {
     try {
         $checksum = (Get-FileHash -LiteralPath $imagePath -Algorithm $entry.Algorithm).Hash.ToLowerInvariant()
         $vhdxPath = New-LinuxGoldImage -Entry $entry -ImagePath $imagePath `
-            -OutputDirectory $Config.OutputDirectory -DiskSizeGB $Config.DiskSizeGB
+            -OutputDirectory $Config.OutputDirectory -DiskSizeGB $Config.DiskSizeGB `
+            -VhdType $(if ($Config.VhdType) { [string]$Config.VhdType } else { "Dynamic" }) -GoldName $goldName
     }
     catch {
         Write-Log "Failed to build the gold: $($_.Exception.Message)" -Tag "Error"
         return $false
     }
 
-    $null = Write-LinuxGoldManifest -VhdPath $vhdxPath -Entry $entry `
+    $null = Write-LinuxGoldManifest -VhdPath $vhdxPath -Entry $entry -Target $target `
         -Language $Config.Language -Locale $Config.Locale -KeyboardLayout $Config.KeyboardLayout `
-        -TimeZone $Config.TimeZone -SourceChecksum $checksum
+        -TimeZone $Config.TimeZone -VhdType $(if ($Config.VhdType) { [string]$Config.VhdType } else { "Dynamic" }) `
+        -SourceChecksum $checksum
 
     if ([string]::IsNullOrWhiteSpace([string]$Config.BakeSwitchName)) {
         # Said plainly rather than left for a puzzled reader: without the bake the gold
