@@ -1452,6 +1452,75 @@ function Show-MenuHeader {
     Write-Host ""
 }
 
+# ---------------------------[ Flicker-Free Repaint ]---------------------------
+# Every interactive blade used to redraw itself from the top on each keypress:
+# Clear-Host, the logo, the header, then the list. On a short list that reads as a
+# blink; on the 251-locale and 419-zone lists it is a full page of writing per arrow
+# key, and the screen visibly flashes.
+#
+# The header and the heading do not change while a list is being walked, so they are
+# drawn ONCE and the cursor is parked underneath them. Each keypress rewinds to that
+# spot, wipes what is below it and writes the list again - the top of the screen is
+# never touched, so there is nothing to flash.
+#
+# Where the host cannot report or set a cursor position - ISE, a redirected console,
+# a terminal with no VT - every one of these returns false and the caller falls back
+# to the full redraw it always did.
+
+function Get-MenuCursorAnchor {
+    if (-not (Test-MenuHostSupported)) { return $null }
+    if (-not (Test-MenuAnsiSupported)) { return $null }
+    try { return $Host.UI.RawUI.CursorPosition }
+    catch { return $null }
+}
+
+function Set-MenuCursorAnchor {
+    param($Anchor)
+
+    if ($null -eq $Anchor) { return $false }
+    if (-not (Test-MenuHostSupported)) { return $false }
+    try {
+        $Host.UI.RawUI.CursorPosition = $Anchor
+        return $true
+    }
+    catch {
+        # The buffer scrolled and the row the anchor names is gone. Saying so is what
+        # makes the caller draw the whole screen again instead of writing the list
+        # somewhere arbitrary.
+        return $false
+    }
+}
+
+function Clear-MenuBelowCursor {
+    # ESC[0J - erase from the cursor to the end of the screen. Clear-Host would take
+    # the header and the logo with it, and redrawing those is the flicker.
+    if (-not (Test-MenuAnsiSupported)) { return $false }
+    try {
+        Write-Host ("{0}[0J" -f [char]27) -NoNewline
+        return $true
+    }
+    catch {
+        return $false
+    }
+}
+
+function Test-MenuWindowScrolled {
+    # A repaint that pushes past the bottom scrolls the buffer, and every row above -
+    # the anchor included - moves up by however far it went. The anchor is then a lie,
+    # so the caller is told to take a fresh one.
+    param($TopBefore)
+
+    if ($null -eq $TopBefore) { return $false }
+    try { return ($Host.UI.RawUI.WindowPosition.Y -ne $TopBefore) }
+    catch { return $true }
+}
+
+function Get-MenuWindowTop {
+    if (-not (Test-MenuHostSupported)) { return $null }
+    try { return [int]$Host.UI.RawUI.WindowPosition.Y }
+    catch { return $null }
+}
+
 function Show-Menu {
     param(
         [string]$Title,
@@ -1508,19 +1577,42 @@ function Show-Menu {
     $useRawUi = Test-MenuHostSupported
     $maxVisible = 16
 
-    while ($true) {
-        Show-MenuHeader -Title $Title -StatusLines $StatusLines -Subtitle $Subtitle
+    # The header and the heading are the same on every pass, so they are written once
+    # and the list below them is what a keypress rewrites. $anchor is where that list
+    # starts; a null one means "draw the whole screen", which is also what happens when
+    # the host cannot place a cursor or the buffer has scrolled under us.
+    $anchor = $null
+    $windowTop = $null
 
-        if ($PreItems) {
-            & $PreItems
+    while ($true) {
+        $repainted = $false
+        if ($null -ne $anchor -and -not (Test-MenuWindowScrolled -TopBefore $windowTop)) {
+            if (Set-MenuCursorAnchor -Anchor $anchor) {
+                $repainted = (Clear-MenuBelowCursor)
+                if (-not $repainted) { $anchor = $null }
+            }
+            else {
+                $anchor = $null
+            }
         }
 
-        if (-not [string]::IsNullOrWhiteSpace($Heading)) {
-            Write-Studio -Text "  $Heading" -Key "fg"
-            if (-not [string]::IsNullOrWhiteSpace($HeadingHint)) {
-                Write-Studio -Text "  $HeadingHint" -Key "muted"
+        if (-not $repainted) {
+            Show-MenuHeader -Title $Title -StatusLines $StatusLines -Subtitle $Subtitle
+
+            if ($PreItems) {
+                & $PreItems
             }
-            Write-Host ""
+
+            if (-not [string]::IsNullOrWhiteSpace($Heading)) {
+                Write-Studio -Text "  $Heading" -Key "fg"
+                if (-not [string]::IsNullOrWhiteSpace($HeadingHint)) {
+                    Write-Studio -Text "  $HeadingHint" -Key "muted"
+                }
+                Write-Host ""
+            }
+
+            $anchor = Get-MenuCursorAnchor
+            $windowTop = Get-MenuWindowTop
         }
 
         $windowStart = 0
@@ -1679,27 +1771,47 @@ function Show-MultiSelectMenu {
         $rows += [PSCustomObject]@{ Id = "__continue__"; Label = $ContinueLabel; IsContinue = $true }
     }
 
-    while ($true) {
-        Show-MenuHeader -Title $Title -StatusLines $StatusLines -Subtitle $Subtitle
+    # Header and notes once, the rows on every keypress - see the repaint helpers.
+    $anchor = $null
+    $windowTop = $null
 
-        if (-not [string]::IsNullOrWhiteSpace($NoteHeadline)) {
-            if (Test-MenuAnsiSupported) {
-                $esc = [char]27
-                Write-Studio -Text "  $esc[1m$NoteHeadline$esc[0m" -Key "fg"
+    while ($true) {
+        $repainted = $false
+        if ($null -ne $anchor -and -not (Test-MenuWindowScrolled -TopBefore $windowTop)) {
+            if (Set-MenuCursorAnchor -Anchor $anchor) {
+                $repainted = (Clear-MenuBelowCursor)
+                if (-not $repainted) { $anchor = $null }
             }
             else {
-                Write-Studio -Text "  $NoteHeadline" -Key "fg"
+                $anchor = $null
             }
-            Write-Host ""
         }
 
-        if ($Note.Count -gt 0) {
-            foreach ($line in $Note) {
-                # A blank entry is a paragraph break, not two spaces of trailing whitespace.
-                if ([string]::IsNullOrWhiteSpace($line)) { Write-Host "" }
-                else { Write-Studio -Text "  $line" -Key "muted" }
+        if (-not $repainted) {
+            Show-MenuHeader -Title $Title -StatusLines $StatusLines -Subtitle $Subtitle
+
+            if (-not [string]::IsNullOrWhiteSpace($NoteHeadline)) {
+                if (Test-MenuAnsiSupported) {
+                    $esc = [char]27
+                    Write-Studio -Text "  $esc[1m$NoteHeadline$esc[0m" -Key "fg"
+                }
+                else {
+                    Write-Studio -Text "  $NoteHeadline" -Key "fg"
+                }
+                Write-Host ""
             }
-            Write-Host ""
+
+            if ($Note.Count -gt 0) {
+                foreach ($line in $Note) {
+                    # A blank entry is a paragraph break, not two spaces of trailing whitespace.
+                    if ([string]::IsNullOrWhiteSpace($line)) { Write-Host "" }
+                    else { Write-Studio -Text "  $line" -Key "muted" }
+                }
+                Write-Host ""
+            }
+
+            $anchor = Get-MenuCursorAnchor
+            $windowTop = Get-MenuWindowTop
         }
 
         $lastSection = $null
@@ -1863,8 +1975,28 @@ function Show-VhdxConfigForm {
     $rowCount = 3
     $errorMessage = $null
 
+    # Typing a digit redraws this form. Redrawing the header with it made every
+    # keystroke blink the screen - see the repaint helpers above Show-Menu.
+    $anchor = $null
+    $windowTop = $null
+
     while ($true) {
-        Show-MenuHeader -Title $Title -Subtitle $Subtitle -StatusLines $StatusLines
+        $repainted = $false
+        if ($null -ne $anchor -and -not (Test-MenuWindowScrolled -TopBefore $windowTop)) {
+            if (Set-MenuCursorAnchor -Anchor $anchor) {
+                $repainted = (Clear-MenuBelowCursor)
+                if (-not $repainted) { $anchor = $null }
+            }
+            else {
+                $anchor = $null
+            }
+        }
+
+        if (-not $repainted) {
+            Show-MenuHeader -Title $Title -Subtitle $Subtitle -StatusLines $StatusLines
+            $anchor = Get-MenuCursorAnchor
+            $windowTop = Get-MenuWindowTop
+        }
 
         Write-Studio -Text "  Disk size (GB)" -Key "fg"
         Write-Studio -Text "  Editable - type digits to change it, Backspace deletes." -Key "muted"
