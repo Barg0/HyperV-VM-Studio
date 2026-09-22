@@ -207,7 +207,14 @@ $enableLogFile = $true
 #
 # Replacing it with this project's own bar was researched and dropped; the findings
 # are in .claude\progress-panel-research.md rather than in code.
-$ProgressPreference = "SilentlyContinue"
+#
+# GLOBAL, not script scope. Most cmdlets resolve a preference variable by walking the
+# caller's scope and would see either, but the Storage module's cmdlets are CDXML -
+# generated wrappers over CIM - and Format-Volume was still painting its band with the
+# script-scoped form. The global is the scope every lookup ends at, so it is the one
+# that reaches all of them. These scripts own their process and exit at the end, so
+# there is nothing to restore it for.
+$global:ProgressPreference = "SilentlyContinue"
 
 $logFileDirectory = Join-Path -Path $PSScriptRoot -ChildPath "logs\new-vhdx"
 $logFile          = Join-Path -Path $logFileDirectory -ChildPath $logFileName
@@ -499,7 +506,8 @@ function Write-Log {
     # what went wrong, and a reason with its tail missing is not a reason. They wrap
     # instead - two rows for the lines that earn them.
     if ($shown -ne "warn" -and $shown -ne "error") {
-        $furniture = $clock.Length + 1 + 2 + $rawTag.Length + 3
+        # The leading space counts too - it is a real column.
+    $furniture = 1 + $clock.Length + 1 + 2 + $rawTag.Length + 3
         $available = (Get-ConsoleWidth) - 1 - $furniture
         if ($available -lt 12) { $available = 12 }
         if ($shownMessage.Length -gt $available) {
@@ -509,7 +517,10 @@ function Write-Log {
 
     # The clock and the brackets are furniture, not content: they take `muted` so the
     # tag and the message are what the eye lands on.
-    Write-Studio -Text "$clock " -Key "muted" -NoNewline
+    # One space in front, so the timestamp does not sit flush against the window
+    # border. Console only: the log FILE has no border to clear and its lines stay
+    # unindented, which keeps them greppable from column one.
+    Write-Studio -Text " $clock " -Key "muted" -NoNewline
     Write-Studio -Text "[ " -Key "muted" -NoNewline
     Write-Studio -Text "$rawTag" -Key $color -NoNewline
     Write-Studio -Text " ] " -Key "muted" -NoNewline
@@ -540,6 +551,10 @@ function Complete-Script {
     Write-Log "Runtime $($duration.ToString('hh\:mm\:ss\.ff'))" -Tag "Info"
     Write-Log "Exit $ExitCode" -Tag "Info"
     Write-Log "==================== End ====================" -Tag "End"
+
+    # One blank line before the prompt comes back, so the shell's own line does not sit
+    # flush against the end banner.
+    Write-Host ""
 
     exit $ExitCode
 }
