@@ -31,6 +31,21 @@ $logGet        = $true
 $logRun        = $true
 $enableLogFile = $true
 
+# ---------------------------[ Progress Panel ]---------------------------
+# The blue band a compiled cmdlet paints across the top of the console -
+# Add-WindowsCapability, Convert-VHD, Optimize-VHD and the rest. It steals rows,
+# scrolls the buffer under a menu that has parked its cursor, and looks nothing like
+# anything else this script writes. Every operation that draws one is logged before
+# and after it, so nothing is lost by turning it off.
+#
+# It is also a speed win: on Windows PowerShell 5.1 the host repaints that band far
+# more often than the work warrants, and for a chunked read the console I/O dominates
+# - which is why Invoke-WebRequest is not used for the image download either.
+#
+# Replacing it with this project's own bar was researched and dropped; the findings
+# are in .claude\progress-panel-research.md rather than in code.
+$ProgressPreference = "SilentlyContinue"
+
 $logFileDirectory = Join-Path -Path $env:ProgramData -ChildPath "VmDeployLogs"
 $logFile          = Join-Path -Path $logFileDirectory -ChildPath $logFileName
 $stateFilePath    = Join-Path -Path $env:ProgramData -ChildPath "VmDeployLogs\state.json"
@@ -621,14 +636,10 @@ function Connect-GuestProvisionAzureArc {
                 }
                 else {
                     Write-Log "curl.exe unavailable - using Invoke-WebRequest" -Tag "Warn"
-                    $prevProgress = $ProgressPreference
-                    $ProgressPreference = "SilentlyContinue"
-                    try {
-                        Invoke-WebRequest -Uri $uri -OutFile $msiPath -UseBasicParsing -ErrorAction Stop
-                    }
-                    finally {
-                        $ProgressPreference = $prevProgress
-                    }
+                    # The save-and-restore this used to do is gone: the script sets
+                    # $ProgressPreference once at the top now, so IWR is already quiet -
+                    # and quiet is what makes it fast enough to be worth calling at all.
+                    Invoke-WebRequest -Uri $uri -OutFile $msiPath -UseBasicParsing -ErrorAction Stop
                 }
                 if (-not (Test-Path -LiteralPath $msiPath) -or ((Get-Item -LiteralPath $msiPath).Length -lt 1MB)) {
                     throw "Downloaded MSI is missing or too small: '$msiPath'"

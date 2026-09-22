@@ -52,6 +52,21 @@ $logGet        = $true
 $logRun        = $true
 $enableLogFile = $true
 
+# ---------------------------[ Progress Panel ]---------------------------
+# The blue band a compiled cmdlet paints across the top of the console -
+# Add-WindowsCapability, Convert-VHD, Optimize-VHD and the rest. It steals rows,
+# scrolls the buffer under a menu that has parked its cursor, and looks nothing like
+# anything else this script writes. Every operation that draws one is logged before
+# and after it, so nothing is lost by turning it off.
+#
+# It is also a speed win: on Windows PowerShell 5.1 the host repaints that band far
+# more often than the work warrants, and for a chunked read the console I/O dominates
+# - which is why Invoke-WebRequest is not used for the image download either.
+#
+# Replacing it with this project's own bar was researched and dropped; the findings
+# are in .claude\progress-panel-research.md rather than in code.
+$ProgressPreference = "SilentlyContinue"
+
 # This script lives in toolbox\, one level below the project root. Logs stay in the
 # project-wide logs\ folder next to Build-Vms.ps1, not in a second one under toolbox\.
 $projectRoot = Split-Path -Parent $PSScriptRoot
