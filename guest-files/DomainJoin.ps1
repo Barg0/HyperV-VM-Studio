@@ -1,4 +1,4 @@
-#Requires -Version 5.1
+﻿#Requires -Version 5.1
 #Requires -RunAsAdministrator
 <#
 .SYNOPSIS
@@ -39,10 +39,105 @@ if (-not (Test-Path -LiteralPath $logDirectory)) {
     New-Item -ItemType Directory -Path $logDirectory -Force | Out-Null
 }
 
+# ---------------------------[ Logging Setup ]---------------------------
+$log           = $true
+$logDebug      = $false
+$logGet        = $true
+$logRun        = $true
+$enableLogFile = $true
+
 function Write-Log {
-    param([string]$Message, [string]$Tag = "Info")
-    $line = "{0} [{1,-5}] {2}" -f (Get-Date -Format "yyyy-MM-dd HH:mm:ss"), $Tag.ToLowerInvariant(), $Message
-    try { Add-Content -LiteralPath $logFile -Value $line -Encoding UTF8 } catch { }
+    <#
+        The toolkit's log line, copied rather than imported.
+
+        This script is DELIBERATELY self-contained: the scheduled task runs it as SYSTEM
+        after GuestProvision.ps1 has finished and deleted itself, and the script wipes
+        itself at the end of its own run. It cannot dot-source anything, because by the
+        time it executes there is nothing left beside it to dot-source. A shared module
+        would be one more file to seal, ship and wipe - and one that has to survive
+        exactly as long as this one does.
+
+        So it matches the convention by copy: same tag column, same map, same file
+        retry. What differs is only what this script has no need of.
+    #>
+    [CmdletBinding()]
+    param (
+        [string]$Message,
+        [string]$Tag = "Info"
+    )
+
+    if (-not $log) { return }
+
+    if (($Tag -eq "Debug") -and (-not $logDebug)) { return }
+    if (($Tag -eq "Get")   -and (-not $logGet))   { return }
+    if (($Tag -eq "Run")   -and (-not $logRun))   { return }
+
+    $timestamp = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
+
+    # Lower case, five characters wide, so the message column starts in the same place
+    # on every line. 'ok' renders as 'o.k.' and 'warn' is the word in full. Both old
+    # spellings map on purpose, and the lookup is case-insensitive.
+    $tagMap = @{
+        "start"   = "start"
+        "get"     = "get"
+        "run"     = "run"
+        "info"    = "info"
+        "warn"    = "warn"
+        "warning" = "warn"
+        "ok"      = "o.k."
+        "success" = "o.k."
+        "error"   = "error"
+        "debug"   = "debug"
+        "end"     = "end"
+    }
+
+    $key = $Tag.Trim().ToLowerInvariant()
+    # A tag outside the map renders as an error rather than being dropped, so a typo is
+    # loud instead of invisible.
+    $shown = $tagMap[$key]
+    if ([string]::IsNullOrWhiteSpace($shown)) { $shown = "error" }
+    $rawTag = $shown.PadRight(5)
+
+    $color = switch ($shown) {
+        "start" { "Cyan" }
+        "get"   { "Blue" }
+        "run"   { "Magenta" }
+        "info"  { "Yellow" }
+        "warn"  { "DarkYellow" }
+        "o.k."  { "Green" }
+        "error" { "Red" }
+        "debug" { "DarkGray" }
+        "end"   { "Cyan" }
+        default { "White" }
+    }
+
+    $logMessage = "$timestamp [ $rawTag ] $Message"
+
+    if ($enableLogFile) {
+        # -ErrorAction Stop is what makes the catch a catch: without it a locked file is
+        # a NON-terminating error that walks straight past try/catch. Retried rather
+        # than swallowed, because dropping the line silently is the worse failure - and
+        # this log is the only record a failed join leaves behind.
+        for ($attempt = 1; $attempt -le 3; $attempt++) {
+            try {
+                Add-Content -LiteralPath $logFile -Value $logMessage -Encoding UTF8 -ErrorAction Stop
+                break
+            }
+            catch {
+                if ($attempt -eq 3) { break }
+                Start-Sleep -Milliseconds 120
+            }
+        }
+    }
+
+    # Written even though the task has no window: a run started by hand to debug a
+    # failed join is the one that needs to be readable, and under the task it goes
+    # nowhere and costs nothing.
+    Write-Host "$timestamp " -NoNewline
+    Write-Host "[ " -NoNewline -ForegroundColor White
+    Write-Host "$rawTag" -NoNewline -ForegroundColor $color
+    Write-Host " ] " -NoNewline -ForegroundColor White
+    Write-Host "$Message"
 }
 
 function Remove-FileSecurely {
