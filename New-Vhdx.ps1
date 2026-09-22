@@ -4254,7 +4254,12 @@ function Start-LinuxInteractiveConfiguration {
     # name at the point it is written into the seed, not here.
     $localeItems = @()
     foreach ($tag in (Get-OrderedLocaleTags)) {
-        $localeItems += [PSCustomObject]@{ Id = $tag; Label = "$tag - $(Get-LocaleDisplayName -LocaleTag $tag)" }
+        # -Locale, not -LocaleTag. Get-LocaleDisplayName is a simple function, so an
+        # unknown parameter name is NOT rejected - it goes into $args and the real
+        # parameter keeps its default, which here meant every row looked up the empty
+        # string and logged a fallback. The Linux helpers beside it do take -LocaleTag;
+        # the two spellings sitting next to each other are what made this easy to write.
+        $localeItems += [PSCustomObject]@{ Id = $tag; Label = "$tag - $(Get-LocaleDisplayName -Locale $tag)" }
     }
     $localeDefault = [array]::IndexOf(@($localeItems.Id), $CurrentLocale)
     if ($localeDefault -lt 0) { $localeDefault = 0 }
