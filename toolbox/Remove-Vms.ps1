@@ -147,6 +147,62 @@ function Write-Studio {
     Write-Host $Text -NoNewline:$NoNewline -ForegroundColor $named
 }
 
+function Format-LogPathsForConsole {
+    <#
+        Shortens every full path in a log line, for the CONSOLE only.
+
+        A build writes the same handful of long paths over and over, and at eighty
+        columns a line that is nine tenths path says nothing the eye can use. What
+        matters is which file, and where it sits relative to the toolkit.
+
+        A path under the script's own folder becomes the part below it - so
+        D:\Tools\HyperV-Scripts\vhdx\hv-enus-ubuntu2604.vhdx reads as
+        vhdx\hv-enus-ubuntu2604.vhdx. Anything else keeps its root and its last two
+        segments with an ellipsis between - D:\...\Images\gold.vhdx - which is enough
+        to recognise a path without spelling it out.
+
+        The LOG FILE keeps the full text. It is the record somebody reads afterwards,
+        possibly on another machine, and a shortened path there is a path that cannot
+        be checked.
+    #>
+    param([string]$Message)
+
+    if ([string]::IsNullOrWhiteSpace($Message)) { return $Message }
+
+    $root = $PSScriptRoot
+    $shorten = {
+        param([string]$Path)
+
+        $trimmed = $Path.TrimEnd("\")
+        if (-not [string]::IsNullOrWhiteSpace($root)) {
+            $rootTrimmed = $root.TrimEnd("\")
+            if ($trimmed.Length -gt $rootTrimmed.Length -and
+                $trimmed.Substring(0, $rootTrimmed.Length + 1).Equals($rootTrimmed + "\", [System.StringComparison]::OrdinalIgnoreCase)) {
+                return $trimmed.Substring($rootTrimmed.Length + 1)
+            }
+        }
+
+        # A UNC path has to keep its two leading slashes: \\nas01\golds is a server and
+        # a share, and nas01\golds is a folder somewhere quite different.
+        $lead = ""
+        if ($trimmed.StartsWith("\\")) { $lead = "\\" }
+
+        $segments = @($trimmed -split "\\" | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+        # A root plus two segments is already short enough to leave alone.
+        if ($segments.Count -le 3) { return $Path }
+        return ("{0}{1}\...\{2}\{3}" -f $lead, $segments[0], $segments[$segments.Count - 2], $segments[$segments.Count - 1])
+    }
+
+    # Drive-letter paths and UNC paths, stopping at whitespace or a closing quote -
+    # every path this script logs is wrapped in one or the other.
+    $pattern = "(?<path>(?:[A-Za-z]:\\|\\\\)[^\s'`"]*)"
+    $evaluator = [System.Text.RegularExpressions.MatchEvaluator] {
+        param($match)
+        return (& $shorten $match.Groups["path"].Value)
+    }
+    return [System.Text.RegularExpressions.Regex]::Replace($Message, $pattern, $evaluator)
+}
+
 function Write-Log {
     [CmdletBinding()]
     param (
@@ -236,13 +292,41 @@ function Write-Log {
         }
     }
 
-    # Timestamp and brackets are furniture, not content: `muted` keeps the eye on the
-    # tag and the message.
-    Write-Studio -Text "$timestamp " -Key "muted" -NoNewline
+    # The console line is written for the screen these scripts actually run on: a
+    # Hyper-V host's own console at 1024x768, which is eighty columns. One line per
+    # event, never two.
+    #
+    # A wrapped line costs two rows and puts the next line's tag out of column, and a
+    # run of a few hundred events on that screen becomes unreadable - the eye can no
+    # longer run down the tag column, which is the only reason the column exists.
+    #
+    # So the date goes: every line of one run carries the same one, the clock is what
+    # changes, and the log FILE keeps the date in full. What is left is cut to the
+    # width rather than being allowed to wrap - the file has the untruncated text, and
+    # the paths have already been shortened above.
+    $clock = $timestamp.Substring(11)
+    $shownMessage = Format-LogPathsForConsole -Message $Message
+
+    # warn and error are NEVER cut. Everything else on this line is something the run
+    # is doing and can be read again in the file; those two are the run telling you
+    # what went wrong, and a reason with its tail missing is not a reason. They wrap
+    # instead - two rows for the lines that earn them.
+    if ($shown -ne "warn" -and $shown -ne "error") {
+        $furniture = $clock.Length + 1 + 2 + $rawTag.Length + 3
+        $available = (Get-ConsoleWidth) - 1 - $furniture
+        if ($available -lt 12) { $available = 12 }
+        if ($shownMessage.Length -gt $available) {
+            $shownMessage = $shownMessage.Substring(0, $available - 3) + "..."
+        }
+    }
+
+    # Clock and brackets are furniture, not content: `muted` keeps the eye on the tag
+    # and the message.
+    Write-Studio -Text "$clock " -Key "muted" -NoNewline
     Write-Studio -Text "[ " -Key "muted" -NoNewline
     Write-Studio -Text "$rawTag" -Key $color -NoNewline
     Write-Studio -Text " ] " -Key "muted" -NoNewline
-    Write-Studio -Text "$Message" -Key "fg"
+    Write-Studio -Text $shownMessage -Key "fg"
 }
 
 function Complete-Script {
@@ -1282,7 +1366,7 @@ function Remove-VmClusterRole {
         Write-Log ("Could not take cluster group '{0}' offline: {1}" -f $GroupName, $_.Exception.Message) -Tag "Warn"
     }
 
-    Write-Log "Removing cluster role '$GroupName' for '$VmName'" -Tag "Run"
+    Write-Log "Cluster role '$GroupName' for '$VmName'" -Tag "Run"
     try {
         Remove-ClusterGroup -Name $GroupName -RemoveResources -Force -ErrorAction Stop
         Write-Log "Cluster role '$GroupName' removed" -Tag "Ok"
@@ -1387,7 +1471,7 @@ function Remove-VmConfigLocations {
 
         if ($isRoot -or $isStop -or $isProtected -or $hasProtectedChild) {
             if ($isProtected -or $hasProtectedChild) {
-                Write-Log "Folder '$folder' is shared with another VM - only empty Hyper-V subfolders are cleaned" -Tag "Info"
+                Write-Log "'$folder' shared - only empty subfolders cleaned" -Tag "Info"
             }
             foreach ($sub in $script:hyperVConfigSubfolders) {
                 $subPath = Join-Path $folder $sub

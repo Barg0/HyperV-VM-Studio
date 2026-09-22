@@ -211,6 +211,62 @@ function Write-Studio {
     Write-Host $Text -NoNewline:$NoNewline -ForegroundColor $named
 }
 
+function Format-LogPathsForConsole {
+    <#
+        Shortens every full path in a log line, for the CONSOLE only.
+
+        A build writes the same handful of long paths over and over, and at eighty
+        columns a line that is nine tenths path says nothing the eye can use. What
+        matters is which file, and where it sits relative to the toolkit.
+
+        A path under the script's own folder becomes the part below it - so
+        D:\Tools\HyperV-Scripts\vhdx\hv-enus-ubuntu2604.vhdx reads as
+        vhdx\hv-enus-ubuntu2604.vhdx. Anything else keeps its root and its last two
+        segments with an ellipsis between - D:\...\Images\gold.vhdx - which is enough
+        to recognise a path without spelling it out.
+
+        The LOG FILE keeps the full text. It is the record somebody reads afterwards,
+        possibly on another machine, and a shortened path there is a path that cannot
+        be checked.
+    #>
+    param([string]$Message)
+
+    if ([string]::IsNullOrWhiteSpace($Message)) { return $Message }
+
+    $root = $PSScriptRoot
+    $shorten = {
+        param([string]$Path)
+
+        $trimmed = $Path.TrimEnd("\")
+        if (-not [string]::IsNullOrWhiteSpace($root)) {
+            $rootTrimmed = $root.TrimEnd("\")
+            if ($trimmed.Length -gt $rootTrimmed.Length -and
+                $trimmed.Substring(0, $rootTrimmed.Length + 1).Equals($rootTrimmed + "\", [System.StringComparison]::OrdinalIgnoreCase)) {
+                return $trimmed.Substring($rootTrimmed.Length + 1)
+            }
+        }
+
+        # A UNC path has to keep its two leading slashes: \\nas01\golds is a server and
+        # a share, and nas01\golds is a folder somewhere quite different.
+        $lead = ""
+        if ($trimmed.StartsWith("\\")) { $lead = "\\" }
+
+        $segments = @($trimmed -split "\\" | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+        # A root plus two segments is already short enough to leave alone.
+        if ($segments.Count -le 3) { return $Path }
+        return ("{0}{1}\...\{2}\{3}" -f $lead, $segments[0], $segments[$segments.Count - 2], $segments[$segments.Count - 1])
+    }
+
+    # Drive-letter paths and UNC paths, stopping at whitespace or a closing quote -
+    # every path this script logs is wrapped in one or the other.
+    $pattern = "(?<path>(?:[A-Za-z]:\\|\\\\)[^\s'`"]*)"
+    $evaluator = [System.Text.RegularExpressions.MatchEvaluator] {
+        param($match)
+        return (& $shorten $match.Groups["path"].Value)
+    }
+    return [System.Text.RegularExpressions.Regex]::Replace($Message, $pattern, $evaluator)
+}
+
 function Write-Log {
     [CmdletBinding()]
     param (
@@ -298,13 +354,41 @@ function Write-Log {
         }
     }
 
-    # The timestamp and the brackets are furniture, not content: they take `muted` so
-    # the tag and the message are what the eye lands on.
-    Write-Studio -Text "$timestamp " -Key "muted" -NoNewline
+    # The console line is written for the screen these scripts actually run on: a
+    # Hyper-V host's own console at 1024x768, which is eighty columns. One line per
+    # event, never two.
+    #
+    # A wrapped line costs two rows and puts the next line's tag out of column, and a
+    # run of a few hundred events on that screen becomes unreadable - the eye can no
+    # longer run down the tag column, which is the only reason the column exists.
+    #
+    # So the date goes: every line of one run carries the same one, the clock is what
+    # changes, and the log FILE keeps the date in full. What is left is cut to the
+    # width rather than being allowed to wrap - the file has the untruncated text, and
+    # the paths have already been shortened above.
+    $clock = $timestamp.Substring(11)
+    $shownMessage = Format-LogPathsForConsole -Message $Message
+
+    # warn and error are NEVER cut. Everything else on this line is something the run
+    # is doing and can be read again in the file; those two are the run telling you
+    # what went wrong, and a reason with its tail missing is not a reason. They wrap
+    # instead - two rows for the lines that earn them.
+    if ($shown -ne "warn" -and $shown -ne "error") {
+        $furniture = $clock.Length + 1 + 2 + $rawTag.Length + 3
+        $available = (Get-ConsoleWidth) - 1 - $furniture
+        if ($available -lt 12) { $available = 12 }
+        if ($shownMessage.Length -gt $available) {
+            $shownMessage = $shownMessage.Substring(0, $available - 3) + "..."
+        }
+    }
+
+    # The clock and the brackets are furniture, not content: they take `muted` so the
+    # tag and the message are what the eye lands on.
+    Write-Studio -Text "$clock " -Key "muted" -NoNewline
     Write-Studio -Text "[ " -Key "muted" -NoNewline
     Write-Studio -Text "$rawTag" -Key $color -NoNewline
     Write-Studio -Text " ] " -Key "muted" -NoNewline
-    Write-Studio -Text "$Message" -Key "fg"
+    Write-Studio -Text $shownMessage -Key "fg"
 }
 
 # ISOs this run mounted itself (Features on Demand media picked interactively).
@@ -580,7 +664,7 @@ function Select-StoragePlacementVolume {
 
     $freeGb = [math]::Round($best.Free / 1GB)
     $plannedGb = [math]::Round(($best.Planned + $vmBytes) / 1GB)
-    Write-Log "Placement $Label -> '$($best.Volume.VhdPath)' ($freeGb GB free, $plannedGb GB planned there this run)" -Tag "Info"
+    Write-Log "Placement $Label -> '$($best.Volume.VhdPath)' ($freeGb GB free)" -Tag "Info"
     return $best.Volume
 }
 
@@ -999,7 +1083,7 @@ function Show-GoldLanguagePicker {
     }
     if ($choice.StartsWith("all:")) {
         $script:GoldLanguageForRun = $choice.Substring(4)
-        Write-Log "Gold language '$($script:GoldLanguageForRun)' selected for every remaining VM this run" -Tag "Info"
+        Write-Log "Gold language '$($script:GoldLanguageForRun)' for the rest of this run" -Tag "Info"
         $picked = @($Candidates | Where-Object {
                 (Get-GoldNameParts -BaseName $_.BaseName).Language -eq $script:GoldLanguageForRun
             })
@@ -1122,7 +1206,7 @@ function Resolve-GoldVhdxPath {
         }
         if ($candidates.Count -gt 1) {
             $names = ($candidates | ForEach-Object { $_.Name }) -join ', '
-            Write-Log "imageHint='$ImageHint' matched $names; using $($candidates[0].Name)" -Tag "Info"
+            Write-Log "imageHint '$ImageHint' -> $($candidates[0].Name)" -Tag "Info"
         }
         return $candidates[0].FullName
     }
@@ -1191,7 +1275,7 @@ function Resolve-GoldVhdxPath {
     if (-not [string]::IsNullOrWhiteSpace($configured)) {
         $picked = @($candidates | Where-Object { (Get-GoldNameParts -BaseName $_.BaseName).Language -eq $configured })
         if ($picked.Count -eq 1) {
-            Write-Log "Gold image for '$ImageId' picked by config locale ($configured): $($picked[0].Name)" -Tag "Info"
+            Write-Log "'$ImageId' by locale ${configured}: $($picked[0].Name)" -Tag "Info"
             return $picked[0].FullName
         }
     }
@@ -2406,16 +2490,16 @@ function Install-OfflineRsatCapabilities {
     }
 
     if ($ForceOnline.IsPresent -or [string]::IsNullOrWhiteSpace($Source)) {
-        Write-Log "RSAT deferred to the guest's online install ($($CapabilityNames.Count) capability(ies))" -Tag "Info"
+        Write-Log "RSAT deferred to the guest ($($CapabilityNames.Count) capability(ies))" -Tag "Info"
         return @($CapabilityNames)
     }
     $source = $Source
 
-    Write-Log "Installing $($CapabilityNames.Count) RSAT capability(ies) offline from '$source'" -Tag "Run"
+    Write-Log "Installing $($CapabilityNames.Count) RSAT offline from '$source'" -Tag "Run"
     foreach ($capabilityName in $CapabilityNames) {
         try {
             $result = Add-WindowsCapability -Path $OsRoot -Name $capabilityName -Source $source -LimitAccess -ErrorAction Stop
-            Write-Log "Offline RSAT '$capabilityName' OK (RestartNeeded=$($result.RestartNeeded))" -Tag "Ok"
+            Write-Log "RSAT '$capabilityName' OK (restart=$($result.RestartNeeded))" -Tag "Ok"
         }
         catch {
             Write-Log "Offline RSAT '$capabilityName' failed: $($_.Exception.Message) - deferring to guest" -Tag "Warn"
@@ -2453,7 +2537,7 @@ function Get-OfflineFeatureState {
         return [string](Get-WindowsOptionalFeature -Path $OsRoot -FeatureName $FeatureName -ErrorAction Stop).State
     }
     catch {
-        Write-Log "Could not read the state of '$FeatureName': $($_.Exception.Message)" -Tag "Debug"
+        Write-Log "Feature '$FeatureName': $($_.Exception.Message)" -Tag "Debug"
         return ""
     }
 }
@@ -2489,11 +2573,11 @@ function Enable-OfflineClientFeatures {
 
     if ($null -eq $FeatureNames -or $FeatureNames.Count -eq 0) { return }
 
-    Write-Log "Enabling $($FeatureNames.Count) Windows feature(s) offline (payload is in the image)" -Tag "Run"
+    Write-Log "Enabling $($FeatureNames.Count) feature(s) offline" -Tag "Run"
     foreach ($featureName in $FeatureNames) {
         try {
             $result = Enable-WindowsOptionalFeature -Path $OsRoot -FeatureName $featureName -All -NoRestart -ErrorAction Stop
-            Write-Log "Offline feature '$featureName' enabled (RestartNeeded=$($result.RestartNeeded))" -Tag "Ok"
+            Write-Log "Feature '$featureName' on (restart=$($result.RestartNeeded))" -Tag "Ok"
         }
         catch {
             Write-Log "Offline feature '$featureName' failed: $($_.Exception.Message)" -Tag "Warn"
@@ -2516,7 +2600,7 @@ function Enable-OfflineClientFeatures {
             # Expected on every build, not a surprise: -All enables the parents, and the
             # Microsoft-Hyper-V-All container's default values include the platform. The
             # tools were the request; the hypervisor was not.
-            Write-Log "'$featureName' brings '$guarded' with it - switching it back off" -Tag "Run"
+            Write-Log "'$featureName' pulled in '$guarded' - turning it back off" -Tag "Run"
             try {
                 Disable-WindowsOptionalFeature -Path $OsRoot -FeatureName $guarded -NoRestart -ErrorAction Stop | Out-Null
             }
@@ -2612,15 +2696,15 @@ function Install-OfflineServerCoreAppCompat {
     $capability = $script:ServerCoreAppCompatCapability
 
     if ($ForceOnline.IsPresent -or [string]::IsNullOrWhiteSpace($Source)) {
-        Write-Log "Server Core App Compatibility deferred to the guest's online install" -Tag "Info"
+        Write-Log "App Compatibility deferred to the guest" -Tag "Info"
         return @($capability)
     }
     $source = $Source
 
-    Write-Log "Installing Server Core App Compatibility FOD offline from '$source'" -Tag "Run"
+    Write-Log "App Compatibility FOD offline from '$source'" -Tag "Run"
     try {
         $result = Add-WindowsCapability -Path $OsRoot -Name $capability -Source $source -LimitAccess -ErrorAction Stop
-        Write-Log "Server Core App Compatibility FOD OK (RestartNeeded=$($result.RestartNeeded))" -Tag "Ok"
+        Write-Log "App Compatibility FOD OK (restart=$($result.RestartNeeded))" -Tag "Ok"
         return @()
     }
     catch {
@@ -2678,7 +2762,7 @@ function Resolve-FodPlans {
 
         if (-not $Interactive.IsPresent) {
             $script:FodPlanMap[$key] = @{ Mode = "Online" }
-            Write-Log "App Compatibility ($releaseLabel): unattended run - guest installs it online at first boot" -Tag "Info"
+            Write-Log "App Compatibility ($releaseLabel): guest installs at first boot" -Tag "Info"
             continue
         }
 
@@ -2702,7 +2786,7 @@ function Resolve-FodPlans {
 
     if (-not $Interactive.IsPresent) {
         $script:FodPlanMap["rsat"] = @{ Mode = "Online" }
-        Write-Log "RSAT: unattended run - guests install $rsatCount capability(ies) online at first boot (slow)" -Tag "Info"
+        Write-Log "RSAT: guests install $rsatCount capability(ies) at first boot" -Tag "Info"
         return
     }
 
@@ -2778,7 +2862,7 @@ function Get-FodMediumInteractive {
             continue
         }
 
-        Write-Log "$Subject : offline source '$source' (from '$isoPath')" -Tag "Info"
+        Write-Log "$Subject : offline source '$source'" -Tag "Info"
         return @{ Mode = "Offline"; Source = $source; Iso = $isoPath }
     }
 }
@@ -3018,7 +3102,7 @@ function Set-OfflineGuestProvisionPayload {
             joinPassword = [string]$deferredJoin.joinPassword
         } | ConvertTo-Json -Depth 3
         [System.IO.File]::WriteAllText($joinSecretTarget, $joinDoc, $utf8NoBom)
-        Write-Log "Injected join credential + DomainJoin.ps1 for the deferred domain join" -Tag "Run"
+        Write-Log "Injected credential + DomainJoin.ps1 for deferred join" -Tag "Run"
     }
 
     $setupCmd = @"
@@ -3593,7 +3677,7 @@ function Write-ChompBar {
     if ($mouthAt -gt 0) {
         Write-Studio -Text ("-" * $mouthAt) -Key "fg" -NoNewline
     }
-    Write-Studio -Text $mouth -Key "bandDeploy" -NoNewline
+    Write-Studio -Text $mouth -Key "yellow" -NoNewline
 
     $ahead = $Width - $mouthAt - 1
     if ($ahead -gt 0) {
@@ -3614,8 +3698,9 @@ function Write-DownloadProgressLine {
         Deliberately 7-bit ASCII. Block-drawing characters look better but depend on
         the console font having them, and this is the one piece of output that runs
         for minutes on a machine nobody has configured yet. Colour still applies -
-        the mouth takes deploy orange, the dots ahead of it the accent blue, the
-        chewed track behind it the foreground the brackets have, the numbers muted:
+        the mouth takes the log's own info yellow, the dots ahead of it the accent
+        blue, the chewed track behind it the foreground the brackets have, the
+        numbers muted:
 
           [-----------C  o  o  o  o  o  ]  58%  478.2/824.6 MiB  12.4 MiB/s  ETA 0:28
     #>
@@ -3896,7 +3981,7 @@ function Set-CloudInitSeedOnVm {
 
     foreach ($drive in @(Get-VMDvdDrive -VMName $VmName -ErrorAction SilentlyContinue)) {
         try { Remove-VMDvdDrive -VMDvdDrive $drive -ErrorAction Stop }
-        catch { Write-Log "Could not remove the DVD drive from '$VmName': $($_.Exception.Message)" -Tag "Debug" }
+        catch { Write-Log "DVD drive '$VmName': $($_.Exception.Message)" -Tag "Debug" }
     }
 
     Write-Log "Attached the cloud-init seed disk to '$VmName'" -Tag "Run"
@@ -3942,14 +4027,14 @@ function Complete-LinuxFirstBoot {
 
         if (((Get-Date) - $lastReport).TotalSeconds -ge 60) {
             $lastReport = Get-Date
-            Write-Log "Waiting for '$VmName' to finish provisioning and power off" -Tag "Info"
+            Write-Log "Waiting for '$VmName' to provision and power off" -Tag "Info"
         }
         Start-Sleep -Seconds 5
     }
 
     if (-not $poweredOff) {
         Write-Log "'$VmName' did not power off within $TimeoutMinutes minute(s) - cloud-init may still be working, or may have failed" -Tag "Warn"
-        Write-Log "The seed disk stays attached at '$SeedPath'. It holds this VM's password in clear - remove it once the VM is known good" -Tag "Warn"
+        Write-Log "Seed disk still attached at '$SeedPath' - it holds this VM's password in clear, remove it once the VM is good" -Tag "Warn"
         return $false
     }
 
@@ -4034,7 +4119,7 @@ function Set-LinuxProvisioning {
     $networkConfig = Get-CloudInitNetworkConfig -Server $Server -MacAddress $NicMacAddress
 
     if ([string]::IsNullOrWhiteSpace($networkConfig)) {
-        Write-Log "No static address for '$HostName' - the guest keeps the image's DHCP default" -Tag "Info"
+        Write-Log "No static address for '$HostName' - DHCP" -Tag "Info"
     }
 
     $seedPath = Join-Path -Path $SeedDirectory -ChildPath ("{0}-seed.vhdx" -f $VmName)
@@ -4107,7 +4192,7 @@ function Set-OfflineUnattendFile {
         $unattendPath = Join-Path -Path $panther -ChildPath "unattend.xml"
         $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
         [System.IO.File]::WriteAllText($unattendPath, $UnattendContent, $utf8NoBom)
-        Write-Log "Wrote '$unattendPath' ($((Get-Item -LiteralPath $unattendPath).Length) bytes)" -Tag "Info"
+        Write-Log "Wrote '$unattendPath'" -Tag "Info"
 
         if ($IsClient) {
             Set-OfflineClientOobeBypass -OsRoot $osRoot
@@ -4263,7 +4348,7 @@ function Set-OfflineUnattendFile {
                 catch {
                     $remountMsg = $_.Exception.Message
                     if ((Test-IsTransientDiskLockError -Message $remountMsg) -and $remountAttempt -lt $remountAttempts) {
-                        Write-Log "Remount of '$($job.VhdPath)' to refresh the deferred-feature manifest hit a transient lock (attempt $remountAttempt/$remountAttempts) - retrying in ${remountDelaySeconds}s" -Tag "Warn"
+                        Write-Log "Remount of '$($job.VhdPath)' locked (attempt $remountAttempt/$remountAttempts) - retrying in ${remountDelaySeconds}s" -Tag "Warn"
                         Start-Sleep -Seconds $remountDelaySeconds
                         continue
                     }
@@ -4479,10 +4564,10 @@ function Install-OfflineServerFeaturesOnVhd {
     Clear-StaleVhdAttachment -VhdPath $VhdPath
     Clear-StaleDismMountPoints
     if (-not (Wait-VhdFileReleased -VhdPath $VhdPath -TimeoutSeconds 30)) {
-        Write-Log "'$VhdPath' still locked from the prior dismount - offline feature install may race it" -Tag "Info"
+        Write-Log "'$VhdPath' still locked - feature install may race" -Tag "Info"
     }
 
-    Write-Log "Installing $($featureNames.Count) Windows feature(s) offline into VHD" -Tag "Run"
+    Write-Log "Installing $($featureNames.Count) feature(s) into the VHD" -Tag "Run"
     foreach ($featureName in $featureNames) {
         $installed = $false
         for ($featAttempt = 1; $featAttempt -le 2; $featAttempt++) {
@@ -4562,7 +4647,7 @@ function Connect-HostContextAzureArc {
         $arcResourceName = $VmName
     }
 
-    Write-Log "Host Arc onboarding for '$VmName' as '$arcResourceName' (PowerShell Direct / Az.ConnectedMachine)" -Tag "Run"
+    Write-Log "Arc onboarding '$VmName' as '$arcResourceName'" -Tag "Run"
 
     $credUser = Get-ServerLocalCredentialUser -Server $Server
     $credPassPlain = Convert-ToPlainText -Value $Server.localUserPassword
@@ -4599,7 +4684,7 @@ function Connect-HostContextAzureArc {
         if ($null -eq $ctx) {
             # The host being Arc-enabled itself is the azcmagent machine agent and does not
             # sign PowerShell in. Say so: it is the most common wrong guess at this message.
-            Write-Log "No Azure context on host - skipping host Arc. Host-context onboarding signs in with Az PowerShell, which is not the same as the host being Arc-enabled. Run Connect-AzAccount (add -DeviceCode where no browser can open) in the account that runs this script" -Tag "Warn"
+            Write-Log "No Azure context - skipping host Arc. Run Connect-AzAccount (-DeviceCode where no browser opens) as the account that runs this script" -Tag "Warn"
             return
         }
 
@@ -4665,11 +4750,11 @@ function Set-VmIntegrationServicesFromConfig {
             }
         }
         catch {
-            Write-Log "Integration service '$hyperVName' on '$VmName': $($_.Exception.Message)" -Tag "Info"
+            Write-Log "Integration service '$VmName': $($_.Exception.Message)" -Tag "Warn"
         }
     }
 
-    Write-Log "Applied Integration Services on '$VmName' (Time Synchronization=$([bool]$svc.timeSynchronization))" -Tag "Run"
+    Write-Log "Integration Services on '$VmName' (timesync=$([bool]$svc.timeSynchronization))" -Tag "Run"
 }
 
 function Get-DiskNameToken {
@@ -4935,7 +5020,7 @@ function Add-ServerDataDisks {
             throw "Data disk already exists: $path"
         }
         else {
-            Write-Log "Creating data disk '$path' ($sizeGb GB $diskType)" -Tag "Run"
+            Write-Log "Data disk '$path' ($sizeGb GB $diskType)" -Tag "Run"
             if ($diskType -eq "Fixed") {
                 New-VHD -Path $path -SizeBytes ([int64]$sizeGb * 1GB) -Fixed | Out-Null
             }
@@ -4950,10 +5035,10 @@ function Add-ServerDataDisks {
             }
             Add-VMHardDiskDrive -VMName $VmName -Path $path -ControllerType SCSI -ControllerNumber 0 -ControllerLocation ([int]$entry.Location)
             if ($entry.FileSystem -eq "None") {
-                Write-Log "Data disk '$($entry.FileName)' stays raw - no drive letter, no format" -Tag "Info"
+                Write-Log "Disk '$($entry.FileName)' stays raw" -Tag "Info"
             }
             else {
-                Write-Log "Data disk '$($entry.FileName)' at SCSI 0:$($entry.Location) -> $($entry.Letter): $($entry.FileSystem) '$($entry.Label)'" -Tag "Info"
+                Write-Log "Disk '$($entry.FileName)' -> $($entry.Letter): $($entry.FileSystem)" -Tag "Info"
             }
         }
     }
@@ -5007,7 +5092,7 @@ function Initialize-VhdSets {
                 New-Item -ItemType Directory -Path $parent -Force | Out-Null
             }
 
-            Write-Log "Creating VHD Set '$path' ($sizeGb GB $diskType)" -Tag "Run"
+            Write-Log "VHD Set '$path' ($sizeGb GB $diskType)" -Tag "Run"
             if ($diskType -eq "Fixed") {
                 New-VHD -Path $path -SizeBytes ([int64]$sizeGb * 1GB) -Fixed | Out-Null
             }
@@ -5117,7 +5202,7 @@ function Add-VhdSetsToVm {
             throw ("VHD Set '$path' is not on CSV or SMB 3 storage. Hyper-V cannot enable disk sharing on local NTFS. Place the .vhds under ClusterStorage or an SMB 3 share, then set a custom path on the VHD Set.")
         }
 
-        Write-Log "Attaching VHD Set '$path' to '$VmName' (shared / persistent reservations)" -Tag "Run"
+        Write-Log "Attaching VHD Set '$path' to '$VmName'" -Tag "Run"
         try {
             Add-VMHardDiskDrive -VMName $VmName -Path $path -ControllerType SCSI -ControllerNumber 0 `
                 -ControllerLocation $location -SupportPersistentReservations -ErrorAction Stop
@@ -5153,7 +5238,7 @@ function Add-VmToFailoverCluster {
     if (-not [bool]$ClusterSettings.addAllVms) {
         if ($null -ne $Server -and $null -ne $Server.cluster) {
             if (-not [bool]$Server.cluster.enabled) {
-                Write-Log "'$VmName' is not marked as a clustered VM; staying standalone" -Tag "Info"
+                Write-Log "'$VmName' not clustered - staying standalone" -Tag "Info"
                 return
             }
         }
@@ -5261,7 +5346,7 @@ function Initialize-ProvisionVmDisks {
 
     $ctx = Get-ProvisionVmContext -Server $Server -Defaults $Defaults -GoldImages $GoldImages
     if ($ctx.HyperVName -ne $ctx.ComputerName) {
-        Write-Log "Prep '$($ctx.ComputerName)' (Hyper-V '$($ctx.HyperVName)') <- gold '$($ctx.GoldPath)'" -Tag "Info"
+        Write-Log "Prep '$($ctx.ComputerName)' <- '$($ctx.GoldPath)'" -Tag "Info"
     }
     else {
         Write-Log "Prep '$($ctx.ComputerName)' <- gold '$($ctx.GoldPath)'" -Tag "Info"
@@ -5332,10 +5417,10 @@ function New-ProvisionedVm {
 
     $ctx = Get-ProvisionVmContext -Server $Server -Defaults $Defaults -GoldImages $GoldImages
     if ($ctx.HyperVName -ne $ctx.ComputerName) {
-        Write-Log "Server '$($ctx.ComputerName)' -> Hyper-V '$($ctx.HyperVName)' -> gold '$($ctx.GoldPath)' (imageId=$($ctx.ImageId))" -Tag "Info"
+        Write-Log "'$($ctx.ComputerName)' -> '$($ctx.HyperVName)' <- '$($ctx.GoldPath)'" -Tag "Info"
     }
     else {
-        Write-Log "Server '$($ctx.ComputerName)' -> gold '$($ctx.GoldPath)' (imageId=$($ctx.ImageId))" -Tag "Info"
+        Write-Log "'$($ctx.ComputerName)' <- gold '$($ctx.GoldPath)'" -Tag "Info"
     }
 
     if (-not (Test-Path -LiteralPath $ctx.VmFolder)) {
@@ -5385,14 +5470,14 @@ function New-ProvisionedVm {
     # New-VM derives its config subfolder from -Name, so create under the configured
     # folder name (...\VMs\paw-01\ by default) and rename afterwards if the Hyper-V
     # object name is supposed to differ (e.g. FQDN name + short folder).
-    Write-Log "Creating Gen2 VM '$($ctx.FolderName)' ($memoryGb GB / $cpuCount CPU)" -Tag "Run"
+    Write-Log "Gen2 VM '$($ctx.FolderName)' ($memoryGb GB / $cpuCount CPU)" -Tag "Run"
     $vm = New-VM -Name $ctx.FolderName -Generation 2 -MemoryStartupBytes ([int64]$memoryGb * 1GB) `
         -VHDPath $ctx.ChildVhd -Path $ctx.VmRoot
     Set-VM -VM $vm -ProcessorCount $cpuCount -StaticMemory
 
     $hyperVName = $ctx.HyperVName
     if ($hyperVName -ne $ctx.FolderName) {
-        Write-Log "Renaming Hyper-V VM '$($ctx.FolderName)' -> '$hyperVName' (folder stays '$($ctx.FolderName)')" -Tag "Run"
+        Write-Log "Renaming VM '$($ctx.FolderName)' -> '$hyperVName'" -Tag "Run"
         Rename-VM -VM $vm -NewName $hyperVName
         $vm = Get-VM -Name $hyperVName -ErrorAction Stop
     }
@@ -5411,7 +5496,7 @@ function New-ProvisionedVm {
             Set-VMNetworkAdapter -VMName $hyperVName -Name $primaryNicName -DeviceNaming On -ErrorAction Stop
         }
         catch {
-            Write-Log "Device naming not set on '$hyperVName' adapter '$primaryNicName': $($_.Exception.Message)" -Tag "Info"
+            Write-Log "Device naming '$primaryNicName': $($_.Exception.Message)" -Tag "Warn"
         }
     }
 
@@ -5448,7 +5533,7 @@ function New-ProvisionedVm {
     else {
         $autoStartDelay = Get-ServerAutomaticStartDelay -Server $Server
         Set-VM -VMName $hyperVName -AutomaticStartAction $autoStartAction -AutomaticStartDelay $autoStartDelay
-        Write-Log "Automatic start action '$autoStartAction' (${autoStartDelay}s delay) on '$hyperVName'" -Tag "Run"
+        Write-Log "Start action '$autoStartAction' +${autoStartDelay}s on '$hyperVName'" -Tag "Run"
     }
 
     $enableSecureBoot = $true
@@ -5553,7 +5638,7 @@ function New-ProvisionedVm {
             # whichever NIC their virtual switch is bound to.
             Get-VMNetworkAdapter -VMName $hyperVName -ErrorAction Stop |
                 ForEach-Object { Set-VMNetworkAdapter -VMNetworkAdapter $_ -MacAddressSpoofing On -ErrorAction Stop }
-            Write-Log "Enabled nested virtualization + MAC spoofing on '$hyperVName'" -Tag "Run"
+            Write-Log "Nested virtualization + MAC spoofing on '$hyperVName'" -Tag "Run"
         }
         catch {
             Write-Log "Could not enable nested virtualization on '$hyperVName': $($_.Exception.Message)" -Tag "Warn"
@@ -6712,7 +6797,7 @@ function Invoke-BuildPreflight {
             # Without a gold it can only fail for a reason already reported above, so it
             # is skipped rather than turned into a second error about the same thing.
             $ok.Add("$label local password present")
-            Write-Log "$label unattend preview skipped - no gold image resolved" -Tag "Debug"
+            Write-Log "$label unattend preview skipped - no gold" -Tag "Debug"
         }
         else {
             $ok.Add("$label local password present")
@@ -7048,7 +7133,7 @@ function Invoke-BuildServers {
     $failed = 0
 
     if ($SlowHost) {
-        Write-Log "Slow-host mode: phase 1/3 - prepare all OS/data disks (no VMs yet)" -Tag "Info"
+        Write-Log "Slow host 1/3 - prepare all disks" -Tag "Info"
         foreach ($server in $Servers) {
             try {
                 Initialize-ProvisionVmDisks -Server $server -Defaults $Defaults -GoldImages $GoldImages | Out-Null
@@ -7063,7 +7148,7 @@ function Invoke-BuildServers {
             return $false
         }
 
-        Write-Log "Slow-host mode: phase 2/3 - create VMs and inject unattend (not starting yet)" -Tag "Info"
+        Write-Log "Slow host 2/3 - create VMs, inject unattend" -Tag "Info"
         $createdServers = @()
         foreach ($server in $Servers) {
             try {
@@ -7085,7 +7170,7 @@ function Invoke-BuildServers {
                 $name = Get-HyperVVmName -Server $server
                 try {
                     if (-not (Test-ShouldStartProvisionedVm -Server $server -DoStart:$true)) {
-                        Write-Log "Skipping start for '$name' (startAfterCreate=false)" -Tag "Info"
+                        Write-Log "Not starting '$name' - startAfterCreate=false" -Tag "Info"
                         continue
                     }
                     Write-Log "Starting VM '$name'" -Tag "Run"
@@ -7109,7 +7194,7 @@ function Invoke-BuildServers {
             return $false
         }
 
-        Write-Log "All selected servers provisioned successfully (slow-host mode)" -Tag "Ok"
+        Write-Log "All selected servers provisioned (slow host)" -Tag "Ok"
         return $true
     }
 
@@ -7507,16 +7592,16 @@ try {
         foreach ($volume in $placementVolumes) {
             $freeBytes = Get-PathVolumeFreeBytes -Path $volume.VhdPath
             $freeNote = if ($null -ne $freeBytes) { "$([math]::Round($freeBytes / 1GB)) GB free" } else { "free space unreadable" }
-            Write-Log "  Volume $($volume.Index + 1): VMs '$($volume.VmPath)' | VHDs '$($volume.VhdPath)' | $freeNote" -Tag "Info"
+            Write-Log "  Volume $($volume.Index + 1): '$($volume.VmPath)' | $freeNote" -Tag "Info"
         }
         if ([string]::IsNullOrWhiteSpace([string]$defaults.vmPath)) { $vmPathDefault = $placementVolumes[0].VmPath }
         if ([string]::IsNullOrWhiteSpace([string]$defaults.vhdPath)) { $vhdPathDefault = $placementVolumes[0].VhdPath }
     }
     if ([string]::IsNullOrWhiteSpace([string]$defaults.vmPath) -and -not [string]::IsNullOrWhiteSpace($vmPathDefault)) {
-        Write-Log "VM path not set in config - using Hyper-V host default '$vmPathDefault'" -Tag "Info"
+        Write-Log "No vmPath in config - host default '$vmPathDefault'" -Tag "Info"
     }
     if ([string]::IsNullOrWhiteSpace([string]$defaults.vhdPath) -and -not [string]::IsNullOrWhiteSpace($vhdPathDefault)) {
-        Write-Log "VHD path not set in config - using Hyper-V host default '$vhdPathDefault'" -Tag "Info"
+        Write-Log "No vhdPath in config - host default '$vhdPathDefault'" -Tag "Info"
     }
 
     $vmPath = Resolve-ConfiguredHostPath -ConfiguredPath ([string]$defaults.vmPath) `
@@ -7529,14 +7614,14 @@ try {
     Write-Log "VM path: $vmPath" -Tag "Info"
     Write-Log "VHD path: $vhdPath" -Tag "Info"
     $namingSuffixSource = if ([string]::IsNullOrWhiteSpace($script:NamingFqdnOverride)) { "per-VM domain join" } else { $script:NamingFqdnOverride }
-    Write-Log "Naming: Hyper-V name FQDN=$($script:NamingVmIncludeFqdn) | folder FQDN=$($script:NamingFolderIncludeFqdn) | suffix=$namingSuffixSource" -Tag "Info"
+    Write-Log "Naming: VM FQDN=$($script:NamingVmIncludeFqdn), folder FQDN=$($script:NamingFolderIncludeFqdn)" -Tag "Info"
     $placementVolumes = @(Get-StoragePlacementVolumes -Defaults $defaults)
     if ($placementVolumes.Count -gt 0) {
         Write-Log "Storage placement: automatic across $($placementVolumes.Count) volume(s)" -Tag "Info"
         foreach ($volume in $placementVolumes) {
             $freeBytes = Get-PathVolumeFreeBytes -Path $volume.VhdPath
             $freeText = if ($null -eq $freeBytes) { "free space unreadable" } else { "$([math]::Round($freeBytes / 1GB)) GB free" }
-            Write-Log "Volume $($volume.Index + 1): '$($volume.VmPath)' + '$($volume.VhdPath)' ($freeText)" -Tag "Info"
+            Write-Log "Volume $($volume.Index + 1): '$($volume.VmPath)' ($freeText)" -Tag "Info"
         }
     }
     if ($defaults.cluster -and [bool]$defaults.cluster.enabled) {
@@ -7621,14 +7706,14 @@ try {
         # Slow host (prep ALL disks first) is CLI-only - see -SlowHost in the parameter block.
         $useSlowHost = $SlowHost.IsPresent
 
-        Write-Log "Action=$action | Servers=$($selectedServers.Count) | SkipStart=$($SkipStart.IsPresent) | SlowHost=$useSlowHost" -Tag "Info"
+        Write-Log "$action | $($selectedServers.Count) server(s) | slow host=$useSlowHost" -Tag "Info"
 
         $vhdSetsInScope = @(Select-VhdSetsForServers -VhdSets @($config.vhdSets) -Servers $selectedServers)
         if (@($config.vhdSets).Count -gt 0 -and $vhdSetsInScope.Count -eq 0) {
-            Write-Log "Skipping $($config.vhdSets.Count) VHD Set(s) - no attach targets in current server selection" -Tag "Info"
+            Write-Log "Skipping $($config.vhdSets.Count) VHD Set(s) - no selected members" -Tag "Info"
         }
         elseif (@($config.vhdSets).Count -gt $vhdSetsInScope.Count) {
-            Write-Log "VHD Sets in scope: $($vhdSetsInScope.Count) of $($config.vhdSets.Count) (others have no selected members)" -Tag "Info"
+            Write-Log "VHD Sets in scope: $($vhdSetsInScope.Count) of $($config.vhdSets.Count)" -Tag "Info"
         }
 
         # Decide where the Server Core App Compatibility FOD comes from before anything is

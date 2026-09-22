@@ -321,6 +321,62 @@ function Write-Studio {
 }
 
 # ---------------------------[ Logging Function ]---------------------------
+function Format-LogPathsForConsole {
+    <#
+        Shortens every full path in a log line, for the CONSOLE only.
+
+        A build writes the same handful of long paths over and over, and at eighty
+        columns a line that is nine tenths path says nothing the eye can use. What
+        matters is which file, and where it sits relative to the toolkit.
+
+        A path under the script's own folder becomes the part below it - so
+        D:\Tools\HyperV-Scripts\vhdx\hv-enus-ubuntu2604.vhdx reads as
+        vhdx\hv-enus-ubuntu2604.vhdx. Anything else keeps its root and its last two
+        segments with an ellipsis between - D:\...\Images\gold.vhdx - which is enough
+        to recognise a path without spelling it out.
+
+        The LOG FILE keeps the full text. It is the record somebody reads afterwards,
+        possibly on another machine, and a shortened path there is a path that cannot
+        be checked.
+    #>
+    param([string]$Message)
+
+    if ([string]::IsNullOrWhiteSpace($Message)) { return $Message }
+
+    $root = $PSScriptRoot
+    $shorten = {
+        param([string]$Path)
+
+        $trimmed = $Path.TrimEnd("\")
+        if (-not [string]::IsNullOrWhiteSpace($root)) {
+            $rootTrimmed = $root.TrimEnd("\")
+            if ($trimmed.Length -gt $rootTrimmed.Length -and
+                $trimmed.Substring(0, $rootTrimmed.Length + 1).Equals($rootTrimmed + "\", [System.StringComparison]::OrdinalIgnoreCase)) {
+                return $trimmed.Substring($rootTrimmed.Length + 1)
+            }
+        }
+
+        # A UNC path has to keep its two leading slashes: \\nas01\golds is a server and
+        # a share, and nas01\golds is a folder somewhere quite different.
+        $lead = ""
+        if ($trimmed.StartsWith("\\")) { $lead = "\\" }
+
+        $segments = @($trimmed -split "\\" | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+        # A root plus two segments is already short enough to leave alone.
+        if ($segments.Count -le 3) { return $Path }
+        return ("{0}{1}\...\{2}\{3}" -f $lead, $segments[0], $segments[$segments.Count - 2], $segments[$segments.Count - 1])
+    }
+
+    # Drive-letter paths and UNC paths, stopping at whitespace or a closing quote -
+    # every path this script logs is wrapped in one or the other.
+    $pattern = "(?<path>(?:[A-Za-z]:\\|\\\\)[^\s'`"]*)"
+    $evaluator = [System.Text.RegularExpressions.MatchEvaluator] {
+        param($match)
+        return (& $shorten $match.Groups["path"].Value)
+    }
+    return [System.Text.RegularExpressions.Regex]::Replace($Message, $pattern, $evaluator)
+}
+
 function Write-Log {
     [CmdletBinding()]
     param (
@@ -408,13 +464,41 @@ function Write-Log {
         }
     }
 
-    # The timestamp and the brackets are furniture, not content: they take `muted` so
-    # the tag and the message are what the eye lands on.
-    Write-Studio -Text "$timestamp " -Key "muted" -NoNewline
+    # The console line is written for the screen these scripts actually run on: a
+    # Hyper-V host's own console at 1024x768, which is eighty columns. One line per
+    # event, never two.
+    #
+    # A wrapped line costs two rows and puts the next line's tag out of column, and a
+    # run of a few hundred events on that screen becomes unreadable - the eye can no
+    # longer run down the tag column, which is the only reason the column exists.
+    #
+    # So the date goes: every line of one run carries the same one, the clock is what
+    # changes, and the log FILE keeps the date in full. What is left is cut to the
+    # width rather than being allowed to wrap - the file has the untruncated text, and
+    # the paths have already been shortened above.
+    $clock = $timestamp.Substring(11)
+    $shownMessage = Format-LogPathsForConsole -Message $Message
+
+    # warn and error are NEVER cut. Everything else on this line is something the run
+    # is doing and can be read again in the file; those two are the run telling you
+    # what went wrong, and a reason with its tail missing is not a reason. They wrap
+    # instead - two rows for the lines that earn them.
+    if ($shown -ne "warn" -and $shown -ne "error") {
+        $furniture = $clock.Length + 1 + 2 + $rawTag.Length + 3
+        $available = (Get-ConsoleWidth) - 1 - $furniture
+        if ($available -lt 12) { $available = 12 }
+        if ($shownMessage.Length -gt $available) {
+            $shownMessage = $shownMessage.Substring(0, $available - 3) + "..."
+        }
+    }
+
+    # The clock and the brackets are furniture, not content: they take `muted` so the
+    # tag and the message are what the eye lands on.
+    Write-Studio -Text "$clock " -Key "muted" -NoNewline
     Write-Studio -Text "[ " -Key "muted" -NoNewline
     Write-Studio -Text "$rawTag" -Key $color -NoNewline
     Write-Studio -Text " ] " -Key "muted" -NoNewline
-    Write-Studio -Text "$Message" -Key "fg"
+    Write-Studio -Text $shownMessage -Key "fg"
 }
 
 # ---------------------------[ Exit Function ]---------------------------
@@ -431,7 +515,7 @@ function Complete-Script {
             $script:mountedIsoPath = $null
         }
         catch {
-            Write-Log "Could not dismount ISO '$($script:mountedIsoPath)': $($_.Exception.Message)" -Tag "Debug"
+            Write-Log "ISO dismount failed: $($_.Exception.Message)" -Tag "Debug"
         }
     }
 
@@ -649,7 +733,7 @@ function Import-LocaleCatalogFile {
     # file must never take the build down with it.
     $path = Join-Path -Path $PSScriptRoot -ChildPath "data\locales.json"
     if (-not (Test-Path -LiteralPath $path)) {
-        Write-Log "No data\locales.json - using the in-script locale catalog ($($script:LocaleCatalog.Count) locales)" -Tag "Info"
+        Write-Log "No locales.json - using the built-in catalog" -Tag "Info"
         return
     }
 
@@ -685,7 +769,7 @@ function Import-LocaleCatalogFile {
         $missing = @($requiredFields | Where-Object { $null -eq $entry.PSObject.Properties[$_] })
         if ($missing.Count -gt 0) {
             $dropped++
-            Write-Log "locales.json entry '$($property.Name)' is missing $($missing -join ', ') - dropped" -Tag "Debug"
+            Write-Log "Dropped locale '$($property.Name)': no $($missing -join ', ')" -Tag "Debug"
             continue
         }
         $values = @{}
@@ -707,7 +791,7 @@ function Import-LocaleCatalogFile {
     $script:LocaleCatalog = $catalog
     $script:DefaultLocale = [string]$data.default
     $droppedText = if ($dropped -gt 0) { ", $dropped dropped" } else { "" }
-    Write-Log "Loaded locales.json: $($catalog.Count) locales$droppedText, default $($script:DefaultLocale)" -Tag "Info"
+    Write-Log "locales.json: $($catalog.Count) locales$droppedText, default $($script:DefaultLocale)" -Tag "Info"
 }
 
 function Get-LocaleCatalogEntry {
@@ -716,7 +800,7 @@ function Get-LocaleCatalogEntry {
     if ($script:LocaleCatalog.Contains($Locale)) {
         return $script:LocaleCatalog[$Locale]
     }
-    Write-Log "Unknown locale '$Locale' - falling back to $($script:DefaultLocale)" -Tag "Info"
+    Write-Log "Unknown locale '$Locale' - using $($script:DefaultLocale)" -Tag "Info"
     return $script:LocaleCatalog[$script:DefaultLocale]
 }
 
@@ -978,7 +1062,7 @@ function Write-GoldImageManifest {
     )
 
     if ($Target -eq "AzureLocal") {
-        Write-Log "Azure Local gold - no sidecar manifest written (nothing reads one on that path)" -Tag "Info"
+        Write-Log "Azure Local gold - no sidecar manifest" -Tag "Info"
         return $true
     }
 
@@ -2692,7 +2776,7 @@ function Get-OrderedTimeZoneCatalog {
         $zones = [System.TimeZoneInfo]::GetSystemTimeZones() | Sort-Object BaseUtcOffset, DisplayName
     }
     catch {
-        Write-Log "Could not enumerate system time zones: $($_.Exception.Message)" -Tag "Debug"
+        Write-Log "Time zone list: $($_.Exception.Message)" -Tag "Debug"
         return @()
     }
 
@@ -3191,7 +3275,7 @@ function Write-ChompBar {
     if ($mouthAt -gt 0) {
         Write-Studio -Text ("-" * $mouthAt) -Key "fg" -NoNewline
     }
-    Write-Studio -Text $mouth -Key "bandDeploy" -NoNewline
+    Write-Studio -Text $mouth -Key "yellow" -NoNewline
 
     $ahead = $Width - $mouthAt - 1
     if ($ahead -gt 0) {
@@ -3212,8 +3296,9 @@ function Write-DownloadProgressLine {
         Deliberately 7-bit ASCII. Block-drawing characters look better but depend on
         the console font having them, and this is the one piece of output that runs
         for minutes on a machine nobody has configured yet. Colour still applies -
-        the mouth takes deploy orange, the dots ahead of it the accent blue, the
-        chewed track behind it the foreground the brackets have, the numbers muted:
+        the mouth takes the log's own info yellow, the dots ahead of it the accent
+        blue, the chewed track behind it the foreground the brackets have, the
+        numbers muted:
 
           [-----------C  o  o  o  o  o  ]  58%  478.2/824.6 MiB  12.4 MiB/s  ETA 0:28
     #>
@@ -3429,7 +3514,7 @@ function Invoke-ImageDownload {
             [System.Net.SecurityProtocolType]::Tls
     }
     catch {
-        Write-Log "Could not raise the TLS version - the download may fail against a modern mirror" -Tag "Debug"
+        Write-Log "TLS version unchanged - download may fail" -Tag "Debug"
     }
 
     $partPath = "$Destination.part"
@@ -3440,7 +3525,11 @@ function Invoke-ImageDownload {
         New-Item -ItemType Directory -Path $directory -Force | Out-Null
     }
 
-    Write-Log "Downloading $Uri" -Tag "Get"
+    # The file, not the URL. A mirror URL is three lines of console for one piece of
+    # information - which file is being fetched - and the full address is in the log.
+    $downloadName = [System.IO.Path]::GetFileName(([System.Uri]$Uri).AbsolutePath)
+    if ([string]::IsNullOrWhiteSpace($downloadName)) { $downloadName = [string]$Uri }
+    Write-Log "Downloading $downloadName" -Tag "Get"
 
     $request = [System.Net.HttpWebRequest]::Create($Uri)
     $request.Method = "GET"
@@ -3471,7 +3560,7 @@ function Invoke-ImageDownload {
             Write-Log "$(Format-ByteSize -Bytes $totalBytes) to fetch" -Tag "Debug"
         }
         else {
-            Write-Log "The server did not declare a content length - progress will show bytes only" -Tag "Debug"
+            Write-Log "No content length - progress shows bytes only" -Tag "Debug"
         }
 
         $responseStream = $response.GetResponseStream()
@@ -3701,7 +3790,7 @@ function Convert-Qcow2ToRawImage {
         $offsetMask = ([int64]1 -shl $csizeShift) - 1
         $csizeMask  = ([int64]1 -shl (62 - $csizeShift)) - 1
 
-        Write-Log "qcow2 v$version - $clusterSize byte clusters, $virtualSize bytes virtual, $l1Size L1 entries" -Tag "Debug"
+        Write-Log "qcow2 v$version - $clusterSize B clusters, $l1Size L1" -Tag "Debug"
 
         $l1Bytes = [int]$l1Size * 8
         $l1Table = [byte[]]::new($l1Bytes)
@@ -3724,7 +3813,7 @@ function Convert-Qcow2ToRawImage {
             $null = & fsutil.exe sparse setflag "$RawPath" 2>&1
         }
         catch {
-            Write-Log "Could not set the sparse flag on '$RawPath' - the image will be written in full" -Tag "Debug"
+            Write-Log "Sparse flag refused - writing '$RawPath' in full" -Tag "Debug"
         }
 
         $outStream = [System.IO.File]::Open($RawPath, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Write, [System.IO.FileShare]::None)
@@ -3858,7 +3947,7 @@ function Convert-Qcow2ToRawImage {
             }
 
             $outStream.Flush()
-            Write-Log "Decoded $compressedCount compressed, $plainCount plain, $zeroCount zero and $unallocatedCount unallocated clusters" -Tag "Debug"
+            Write-Log "Clusters: $compressedCount zip, $plainCount raw, $zeroCount zero, $unallocatedCount gap" -Tag "Debug"
         }
         finally {
             $outStream.Dispose()
@@ -3997,7 +4086,7 @@ function Add-FixedVhdFooter {
         $stream.Dispose()
     }
 
-    Write-Log "Wrote a fixed VHD footer describing $DiskSize bytes ($($geometry.Cylinders)/$($geometry.Heads)/$($geometry.SectorsPerTrack))" -Tag "Debug"
+    Write-Log "VHD footer: $DiskSize bytes, CHS $($geometry.Cylinders)/$($geometry.Heads)/$($geometry.SectorsPerTrack)" -Tag "Debug"
 }
 
 # ---------------------------[ Linux Golds ]---------------------------
@@ -4176,7 +4265,7 @@ function Get-CachedLinuxImage {
     $fileName = [System.IO.Path]::GetFileName(([System.Uri]$Entry.Url).AbsolutePath)
     $imagePath = Join-Path -Path $CacheDirectory -ChildPath $fileName
 
-    Write-Log "Looking up the published checksum for $fileName" -Tag "Get"
+    Write-Log "Published checksum for $fileName" -Tag "Get"
     $expected = Get-PublishedChecksum -ChecksumUrl $Entry.ChecksumUrl -FileName $fileName
 
     if (Test-Path -LiteralPath $imagePath) {
@@ -4184,15 +4273,15 @@ function Get-CachedLinuxImage {
             Write-Log "Re-using the cached '$fileName' - there is no published checksum to check it against" -Tag "Warn"
             return $imagePath
         }
-        Write-Log "Hashing the cached '$fileName' to see whether it is still current" -Tag "Run"
+        Write-Log "Hashing cached '$fileName'" -Tag "Run"
         $actual = (Get-FileHash -LiteralPath $imagePath -Algorithm $Entry.Algorithm).Hash.ToLowerInvariant()
         if ($actual -eq $expected) {
-            Write-Log "Cached '$fileName' matches the published $($Entry.Algorithm) - not downloading it again" -Tag "ok"
+            Write-Log "Cached '$fileName' is current - reusing" -Tag "ok"
             return $imagePath
         }
         # Debian re-cuts its images a few times a month and `latest/` moves with them,
         # so a stale cache is expected rather than suspicious.
-        Write-Log "Cached '$fileName' no longer matches the published $($Entry.Algorithm) - fetching the current image" -Tag "Info"
+        Write-Log "Cached '$fileName' is stale - fetching" -Tag "Info"
     }
 
     $null = Invoke-ImageDownload -Uri $Entry.Url -Destination $imagePath `
@@ -4221,7 +4310,7 @@ function Write-LinuxGoldManifest {
         # Same rule as Write-GoldImageManifest: Build-Vms.ps1 reads the sidecar beside a
         # gold it picked, and it only ever picks hv-*. An azl- gold has no reader, so a
         # manifest there would imply a consumer that does not exist.
-        Write-Log "Azure Local gold - no sidecar manifest written (nothing reads one on that path)" -Tag "Info"
+        Write-Log "Azure Local gold - no sidecar manifest" -Tag "Info"
         return $true
     }
 
@@ -5065,14 +5154,14 @@ function Read-VmSerialConsole {
             if (((Get-Date) - $lastReport).TotalSeconds -ge 120) {
                 $lastReport = Get-Date
                 $elapsed = [int]((Get-Date) - $started).TotalMinutes
-                Write-Log "Bake still running - $elapsed minute(s), $($transcript.Length) bytes of console so far" -Tag "Info"
+                Write-Log "Bake running $elapsed min, $($transcript.Length) bytes" -Tag "Info"
             }
         }
     }
     catch {
         # A serial transcript is diagnostics. Losing it must not fail a bake that the
         # power state can still speak for.
-        Write-Log "Could not read the serial console of '$VmName': $($_.Exception.Message)" -Tag "Debug"
+        Write-Log "Serial console '$VmName': $($_.Exception.Message)" -Tag "Debug"
     }
     finally {
         if ($pipe) { $pipe.Dispose() }
@@ -5148,7 +5237,8 @@ function Invoke-LinuxBakeBoot {
             Write-Log "Bake network: DHCP" -Tag "Info"
         }
         else {
-            Write-Log "Bake network: $($Config.BakeIpAddress)/$($Config.BakePrefixLength) via '$($Config.BakeGateway)', DNS $(@($Config.BakeDnsServers) -join ', ')" -Tag "Info"
+            Write-Log ("Bake IP {0}/{1} via {2}" -f $Config.BakeIpAddress, $Config.BakePrefixLength, $Config.BakeGateway) -Tag "Info"
+        Write-Log ("Bake DNS {0}" -f (@($Config.BakeDnsServers) -join ", ")) -Tag "Info"
         }
 
         $mirrorUri = ""
@@ -5214,10 +5304,10 @@ function Invoke-LinuxBakeBoot {
         }
         try {
             [System.IO.File]::WriteAllText($logPath, $transcript, (New-Object System.Text.UTF8Encoding($false)))
-            Write-Log "Bake console transcript written to '$logPath'" -Tag "Info"
+            Write-Log "Bake transcript -> '$logPath'" -Tag "Info"
         }
         catch {
-            Write-Log "Could not write the bake transcript: $($_.Exception.Message)" -Tag "Debug"
+            Write-Log "Bake transcript: $($_.Exception.Message)" -Tag "Debug"
         }
 
         if ($transcript -match "BAKE-OK") {
@@ -5780,9 +5870,12 @@ function Invoke-LinuxGoldRun {
         $goldName = Get-LinuxGoldName -Entry $entry -Target $target -Language ([string]$Config.Language)
     }
 
-    Write-Log "Building $($entry.Name) as '$goldName' for $target" -Tag "Info"
-    Write-Log "Language: $(Get-LinuxLocaleName -LocaleTag $Config.Language) | Format: $(Get-LinuxLocaleName -LocaleTag $Config.Locale) | Keymap: $(Get-LinuxKeymap -LocaleTag $Config.KeyboardLayout) | Time zone: $($Config.TimeZone)" -Tag "Info"
-    Write-Log "Disk: $($Config.DiskSizeGB) GB $(if ($Config.VhdType) { $Config.VhdType } else { "Dynamic" }) | Output: $($Config.OutputDirectory)" -Tag "Info"
+    Write-Log "$($entry.Name) -> '$goldName' ($target)" -Tag "Info"
+    Write-Log ("Language {0}, format {1}" -f $Config.Language, $Config.Locale) -Tag "Info"
+    Write-Log ("Keymap {0}, time zone {1}" -f (Get-LinuxKeymap -LocaleTag $Config.KeyboardLayout), $Config.TimeZone) -Tag "Info"
+    $diskType = if ($Config.VhdType) { $Config.VhdType } else { "Dynamic" }
+    Write-Log ("Disk {0} GB {1}" -f $Config.DiskSizeGB, $diskType) -Tag "Info"
+    Write-Log ("Output {0}" -f $Config.OutputDirectory) -Tag "Info"
 
     foreach ($command in @("Convert-VHD", "Resize-VHD")) {
         if (-not (Get-Command -Name $command -ErrorAction SilentlyContinue)) {
@@ -5831,7 +5924,7 @@ function Invoke-LinuxGoldRun {
     $bakePackages = @($Config.BakeExtraPackages)
     $languagePack = Get-UbuntuLanguagePack -Entry $entry -LanguageTag ([string]$Config.Language)
     if (-not [string]::IsNullOrWhiteSpace($languagePack)) {
-        Write-Log "Adding $languagePack so the gold can actually speak $($Config.Language)" -Tag "Info"
+        Write-Log "Adding $languagePack for $($Config.Language)" -Tag "Info"
         $bakePackages += $languagePack
     }
 
@@ -5859,7 +5952,7 @@ function New-ImageVhdx {
     }
 
     $sizeGb = [math]::Round($SizeBytes / 1GB)
-    Write-Log "Creating $VhdType VHDX '$VhdPath' ($sizeGb GB)" -Tag "Run"
+    Write-Log "$VhdType VHDX '$VhdPath' ($sizeGb GB)" -Tag "Run"
 
     if ($VhdType -eq "Dynamic") {
         New-VHD -Path $VhdPath -SizeBytes $SizeBytes -Dynamic | Out-Null
@@ -5915,7 +6008,7 @@ function Set-TempBootUnattend {
         New-Item -ItemType Directory -Path $pantherPath -Force | Out-Null
     }
 
-    Write-Log "Writing temporary boot unattend to '$unattendPath'" -Tag "Run"
+    Write-Log "Boot unattend -> '$unattendPath'" -Tag "Run"
     Write-Utf8NoBomFile -Path $unattendPath -Content $Content
 }
 
@@ -5923,7 +6016,7 @@ function Set-HyperVDeployUnattend {
     param([string]$Content)
 
     $deployPath = "W:\Windows\Deploy\unattend.xml"
-    Write-Log "Writing Hyper-V deploy unattend to '$deployPath'" -Tag "Run"
+    Write-Log "Deploy unattend -> '$deployPath'" -Tag "Run"
     Write-Utf8NoBomFile -Path $deployPath -Content $Content
 }
 
@@ -6158,7 +6251,7 @@ function Convert-ToVirtualEdition {
         $currentEdition = @($editionRead.Output |
                 Where-Object { "$_" -match "Current Edition\s*:\s*(\S+)" } |
                 ForEach-Object { $Matches[1] }) | Select-Object -First 1
-        Write-Log "Image reports current edition '$currentEdition' after the change" -Tag "Info"
+        Write-Log "Edition now '$currentEdition'" -Tag "Info"
 
         $statePath = Join-Path -Path $mountRoot -ChildPath "Windows\Setup\State\State.ini"
         if (Test-Path -LiteralPath $statePath) {
@@ -6182,7 +6275,7 @@ function Convert-ToVirtualEdition {
     finally {
         if ($mounted) {
             try { Dismount-VHD -Path $VhdPath -ErrorAction SilentlyContinue }
-            catch { Write-Log "Could not dismount '$VhdPath' after the edition change" -Tag "Debug" }
+            catch { Write-Log "Dismount failed after edition change: '$VhdPath'" -Tag "Debug" }
         }
     }
 
@@ -6215,7 +6308,7 @@ function Set-OfflineDeviceEncryptionPolicy {
     }
 
     try {
-        Write-Log "Baking PreventDeviceEncryption=1 - Windows will not turn BitLocker on by itself" -Tag "Run"
+        Write-Log "Baking PreventDeviceEncryption=1" -Tag "Run"
         & reg.exe add "$hiveRoot\ControlSet001\Control\BitLocker" /v PreventDeviceEncryption /t REG_DWORD /d 1 /f | Out-Null
     }
     finally {
@@ -6266,7 +6359,7 @@ function Set-OfflineEdgePolicy {
     $softwareHive = Join-Path -Path $MountRoot -ChildPath "Windows\System32\config\SOFTWARE"
     $hiveRoot = "HKLM\OfflineImageEdge"
 
-    Write-Log "Loading offline SOFTWARE hive for the Microsoft Edge policy baseline" -Tag "Run"
+    Write-Log "Loading offline SOFTWARE hive for Edge policy" -Tag "Run"
     & reg.exe load $hiveRoot $softwareHive | Out-Null
     if ($LASTEXITCODE -ne 0) {
         throw "Failed to load offline SOFTWARE hive for the Edge policy (exit $LASTEXITCODE)"
@@ -6477,7 +6570,7 @@ function Set-OfflineWelcomeExperiencePolicy {
     $softwareHive = Join-Path -Path $MountRoot -ChildPath "Windows\System32\config\SOFTWARE"
     $hiveRoot = "HKLM\OfflineImageWelcome"
 
-    Write-Log "Suppressing Getting Started / Windows Welcome Experience at logon" -Tag "Run"
+    Write-Log "Suppressing Windows Welcome Experience at logon" -Tag "Run"
     & reg.exe load $hiveRoot $softwareHive | Out-Null
     if ($LASTEXITCODE -ne 0) {
         throw "Failed to load offline SOFTWARE hive for Welcome Experience policy (exit $LASTEXITCODE)"
@@ -6755,7 +6848,7 @@ finally {
         }
     }
 
-    Write-Log "First-boot locale payload written: $Locale / $inputLocale / $TimeZone" -Tag "Run"
+    Write-Log "Locale payload: $Locale / $inputLocale / $TimeZone" -Tag "Run"
 }
 
 function Set-OfflineImageCustomization {
@@ -6780,7 +6873,7 @@ function Set-OfflineImageCustomization {
         [bool]$ConfigureEdge = $false
     )
 
-    Write-Log "Applying offline customization to '$VhdPath'" -Tag "Run"
+    Write-Log "Offline customization on '$VhdPath'" -Tag "Run"
 
     $mounted = $false
     try {
@@ -6790,7 +6883,7 @@ function Set-OfflineImageCustomization {
         if ($RemovePantherUnattend) {
             $leftoverUnattend = Join-Path -Path $mountRoot -ChildPath "Windows\Panther\unattend.xml"
             if (Test-Path -Path $leftoverUnattend) {
-                Write-Log "Removing leftover Panther\unattend.xml (Build-Vms injects at provision time)" -Tag "Run"
+                Write-Log "Removing leftover Panther\unattend.xml" -Tag "Run"
                 Remove-Item -Path $leftoverUnattend -Force -ErrorAction SilentlyContinue
             }
 
@@ -6847,7 +6940,7 @@ function Set-OfflineImageCustomization {
                 -KeyboardLayout $KeyboardLayout -TimeZone $TimeZone
         }
         else {
-            Write-Log "Baking locale/keyboard/format via DISM ($Locale / $inputLocale)" -Tag "Run"
+            Write-Log "Baking locale via DISM ($Locale / $inputLocale)" -Tag "Run"
             Invoke-Dism -Arguments @(
                 "/Image:$mountRoot",
                 "/Set-UserLocale:$Locale",
@@ -6864,7 +6957,7 @@ function Set-OfflineImageCustomization {
             # harmful, but a gold that carries settings for a browser it cannot run is a
             # gold that lies about itself.
             if ($IsServerCore) {
-                Write-Log "Server Core image - no Microsoft Edge to configure, policy not baked" -Tag "Debug"
+                Write-Log "Server Core - no Edge to configure" -Tag "Debug"
             }
             else {
                 Set-OfflineEdgePolicy -MountRoot $mountRoot
@@ -6898,7 +6991,7 @@ function Set-OfflineImageCustomization {
             # itself, so the opt-out has nothing to opt out of here.
             # Server has its own power defaults - High performance already, display off at
             # ten minutes - so the client power tick has nothing to do here either.
-            Write-Log "Server image - Welcome Experience, sign-in animation, device encryption and power plan not applicable" -Tag "Debug"
+            Write-Log "Server image - desktop tweaks not applicable" -Tag "Debug"
         }
 
         if ($Target -ne "AzureLocal") {
@@ -6977,7 +7070,7 @@ function New-WindowsVhdxImage {
             Write-Log "Dismounted '$VhdPath' after failure" -Tag "Debug"
         }
         catch {
-            Write-Log "Could not dismount '$VhdPath' during cleanup" -Tag "Debug"
+            Write-Log "Cleanup dismount failed: '$VhdPath'" -Tag "Debug"
         }
     }
     finally {
@@ -6994,7 +7087,7 @@ function Wait-VmShutdown {
         [int]$TimeoutMinutes = 45
     )
 
-    Write-Log "Waiting up to $TimeoutMinutes minutes for '$VmName' to shut down" -Tag "Run"
+    Write-Log "Waiting $TimeoutMinutes min for '$VmName' to stop" -Tag "Run"
     $deadline = (Get-Date).AddMinutes($TimeoutMinutes)
 
     while ((Get-Date) -lt $deadline) {
@@ -7070,7 +7163,7 @@ function Remove-TemporaryVm {
         $disks = @(Get-ChildItem -LiteralPath $vmFolder -Recurse -File -Force -ErrorAction SilentlyContinue |
             Where-Object { $_.Extension -in @(".vhdx", ".vhd", ".vhds", ".avhdx") })
         if ($disks.Count -gt 0) {
-            Write-Log "Leaving '$vmFolder' in place - it still holds $($disks.Count) virtual disk(s)" -Tag "Info"
+            Write-Log "Keeping '$vmFolder' - $($disks.Count) disk(s) left" -Tag "Info"
         }
         else {
             Remove-Item -LiteralPath $vmFolder -Recurse -Force -ErrorAction SilentlyContinue
@@ -7094,7 +7187,7 @@ function Convert-ToGeneralizedImage {
 
     $vmName = "sysprep-$([System.IO.Path]::GetFileNameWithoutExtension($VhdPath))"
     $vmRoot = Get-SysprepVmRootPath
-    Write-Log "Generalizing '$VhdPath' using temporary VM '$vmName' under '$vmRoot'" -Tag "Info"
+    Write-Log "Generalizing '$VhdPath' in VM '$vmName'" -Tag "Info"
 
     $previousErrorAction = $ErrorActionPreference
     $ErrorActionPreference = "Stop"
@@ -7119,7 +7212,7 @@ function Convert-ToGeneralizedImage {
         $adapters = @(Get-VMNetworkAdapter -VMName $vmName -ErrorAction SilentlyContinue)
         if ($adapters.Count -gt 0) {
             Remove-VMNetworkAdapter -VMName $vmName -ErrorAction SilentlyContinue
-            Write-Log "Removed $($adapters.Count) network adapter(s) - the sysprep VM stays offline" -Tag "Run"
+            Write-Log "Removed $($adapters.Count) adapter(s) - VM stays offline" -Tag "Run"
         }
 
         Write-Log "Enabling Secure Boot with the Microsoft UEFI template" -Tag "Run"
@@ -7254,7 +7347,7 @@ function Test-Prerequisite {
         return $false
     }
 
-    Write-Log "Preflight passed - elevation, Hyper-V cmdlets, DISM, Windows image" -Tag "Ok"
+    Write-Log "Preflight passed - elevation, Hyper-V, DISM, image" -Tag "Ok"
     return $true
 }
 
@@ -7277,7 +7370,7 @@ function Resolve-WindowsImagePath {
         return $esdCandidate
     }
 
-    Write-Log "No install image at the default name, searching '$sourcesPath'" -Tag "Debug"
+    Write-Log "Searching '$sourcesPath' for an install image" -Tag "Debug"
     $foundImage = Get-ChildItem -Path $sourcesPath -Include "install.wim", "install.esd" `
         -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
 
@@ -7303,7 +7396,7 @@ function Get-ImageLanguageTag {
         $detail = Get-WindowsImage -ImagePath $WimPath -Index $ImageIndex -ErrorAction Stop
     }
     catch {
-        Write-Log "Could not read language metadata for index $ImageIndex - $($_.Exception.Message)" -Tag "Debug"
+        Write-Log "Index $ImageIndex language: $($_.Exception.Message)" -Tag "Debug"
         return ""
     }
 
@@ -7407,19 +7500,19 @@ function Invoke-ImageBuildPipeline {
             if ($Target -eq "HyperV") {
                 $productKey = $avmaKey
             }
-            Write-Log "Server $serverYear Datacenter detected; AVMA key will be applied offline" -Tag "Info"
+            Write-Log "$serverYear Datacenter - AVMA key applied offline" -Tag "Info"
         }
         else {
-            Write-Log "Server Datacenter without a published AVMA key ('$ImageName') - none applied" -Tag "Info"
+            Write-Log "No AVMA key for Datacenter '$ImageName'" -Tag "Info"
         }
     }
     elseif (-not $isClient -and ([string]$ImageName) -match "(?i)\bstandard\b") {
         $avmaKey = Get-AvmaKey -Year $serverYear -Edition "Standard"
         if ($avmaKey -ne "") {
-            Write-Log "Server $serverYear Standard detected; AVMA key will be applied offline" -Tag "Info"
+            Write-Log "$serverYear Standard - AVMA key applied offline" -Tag "Info"
         }
         else {
-            Write-Log "Server Standard without a published AVMA key ('$ImageName') - none applied" -Tag "Info"
+            Write-Log "No AVMA key for Standard '$ImageName'" -Tag "Info"
         }
     }
     elseif (-not $isClient) {
@@ -7450,7 +7543,7 @@ function Invoke-ImageBuildPipeline {
         }
     }
     else {
-        Write-Log "Skipping generalize for '$VhdPath' (SkipSysprep set)" -Tag "Info"
+        Write-Log "SkipSysprep - not generalizing '$VhdPath'" -Tag "Info"
     }
 
     if (-not [string]::IsNullOrWhiteSpace($EditionUpgrade)) {
@@ -7655,7 +7748,7 @@ foreach ($imageIndex in @(@($AzureEditionImageIndexes) | Sort-Object -Unique)) {
 }
 $buildIndexes = @($buildSpecs | ForEach-Object { $_.ImageIndex } | Sort-Object -Unique)
 
-Write-Log "Target: $Target | Locale: $Locale | Keyboard: $KeyboardLayout" -Tag "Info"
+Write-Log "$Target | $Locale | $KeyboardLayout" -Tag "Info"
 Write-Log "Time zone: $TimeZone | VHD: $VhdSizeGB GB $VhdType" -Tag "Info"
 Write-Log "RDP: $EnableRdp | Ping: $EnablePing" -Tag "Info"
 # What this run can actually act on. Half of the offline policies are Server-only and
@@ -7689,10 +7782,10 @@ if ($runHasClient) {
     Write-Log "Power plan: $(if ($SetVmPowerPlan) { 'High performance, display and sleep never, hibernation off' } else { 'left at the Windows default' })" -Tag "Info"
 }
 if (@($MultiSessionImageIndexes).Count -gt 0) {
-    Write-Log "Upgrading to Enterprise multi-session after generalize: index $(@($MultiSessionImageIndexes) -join ', ')" -Tag "Info"
+    Write-Log "Multi-session after generalize: index $(@($MultiSessionImageIndexes) -join ', ')" -Tag "Info"
 }
 if (@($AzureEditionImageIndexes).Count -gt 0) {
-    Write-Log "Upgrading to Datacenter: Azure Edition after generalize: index $(@($AzureEditionImageIndexes) -join ', ')" -Tag "Info"
+    Write-Log "Azure Edition after generalize: index $(@($AzureEditionImageIndexes) -join ', ')" -Tag "Info"
 }
 $selectedNames = foreach ($buildSpec in $buildSpecs) {
     if (-not [string]::IsNullOrWhiteSpace($buildSpec.EditionUpgrade)) {
