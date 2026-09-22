@@ -3125,6 +3125,7 @@ function Get-CloudInitUserData {
         [object]$Server,
         [object]$Defaults,
         [string]$HostName,
+        [string]$Language,
         [string]$Locale,
         [string]$Keymap,
         [string]$TimeZone
@@ -3149,7 +3150,12 @@ function Get-CloudInitUserData {
     [void]$lines.Add("#cloud-config")
     [void]$lines.Add("hostname: $HostName")
     [void]$lines.Add("preserve_hostname: false")
-    if (-not [string]::IsNullOrWhiteSpace($Locale))   { [void]$lines.Add("locale: $Locale") }
+    # cloud-init's `locale` module writes LANG, and on glibc LANG decides what the
+    # system SAYS - messages, logs, man pages - as well as how it formats. That is one
+    # setting for two questions, and the answers differ: German dates with English error
+    # messages is the normal case. So the module gets the LANGUAGE, and the format
+    # locale is applied further down through the LC_* family, which LANG does not touch.
+    if (-not [string]::IsNullOrWhiteSpace($Language)) { [void]$lines.Add("locale: $Language") }
     if (-not [string]::IsNullOrWhiteSpace($TimeZone)) { [void]$lines.Add("timezone: $TimeZone") }
     if (-not [string]::IsNullOrWhiteSpace($Keymap)) {
         [void]$lines.Add("keyboard:")
@@ -3181,6 +3187,23 @@ function Get-CloudInitUserData {
         [void]$lines.Add("package_update: true")
         [void]$lines.Add("packages:")
         foreach ($package in $packages) { [void]$lines.Add("  - " + (ConvertTo-YamlSingleQuoted -Value $package)) }
+    }
+
+    # The LC_* format family. cloud-init has no module for the language/format split, so
+    # this is runcmd: generate the format locale (it is not the one the locale module
+    # just generated) and point the nine format variables at it. LC_MESSAGES is
+    # deliberately absent - leaving it unset is what keeps messages on LANG.
+    #
+    # Both distributions carry `locales`, so locale-gen needs no network. Ubuntu also
+    # carries console-setup, keyboard-configuration and kbd; Debian's genericcloud image
+    # carries none of them, which is why the Debian gold installs them during its bake.
+    if (-not [string]::IsNullOrWhiteSpace($Locale) -and $Locale -ne $Language) {
+        $formatVariables = @("LC_TIME","LC_NUMERIC","LC_MONETARY","LC_PAPER","LC_MEASUREMENT",
+                             "LC_ADDRESS","LC_TELEPHONE","LC_NAME","LC_IDENTIFICATION")
+        $assignments = ($formatVariables | ForEach-Object { "$_=$Locale" }) -join " "
+        [void]$lines.Add("runcmd:")
+        [void]$lines.Add("  - [ sh, -c, 'locale-gen $Locale || true' ]")
+        [void]$lines.Add("  - [ sh, -c, 'update-locale $assignments' ]")
     }
 
     # The gold is grown to its full size by New-Vhdx, but the partition and the
@@ -3380,6 +3403,7 @@ function Set-LinuxProvisioning {
         [string]$NicMacAddress
     )
 
+    $language = ""
     $locale = ""
     $keymap = ""
     $timeZone = ""
@@ -3389,6 +3413,7 @@ function Set-LinuxProvisioning {
         if (Test-Path -LiteralPath $manifestPath) {
             try {
                 $manifest = Get-Content -LiteralPath $manifestPath -Raw -Encoding UTF8 | ConvertFrom-Json
+                if ($manifest.language)       { $language = Get-LinuxLocaleName -LocaleTag ([string]$manifest.language) }
                 if ($manifest.locale)         { $locale   = Get-LinuxLocaleName -LocaleTag ([string]$manifest.locale) }
                 if ($manifest.keyboardLayout) { $keymap   = Get-LinuxKeymap     -LocaleTag ([string]$manifest.keyboardLayout) }
                 if ($manifest.timeZone)       { $timeZone = [string]$manifest.timeZone }
@@ -3399,8 +3424,13 @@ function Set-LinuxProvisioning {
         }
     }
 
+    # A gold built before language became its own field has a locale and no language.
+    # Falling back to the locale reproduces the old behaviour rather than silently
+    # switching that machine to English.
+    if ([string]::IsNullOrWhiteSpace($language)) { $language = $locale }
+
     $userData = Get-CloudInitUserData -Server $Server -Defaults $Defaults -HostName $HostName `
-        -Locale $locale -Keymap $keymap -TimeZone $timeZone
+        -Language $language -Locale $locale -Keymap $keymap -TimeZone $timeZone
     $metaData = Get-CloudInitMetaData -HostName $HostName
     $networkConfig = Get-CloudInitNetworkConfig -Server $Server -MacAddress $NicMacAddress
 
