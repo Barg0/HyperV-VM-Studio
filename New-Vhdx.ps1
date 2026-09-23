@@ -4992,6 +4992,27 @@ function Get-BakeUserData {
         [void]$lines.Add("packages:")
         foreach ($package in $packages) { [void]$lines.Add("  - '$package'") }
     }
+    # policy-rc.d, written before anything is installed and removed as the first runcmd.
+    # An exit code of 101 is the Debian convention for "do not start this service", and
+    # invoke-rc.d and deb-systemd-invoke - which is what dpkg's postinst scripts call -
+    # both honour it. It costs nothing and it buys back a minute and a half of every
+    # bake.
+    #
+    # The daemon it is aimed at is hv-kvp-daemon. Its unit carries
+    # `BindsTo=sys-devices-virtual-misc-vmbus\x21hv_kvp.device`, and systemd only has a
+    # .device unit for a device that udev tagged with TAG+="systemd". The rule that does
+    # that tagging ships in linux-cloud-tools-common - the package being installed right
+    # now - so it arrives long after the hv_kvp uevent was processed at boot. The device
+    # is there, the tag is not, the device unit never appears, and the 90-second default
+    # device timeout runs out in full before dpkg gets its `Could not execute systemctl`
+    # and moves on. It is a bake-only race: a VM built from this gold boots with the rule
+    # already in place and the daemon starts normally.
+    #
+    # bootcmd, not write_files, because bootcmd is the first module of the init stage and
+    # write_files is conditional here - a second write_files key would collide with the
+    # aliases one below.
+    [void]$lines.Add("bootcmd:")
+    [void]$lines.Add('  - [ sh, -c, ''printf "#!/bin/sh\nexit 101\n" > /usr/sbin/policy-rc.d && chmod 0755 /usr/sbin/policy-rc.d'' ]')
     if ($wantAliases) {
         # profile.d covers an SSH session, which is a login shell, and every user that
         # already exists. /etc/skel is what the per-VM user gets: cloud-init creates that
@@ -5018,12 +5039,43 @@ function Get-BakeUserData {
     [void]$lines.Add("runcmd:")
     # Everything below prints to the console, which is ttyS0 on these images, which is
     # the pipe the host is reading.
-    # SINGLE quotes. In a double-quoted PowerShell string $(uname -r) is a subexpression
-    # and expands HERE, stamping the build host's own kernel into the guest's config -
-    # which on a Windows host is not even a sensible string. It has to reach the guest
-    # shell literally.
-    [void]$lines.Add('  - [ sh, -c, ''echo BAKE-KERNEL $(uname -r)'' ]')
-    [void]$lines.Add("  - [ sh, -c, 'dpkg -l | grep -c hyperv || true' ]")
+    # SINGLE quotes throughout. In a double-quoted PowerShell string $(uname -r) is a
+    # subexpression and expands HERE, stamping the build host's own kernel into the
+    # guest's config - which on a Windows host is not even a sensible string. It has to
+    # reach the guest shell literally.
+
+    # The service block goes first: the only thing it was there to hold back is the
+    # package install, and that is the module before this one.
+    [void]$lines.Add("  - [ sh, -c, 'rm -f /usr/sbin/policy-rc.d' ]")
+    # BAKE-KERNEL is the kernel the GOLD will boot, not the one the bake is running on.
+    # The bake never reboots, so `uname -r` here is always the kernel the image shipped
+    # with - it reported 7.0.0-31-generic on a run that had just installed the azure
+    # kernel and set it as the default, and the host logged that as "guest kernel", which
+    # is the one thing this line exists to say. /boot/vmlinuz is maintained by the kernel
+    # postinst and points at the newest installed kernel, which is the same one
+    # grub-mkconfig puts first. The case guard is for an image where /boot/vmlinuz is
+    # absent or is not the symlink it is meant to be: falling back to the running kernel
+    # keeps the sentinel parseable rather than emitting an empty field the host would
+    # read the next word into.
+    [void]$lines.Add('  - [ sh, -c, ''v=$(readlink /boot/vmlinuz 2>/dev/null); case "$v" in vmlinuz-?*) v=${v#vmlinuz-} ;; *) v=$(uname -r) ;; esac; echo BAKE-KERNEL $v'' ]')
+    [void]$lines.Add('  - [ sh, -c, ''echo BAKE-RUNNING-KERNEL $(uname -r)'' ]')
+    # What replaced `dpkg -l | grep -c hyperv`. That counted lines matching "hyperv" in
+    # the package list, which on Ubuntu is zero however well the bake went - the daemons
+    # come from linux-cloud-tools-*, and nothing Ubuntu ships is named hyperv. It printed
+    # 0 on a successful bake, so it could not have caught a failed one either. This asks
+    # dpkg about the packages this bake was actually told to install, by name, and says
+    # MISSING for each one that is not installed - which the host turns into a warning
+    # beside a gold that came out short.
+    if ($packages.Count -gt 0) {
+        $packageList = ($packages -join " ")
+        # dpkg -s rather than dpkg-query -f, because every way of writing the format
+        # string needs either a dollar-brace the guest shell would expand first or a
+        # nested single quote inside a YAML single-quoted scalar. `Status: install ok
+        # installed` is the line dpkg prints for a package that is installed and
+        # configured, and nothing else prints it - a package that was removed but kept
+        # its config files says `deinstall ok config-files`.
+        [void]$lines.Add('  - [ sh, -c, ''for p in ' + $packageList + '; do if dpkg -s $p 2>/dev/null | grep -q "^Status: install ok installed"; then echo BAKE-PKG $p ok; else echo BAKE-PKG $p MISSING; fi; done'' ]')
+    }
 
     # No sshd edits here, and that is a correction rather than an omission.
     #
@@ -5372,6 +5424,20 @@ function Invoke-LinuxBakeBoot {
         }
 
         if ($transcript -match "BAKE-OK") {
+            # BAKE-PKG first. The sentinel says cloud-init reached the end; it does not
+            # say apt got what it was sent for, and a gold missing the azure kernel boots
+            # perfectly well right up to the point where someone asks why it has no
+            # Hyper-V daemons. A miss is a warning rather than a failure: the gold is
+            # real and usable, it is just short, and which of those matters is the
+            # operator's call.
+            $missing = @()
+            foreach ($match in ([regex]::Matches($transcript, "BAKE-PKG\s+(\S+)\s+MISSING"))) {
+                $missing += $match.Groups[1].Value
+            }
+            if ($missing.Count -gt 0) {
+                Write-Log "The bake finished without installing $($missing -join ', ') - the gold is missing them" -Tag "Warn"
+            }
+
             $kernel = ""
             if ($transcript -match "BAKE-KERNEL\s+(\S+)") { $kernel = $Matches[1] }
             if ($kernel) { Write-Log "Bake finished - guest kernel $kernel" -Tag "ok" }
@@ -5784,14 +5850,10 @@ function Start-LinuxInteractiveConfiguration {
             -StatusLines ([ordered]@{ distro = $entry.Name; switch = $switchName })
         if ($null -eq $bakeMirrorRegion) { return $null }
 
-        $updateItems = @(
-            [PSCustomObject]@{ Id = "no";  Label = "No - install only what the image is missing" }
-            [PSCustomObject]@{ Id = "yes"; Label = "Yes - full package upgrade (slower, and the gold ages the moment it is built)" }
-        )
-        $updateChoice = Show-Menu -Title "Apply all available updates during the bake?" -Items $updateItems `
-            -Heading "Updates" -HeadingHint "A full upgrade can add a lot of minutes to the bake"
-        if ($null -eq $updateChoice) { return $null }
-        $applyUpdates = ($updateChoice -eq "yes")
+        # Not a question any more. The answer was yes on every bake that has been run
+        # here, and a gold that ships packages the image was already shipping updates for
+        # is a gold that hands every VM built from it the same pending upgrade.
+        $applyUpdates = $true
 
         Show-MenuHeader -Title "Extra packages" -StatusLines ([ordered]@{ distro = $entry.Name; switch = $switchName })
         Write-Studio -Text "  Anything every VM from this gold should already have." -Key "muted"
@@ -5890,7 +5952,7 @@ function Start-LinuxInteractiveConfiguration {
             if (@($bakeExtraPackages).Count -gt 0) {
                 Write-FastfetchInfoRow -Label "extra packages" -Value (@($bakeExtraPackages) -join ", ") -LabelWidth 24 -IndentWidth 2
             }
-            Write-FastfetchInfoRow -Label "apply updates" -Value $(if ($applyUpdates) { "Yes - full package upgrade" } else { "No" }) -LabelWidth 24 -IndentWidth 2
+            Write-FastfetchInfoRow -Label "apply updates" -Value "Yes - full package upgrade" -LabelWidth 24 -IndentWidth 2
             $featureShown = "none"
             if (@($bakeFeatures).Count -gt 0) {
                 $featureLabels = @()
