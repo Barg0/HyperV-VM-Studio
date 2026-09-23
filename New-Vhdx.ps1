@@ -4145,11 +4145,21 @@ function Get-LinuxImageCatalog {
     <#
         One entry per gold this script can build.
 
-        The three distributions do not publish alike and the catalog says so rather
-        than pretending they do: Ubuntu republishes a release directory in place,
-        while Debian cuts dated snapshots and keeps a `latest/` alias beside them.
-        The download URL is therefore per-entry, never a template with the version
-        substituted in.
+        The distributions do not publish alike and the catalog says so rather than
+        pretending they do: Ubuntu republishes a release directory in place, Debian
+        cuts dated snapshots and keeps a `latest/` alias beside them, Rocky puts a
+        `.latest` in the file name itself, and Fedora stamps a build number into both
+        the image and its checksum file. The download URL is therefore per-entry,
+        never a template with the version substituted in - and Fedora's is the one
+        that has to be revisited on every release, because 43-1.6 becomes 43-1.7 if
+        a respin happens.
+
+        Family, not Distro, is what the bake branches on. Rocky and Fedora differ
+        from each other in the way Ubuntu and Debian do - a version and a URL - and
+        not in any of the ways a bake cares about, so `rhel` covers both and will
+        cover Alma and Azure Linux when they arrive. Distro stays for the things
+        that really are per-distribution: the menu heading, the apt mirror, and
+        Ubuntu's language packs.
 
         DiskGB is what the gold - and so every VM differencing off it - will be. The
         cloud images themselves are 3 GiB or so and grow on first boot; the number
@@ -4162,6 +4172,7 @@ function Get-LinuxImageCatalog {
             Name          = "Ubuntu 26.04 LTS (Resolute)"
             ImageId       = "ubuntu2604"
             Distro        = "ubuntu"
+            Family        = "debian"
             Version       = "26.04"
             Url           = "https://cloud-images.ubuntu.com/releases/26.04/release/ubuntu-26.04-server-cloudimg-amd64.img"
             ChecksumUrl   = "https://cloud-images.ubuntu.com/releases/26.04/release/SHA256SUMS"
@@ -4178,6 +4189,7 @@ function Get-LinuxImageCatalog {
             Name          = "Ubuntu 24.04 LTS (Noble)"
             ImageId       = "ubuntu2404"
             Distro        = "ubuntu"
+            Family        = "debian"
             Version       = "24.04"
             Url           = "https://cloud-images.ubuntu.com/releases/24.04/release/ubuntu-24.04-server-cloudimg-amd64.img"
             ChecksumUrl   = "https://cloud-images.ubuntu.com/releases/24.04/release/SHA256SUMS"
@@ -4192,6 +4204,7 @@ function Get-LinuxImageCatalog {
             Name          = "Debian 13 (Trixie)"
             ImageId       = "debian13"
             Distro        = "debian"
+            Family        = "debian"
             Version       = "13"
             # genericcloud, NOT the variant Debian calls `nocloud`. That one contains no
             # cloud-init at all and boots to a passwordless root console - a pure naming
@@ -4212,7 +4225,303 @@ function Get-LinuxImageCatalog {
             # image already carries all three.
             BakePackages  = @("hyperv-daemons", "kbd", "console-setup", "keyboard-configuration")
         }
+        [PSCustomObject]@{
+            Id            = "debian-12"
+            Name          = "Debian 12 (Bookworm)"
+            ImageId       = "debian12"
+            Distro        = "debian"
+            Family        = "debian"
+            Version       = "12"
+            Url           = "https://cloud.debian.org/images/cloud/bookworm/latest/debian-12-genericcloud-amd64.qcow2"
+            ChecksumUrl   = "https://cloud.debian.org/images/cloud/bookworm/latest/SHA512SUMS"
+            Algorithm     = "SHA512"
+            SourceFormat  = "qcow2"
+            DefaultDiskGB = 32
+            Generation    = 2
+            BakePackages  = @("hyperv-daemons", "kbd", "console-setup", "keyboard-configuration")
+        }
+        [PSCustomObject]@{
+            Id            = "fedora-43"
+            Name          = "Fedora 43 (Cloud Base)"
+            ImageId       = "fedora43"
+            Distro        = "fedora"
+            Family        = "rhel"
+            Version       = "43"
+            # Base-Generic, not Base-UEFI-UKI: the UKI variant boots a unified kernel
+            # image with its command line sealed inside, which is the one thing a gold
+            # that has to take a serial console from the host must not do.
+            #
+            # download.fedoraproject.org is the mirror redirector rather than a mirror,
+            # so this URL keeps working when any single mirror does not. The 1.6 is the
+            # compose's build number and it is part of BOTH names - it moves on a
+            # respin, and this entry moves with it.
+            Url           = "https://download.fedoraproject.org/pub/fedora/linux/releases/43/Cloud/x86_64/images/Fedora-Cloud-Base-Generic-43-1.6.x86_64.qcow2"
+            ChecksumUrl   = "https://download.fedoraproject.org/pub/fedora/linux/releases/43/Cloud/x86_64/images/Fedora-Cloud-43-1.6-x86_64-CHECKSUM"
+            Algorithm     = "SHA256"
+            SourceFormat  = "qcow2"
+            DefaultDiskGB = 32
+            Generation    = 2
+            # No kernel to swap: Fedora's stock kernel carries the Hyper-V drivers, and
+            # there is no azure-flavoured build to install in the way Ubuntu has one.
+            # hyperv-daemons is a meta package over hypervkvpd, hypervvssd and
+            # hypervfcopyd. The keyboard machinery Debian needs is not listed because
+            # cloud-init drives localectl on this family, not console-setup.
+            BakePackages  = @("hyperv-daemons")
+        }
+        [PSCustomObject]@{
+            Id            = "fedora-42"
+            Name          = "Fedora 42 (Cloud Base)"
+            ImageId       = "fedora42"
+            Distro        = "fedora"
+            Family        = "rhel"
+            Version       = "42"
+            Url           = "https://download.fedoraproject.org/pub/fedora/linux/releases/42/Cloud/x86_64/images/Fedora-Cloud-Base-Generic-42-1.1.x86_64.qcow2"
+            ChecksumUrl   = "https://download.fedoraproject.org/pub/fedora/linux/releases/42/Cloud/x86_64/images/Fedora-Cloud-42-1.1-x86_64-CHECKSUM"
+            Algorithm     = "SHA256"
+            SourceFormat  = "qcow2"
+            DefaultDiskGB = 32
+            Generation    = 2
+            BakePackages  = @("hyperv-daemons")
+        }
+        [PSCustomObject]@{
+            Id            = "rocky-10"
+            Name          = "Rocky Linux 10 (GenericCloud)"
+            ImageId       = "rocky10"
+            Distro        = "rocky"
+            Family        = "rhel"
+            Version       = "10"
+            # GenericCloud-Base rather than GenericCloud-LVM: the LVM variant puts the
+            # root filesystem on a logical volume, which growpart cannot extend without
+            # the lvm work the seed does not do.
+            #
+            # `.latest` is part of the published FILE NAME here, not a directory alias,
+            # and the .CHECKSUM beside it names the same `.latest` file - so the entry
+            # needs no dated URL and the checksum still matches what was downloaded.
+            Url           = "https://dl.rockylinux.org/pub/rocky/10/images/x86_64/Rocky-10-GenericCloud-Base.latest.x86_64.qcow2"
+            ChecksumUrl   = "https://dl.rockylinux.org/pub/rocky/10/images/x86_64/Rocky-10-GenericCloud-Base.latest.x86_64.qcow2.CHECKSUM"
+            Algorithm     = "SHA256"
+            SourceFormat  = "qcow2"
+            DefaultDiskGB = 32
+            Generation    = 2
+            BakePackages  = @("hyperv-daemons")
+        }
+        [PSCustomObject]@{
+            Id            = "rocky-9"
+            Name          = "Rocky Linux 9 (GenericCloud)"
+            ImageId       = "rocky9"
+            Distro        = "rocky"
+            Family        = "rhel"
+            Version       = "9"
+            Url           = "https://dl.rockylinux.org/pub/rocky/9/images/x86_64/Rocky-9-GenericCloud-Base.latest.x86_64.qcow2"
+            ChecksumUrl   = "https://dl.rockylinux.org/pub/rocky/9/images/x86_64/Rocky-9-GenericCloud-Base.latest.x86_64.qcow2.CHECKSUM"
+            Algorithm     = "SHA256"
+            SourceFormat  = "qcow2"
+            DefaultDiskGB = 32
+            Generation    = 2
+            BakePackages  = @("hyperv-daemons")
+        }
+        [PSCustomObject]@{
+            Id            = "arch"
+            Name          = "Arch Linux (rolling)"
+            ImageId       = "arch"
+            Distro        = "arch"
+            Family        = "arch"
+            # There is no version to pin and no point pretending otherwise. The
+            # sidecar records "rolling", and a gold built from it is only as current
+            # as the day it was baked - which on a rolling release is a shorter shelf
+            # life than the others have.
+            Version       = "rolling"
+            # cloudimg, NOT the `basic` image published beside it: basic carries no
+            # cloud-init, so a NoCloud seed would be read by nothing and the VM would
+            # come up with no user, no host name and no network config.
+            #
+            # `latest/` keeps an unversioned alias beside the dated snapshots, and the
+            # .SHA256 next to it names the same unversioned file, so the checksum still
+            # matches what was downloaded.
+            Url           = "https://geo.mirror.pkgbuild.com/images/latest/Arch-Linux-x86_64-cloudimg.qcow2"
+            ChecksumUrl   = "https://geo.mirror.pkgbuild.com/images/latest/Arch-Linux-x86_64-cloudimg.qcow2.SHA256"
+            Algorithm     = "SHA256"
+            SourceFormat  = "qcow2"
+            DefaultDiskGB = 32
+            Generation    = 2
+            # THE reason this entry needs a field the others do not. Arch ships no
+            # Microsoft-signed shim - there is nothing for the MicrosoftUEFICertificate-
+            # Authority template to validate - so a Gen 2 VM with Secure Boot on does
+            # not boot it at all. Every other gold here leaves this alone and stays on.
+            SecureBoot    = $false
+            # hyperv is Arch's name for the integration daemons, and it is the only
+            # thing this image is missing. cloud-guest-utils - growpart - was in the
+            # list too until the first bake answered the question: pacman reported
+            # `cloud-guest-utils-0.33-3 is up to date -- reinstalling`, so the cloud
+            # image already carries it and asking for it only bought a reinstall.
+            BakePackages  = @("hyperv")
+        }
     )
+}
+
+function Get-LinuxFamilyProfile {
+    <#
+        Everything the bake does differently for one package family, in one place.
+
+        The alternative was a `$Entry.Distro -eq "ubuntu"` at each of the ten call
+        sites that are Debian-shaped today, which is the version that rots the first
+        time a fourth family shows up. The catalog stays data; the shell fragments
+        live here beside each other where they can be compared.
+
+        Unknown families get the Debian profile rather than a throw: a catalog entry
+        added without a Family is a typo, and the bake failing at apt tells you that
+        louder than a menu that will not open.
+    #>
+    param([string]$Family)
+
+    $key = ([string]$Family).Trim().ToLowerInvariant()
+
+    if ($key -eq "arch") {
+        return [PSCustomObject]@{
+            Family          = "arch"
+            # The group that means "may use sudo". Debian and Ubuntu call it sudo;
+            # the RHEL family and Arch call it wheel, and on those two it is the group
+            # /etc/sudoers already grants with its shipped `%wheel` line. cloud-init
+            # creates a group it does not find, so naming the wrong one does not fail -
+            # it quietly leaves an empty `sudo` group in the gold and grants nothing
+            # through it.
+            AdminGroup      = "wheel"
+            UsesAptModule   = $false
+            # pacman reads /etc/pacman.d/mirrorlist, which the image ships with a
+            # worldwide list already ranked. Replacing it would mean writing a file
+            # rather than setting a key, and the apt mirror catalog next door has no
+            # Arch column to read anyway.
+            OffersMirror    = $false
+            # No postinst scripts at all: pacman installs files and runs hooks, and
+            # Arch's packaging policy is that a package never enables or starts its
+            # own units. Nothing to hold back - and the flip side is ServiceCommands
+            # below, because nothing enables them either.
+            UsesPolicyRcD   = $false
+            PackageProbe    = 'for p in {0}; do if pacman -Q $p >/dev/null 2>&1; then echo BAKE-PKG $p ok; else echo BAKE-PKG $p MISSING; fi; done'
+            # /boot/vmlinuz-linux is a FIXED name here - it carries no version and
+            # never changes, so there is nothing to read it out of. The package version
+            # is the answer, and it is the one that moves when an upgrade lands a new
+            # kernel. It reads 6.17.1.arch1-1 where uname would say 6.17.1-arch1-1;
+            # same kernel, pacman's spelling.
+            KernelReport    = 'k=$(pacman -Q linux 2>/dev/null | cut -d" " -f2); [ -n "$k" ] || k=$(uname -r); echo BAKE-KERNEL $k'
+            # Arch's `hyperv` package ships hv_kvp_daemon.service and
+            # hv_vss_daemon.service and enables neither, because no Arch package
+            # enables anything. Without this the gold would carry the daemons and run
+            # none of them - installed, inert, and invisible until someone asks why
+            # Hyper-V shows no IP address for the VM. No --now: the bake has no use for
+            # them running, only for the enable symlinks reaching the gold.
+            # stderr is NOT swallowed: systemctl prints its "Created symlink" lines
+            # there, and on the first Arch bake the redirect meant the transcript could
+            # not show whether the enable had done anything at all.
+            ServiceCommands = @(
+                'systemctl enable hv_kvp_daemon.service hv_vss_daemon.service || true'
+            )
+            # Both, because which renderer cloud-init picks here depends on what the
+            # image happens to carry: Arch declares only a netplan renderer config but
+            # takes the DEFAULT priority list, so netplan wins if the netplan package
+            # is installed and networkd - writing 10-cloud-init-<link>.network - wins
+            # if it is not. Removing a file that was never written costs nothing;
+            # leaving the gold with the bake's addressing does not.
+            NetworkArtifacts = @(
+                "/etc/netplan/50-cloud-init.yaml",
+                "/etc/systemd/network/10-cloud-init-*.network"
+            )
+            # Nothing to install. Arch's glibc carries every locale's source and
+            # locale-gen generates whatever /etc/locale.gen names, so a language is a
+            # generate step rather than a package - which is why the per-VM seed's
+            # Arch branch appends to that file instead.
+            LanguagePackFormat = ""
+            BootCommands    = @()
+        }
+    }
+
+    if ($key -eq "rhel") {
+        return [PSCustomObject]@{
+            Family = "rhel"
+            # cloud-init's apt module writes deb822 sources; on this family the
+            # equivalent would be yum_repos, and there is nothing to point it at.
+            # Fedora and Rocky both resolve their mirrors through metalink, which
+            # already routes by geography - pinning one host is a downgrade, not a
+            # setting, so the mirror question is not asked at all.
+            AdminGroup      = "wheel"
+            UsesAptModule   = $false
+            OffersMirror    = $false
+            # dnf does not start a service it just installed - there are no
+            # postinst scripts calling invoke-rc.d, only systemd presets, which
+            # decide what is ENABLED and never start anything mid-transaction. So
+            # the policy-rc.d that saves 90 seconds on Ubuntu has nothing to do
+            # here, and writing it would only leave a file behind to remove.
+            UsesPolicyRcD   = $false
+            # rpm -q is the whole check: it exits non-zero for a package that is not
+            # installed, and there is no config-files half-state for it to be caught
+            # out by the way dpkg has one.
+            PackageProbe    = 'for p in {0}; do if rpm -q $p >/dev/null 2>&1; then echo BAKE-PKG $p ok; else echo BAKE-PKG $p MISSING; fi; done'
+            # There is no /boot/vmlinuz symlink on this family. grubby reads the
+            # BootLoaderSpec entries and prints the default kernel's path, which is
+            # the same question asked of the thing that will actually answer it.
+            KernelReport    = 'k=$(grubby --default-kernel 2>/dev/null); case "$k" in /boot/vmlinuz-?*) k=${k#/boot/vmlinuz-} ;; *) k=$(uname -r) ;; esac; echo BAKE-KERNEL $k'
+            # cloud-init renders network config to NetworkManager keyfiles here, not
+            # to netplan. The conf.d drop-in goes too: it is cloud-init's own file
+            # and it names the instance it was written for.
+            NetworkArtifacts = @(
+                "/etc/NetworkManager/system-connections/cloud-init-*.nmconnection",
+                "/etc/NetworkManager/conf.d/99-cloud-init.conf",
+                "/etc/sysconfig/network-scripts/ifcfg-*"
+            )
+            # glibc-langpack-de rather than language-pack-de, and unlike Debian this
+            # family genuinely needs it: there is no locale-gen to generate a locale
+            # the image did not ship.
+            LanguagePackFormat = "glibc-langpack-{0}"
+            # The dnf counterpart to the Debian family's Acquire timeouts, and it is
+            # here for a measured reason rather than for symmetry. A Rocky 10 bake with
+            # no working resolver spent 4:51 on the BaseOS mirrorlist, three times over
+            # - package_update, package_upgrade and the install - for fifteen minutes
+            # of a run that had already failed. dnf's own default is a 30-second
+            # connect timeout and ten retries, per mirror, which is how that adds up.
+            #
+            # Appended rather than written: Rocky's /etc/dnf/dnf.conf has one section,
+            # [main], and these keys belong in it. A file of our own would have to
+            # restate gpgcheck and best, which is how a bake ends up quietly disabling
+            # a signature check nobody asked it to touch.
+            BootCommands    = @(
+                'printf "\ntimeout=20\nretries=2\n" >> /etc/dnf/dnf.conf'
+            )
+            # Nothing: hyperv-daemons enables its own units through systemd presets.
+            ServiceCommands = @()
+        }
+    }
+
+    return [PSCustomObject]@{
+        Family             = "debian"
+        AdminGroup         = "sudo"
+        UsesAptModule      = $true
+        OffersMirror       = $true
+        UsesPolicyRcD      = $true
+        PackageProbe       = 'for p in {0}; do if dpkg -s $p 2>/dev/null | grep -q "^Status: install ok installed"; then echo BAKE-PKG $p ok; else echo BAKE-PKG $p MISSING; fi; done'
+        KernelReport       = 'v=$(readlink /boot/vmlinuz 2>/dev/null); case "$v" in vmlinuz-?*) v=${v#vmlinuz-} ;; *) v=$(uname -r) ;; esac; echo BAKE-KERNEL $v'
+        NetworkArtifacts   = @("/etc/netplan/50-cloud-init.yaml")
+        # Ubuntu only, and Get-LinuxLanguagePack is what knows that: Debian has no
+        # language-pack-* at all, it has locales and locale-gen.
+        LanguagePackFormat = "language-pack-{0}"
+        # policy-rc.d, removed again by the first runcmd. 101 is the Debian convention
+        # for "do not start this service", and invoke-rc.d and deb-systemd-invoke -
+        # which is what dpkg's postinst scripts call - both honour it.
+        #
+        # The daemon it is aimed at is hv-kvp-daemon. Its unit carries
+        # `BindsTo=sys-devices-virtual-misc-vmbus\x21hv_kvp.device`, and systemd only
+        # has a .device unit for a device udev tagged with TAG+="systemd". The rule
+        # that does that tagging ships in linux-cloud-tools-common - the package being
+        # installed right now - so it arrives long after the hv_kvp uevent was handled
+        # at boot. The device is there, the tag is not, the device unit never appears,
+        # and the 90-second default device timeout runs out in full. Bake-only: a VM
+        # built from the gold boots with the rule already in place.
+        BootCommands       = @(
+            'printf "#!/bin/sh\nexit 101\n" > /usr/sbin/policy-rc.d && chmod 0755 /usr/sbin/policy-rc.d'
+        )
+        # Nothing: dpkg's postinst scripts enable what they install, which is the
+        # whole reason policy-rc.d above has to stop them starting it too.
+        ServiceCommands    = @()
+    }
 }
 
 function Get-WebText {
@@ -4250,7 +4559,19 @@ function Get-WebText {
 
 function Get-PublishedChecksum {
     <#
-        Pulls one file's checksum out of a SHA256SUMS / SHA512SUMS listing.
+        Pulls one file's checksum out of a published listing, in either of the two
+        formats these distributions use.
+
+        Ubuntu and Debian publish coreutils format - `<hash>  <name>`, one line per
+        file. Fedora and Rocky publish BSD format - `SHA256 (<name>) = <hash>` - and
+        Fedora wraps the whole listing in a PGP clearsigned document. The armour
+        lines and the `# <name>: <n> bytes` comments beside each entry match neither
+        pattern and fall through, which is the entire handling they need.
+
+        The signature is not checked. Fedora signs its CHECKSUM and Rocky publishes
+        a detached .asc beside it, and verifying either needs a GPG this host does
+        not have; what the checksum buys without it is still the thing that matters
+        here, which is that the file on disk is the file that was published.
 
         Returns an empty string when the listing cannot be fetched or the file is not
         in it. That is not fatal on purpose: a mirror being briefly unreachable should
@@ -4269,9 +4590,18 @@ function Get-PublishedChecksum {
         return ""
     }
 
+    $escapedName = [regex]::Escape($FileName)
     foreach ($line in ($text -split "`n")) {
         $trimmed = $line.Trim()
         if ([string]::IsNullOrWhiteSpace($trimmed)) { continue }
+
+        # BSD: "SHA256 (<name>) = <hash>". Matched first because its own first field
+        # is a word rather than a hash, so the coreutils branch below would read the
+        # algorithm name as the digest and hand back "sha256".
+        if ($trimmed -match "^[A-Za-z0-9]+\s+\($escapedName\)\s*=\s*([0-9A-Fa-f]+)$") {
+            return $Matches[1].ToLowerInvariant()
+        }
+
         # "<hash> *<name>" or "<hash>  <name>" - the star marks binary mode and is not
         # part of the name.
         $parts = $trimmed -split "\s+", 2
@@ -4357,6 +4687,15 @@ function Write-LinuxGoldManifest {
     $manifest = [ordered]@{
         osFamily       = "linux"
         distro         = $Entry.Distro
+        # The package family, which is what Build-Vms.ps1 needs and cannot work out
+        # from the distro without carrying a copy of the catalog: the per-VM seed
+        # generates its format locale with locale-gen on one family and localectl on
+        # the other, and it learns which from here.
+        family         = $Entry.Family
+        # Whether a VM built from this gold can boot with Secure Boot on. False only
+        # for a distribution that ships no signed shim, and recorded here because the
+        # per-VM config decides Secure Boot and has no other way to know.
+        secureBoot     = $(if ($null -ne $Entry.PSObject.Properties["SecureBoot"] -and $null -ne $Entry.SecureBoot) { [bool]$Entry.SecureBoot } else { $true })
         distroVersion  = $Entry.Version
         imageName      = $Entry.Name
         target         = $Target
@@ -4538,8 +4877,11 @@ function Get-LinuxGoldFeatureCatalog {
         a feature that only works when apt does is a feature that fails on the day the
         network is the problem.
 
-        Ubuntu-only entries carry Distro; the picker leaves them out for Debian rather
-        than offering a tick that would do nothing.
+        An entry can name a Distro or a Family; the picker leaves it out for anything
+        else rather than offering a tick that would do nothing. Distro is for what is
+        genuinely one distribution's - motd-news is Ubuntu's alone - and Family for
+        what a whole package family shares, like the .bashrc line Debian and Ubuntu
+        ship commented out and Fedora does not ship at all.
     #>
 
     return @(
@@ -4548,6 +4890,7 @@ function Get-LinuxGoldFeatureCatalog {
             Label     = "Shell aliases (ll, la, l, cls, .., cd.., colour ls/grep)"
             DefaultOn = $true
             Distro    = ""
+            Family    = ""
         }
         [PSCustomObject]@{
             # Off by default: both images ship it commented out, and a gold should not
@@ -4557,6 +4900,11 @@ function Get-LinuxGoldFeatureCatalog {
             Label     = "Colour prompt (force_color_prompt)"
             DefaultOn = $false
             Distro    = ""
+            # Debian family. force_color_prompt is a line those two ship commented
+            # out in /etc/skel/.bashrc; Fedora and Rocky have no such line to
+            # uncomment - their prompt is coloured by /etc/profile.d/ already - so
+            # the tick would edit nothing.
+            Family    = "debian"
         }
         [PSCustomObject]@{
             # Measured, not assumed: /etc/default/motd-news ships ENABLED=1 with
@@ -4572,6 +4920,7 @@ function Get-LinuxGoldFeatureCatalog {
             Label     = "Quiet the login banner (no motd-news fetch, no Pro/ESM adverts)"
             DefaultOn = $false
             Distro    = "ubuntu"
+            Family    = ""
         }
     )
 }
@@ -4591,6 +4940,7 @@ function Get-LinuxDistroDisplayName {
         "rocky"  { return "Rocky Linux" }
         "alma"   { return "AlmaLinux" }
         "fedora" { return "Fedora" }
+        "arch"   { return "Arch Linux" }
         "suse"   { return "openSUSE" }
         "other"  { return "Other" }
     }
@@ -4715,18 +5065,38 @@ function Get-AptMirrorUri {
     return ""
 }
 
-function Get-UbuntuLanguagePack {
-    # language-pack-de for de-DE, and nothing at all for English or for Debian. Returns
-    # an empty string when no package is needed.
+function Get-LinuxLanguagePack {
+    <#
+        The package that has to be installed for a language to exist on the gold, or
+        an empty string when there is nothing to install.
+
+        Three different answers, and the difference is real rather than cosmetic:
+
+        Ubuntu splits translations into language-pack-de and friends, so a gold in
+        German needs one. Debian ships the same glibc locales as Ubuntu but no
+        language-pack-* at all - `locales` is already there and locale-gen generates
+        whatever is asked for offline, so the answer is nothing. The RHEL family
+        ships only the locales in glibc-langpack-en and has no locale-gen to make
+        more, so glibc-langpack-de is not an optional extra there, it is the only way
+        that locale comes to exist.
+
+        en is always empty: these images are built in English and already have it.
+    #>
     param([object]$Entry, [string]$LanguageTag)
 
-    if ($null -eq $Entry -or $Entry.Distro -ne "ubuntu") { return "" }
+    if ($null -eq $Entry) { return "" }
     if ([string]::IsNullOrWhiteSpace($LanguageTag)) { return "" }
 
     $language = ($LanguageTag -split "-")[0].ToLowerInvariant()
-    # en is already there: the image is built in English.
     if ($language -eq "en") { return "" }
-    return "language-pack-$language"
+
+    # Debian is the one that wants nothing, and it is a distro rather than a family
+    # answer: Ubuntu is the same family and wants a package.
+    if ($Entry.Distro -eq "debian") { return "" }
+
+    $format = [string](Get-LinuxFamilyProfile -Family $Entry.Family).LanguagePackFormat
+    if ([string]::IsNullOrWhiteSpace($format)) { return "" }
+    return ($format -f $language)
 }
 
 function Get-DefaultLinuxTimeZone {
@@ -4910,6 +5280,9 @@ function Get-BakeUserData {
         [string[]]$Features = @()
     )
 
+    # $profile would shadow PowerShell's own automatic variable.
+    $familyProfile = Get-LinuxFamilyProfile -Family $Entry.Family
+
     $wantAliases = (@($Features) -contains "aliases")
     $wantColorPrompt = (@($Features) -contains "colorprompt")
     $wantQuietMotd = (@($Features) -contains "quietmotd")
@@ -4940,7 +5313,7 @@ function Get-BakeUserData {
     # login is still there on exactly the runs where it is needed.
     [void]$lines.Add("users:")
     [void]$lines.Add("  - name: bake")
-    [void]$lines.Add("    groups: [sudo]")
+    [void]$lines.Add("    groups: [$($familyProfile.AdminGroup)]")
     [void]$lines.Add("    shell: /bin/bash")
     [void]$lines.Add("    sudo: 'ALL=(ALL) NOPASSWD:ALL'")
     [void]$lines.Add("    lock_passwd: false")
@@ -4950,69 +5323,71 @@ function Get-BakeUserData {
     [void]$lines.Add("    - name: bake")
     [void]$lines.Add("      password: 'bake'")
     [void]$lines.Add("      type: text")
-    # The mirror, through cloud-init's own apt module rather than by editing files.
-    # That matters on these images: Ubuntu 26.04 and Debian 13 both write their sources
-    # in deb822 format (/etc/apt/sources.list.d/*.sources), not the one-line format, and
-    # the module knows which one this release uses. A sed over sources.list would edit a
-    # file that is no longer read.
-    #
-    # It is set on the BAKE, so it persists into the gold - cloud-init clean does not
-    # revert sources - and every VM built from the gold inherits the same mirror.
-    # `security` is deliberately left alone: security.ubuntu.com and security.debian.org
-    # are single well-served hosts, and pointing them at a country mirror is how a lab
-    # ends up lagging on security updates.
-    [void]$lines.Add("apt:")
-    if (-not [string]::IsNullOrWhiteSpace($MirrorUri)) {
-        [void]$lines.Add("  primary:")
-        [void]$lines.Add("    - arches: [default]")
-        [void]$lines.Add("      uri: $MirrorUri")
+    # The mirror and the apt timeouts, for the Debian family only. cloud-init has a
+    # yum_repos module for the RHEL family, but it adds repositories rather than
+    # replacing the mirror, and Fedora and Rocky resolve theirs through metalink -
+    # which already routes by geography and has a whole mirror list to fail over to.
+    # Writing one host into that is a downgrade, so this block is simply not there
+    # for them, and Get-LinuxFamilyProfile says so once rather than here and again
+    # at the picker.
+    if ($familyProfile.UsesAptModule) {
+        # Through cloud-init's own apt module rather than by editing files. That
+        # matters on these images: Ubuntu 26.04 and Debian 13 both write their
+        # sources in deb822 format (/etc/apt/sources.list.d/*.sources), not the
+        # one-line format, and the module knows which one this release uses. A sed
+        # over sources.list would edit a file that is no longer read.
+        #
+        # It is set on the BAKE, so it persists into the gold - cloud-init clean does
+        # not revert sources - and every VM built from the gold inherits the same
+        # mirror. `security` is deliberately left alone: security.ubuntu.com and
+        # security.debian.org are single well-served hosts, and pointing them at a
+        # country mirror is how a lab ends up lagging on security updates.
+        [void]$lines.Add("apt:")
+        if (-not [string]::IsNullOrWhiteSpace($MirrorUri)) {
+            [void]$lines.Add("  primary:")
+            [void]$lines.Add("    - arches: [default]")
+            [void]$lines.Add("      uri: $MirrorUri")
+        }
+        # Bounded timeouts, so an unreachable mirror costs minutes rather than most
+        # of an hour. Read out of the image itself: package_update_upgrade_install is
+        # the FIRST module in cloud_final_modules and power_state_change is the LAST,
+        # so nothing after apt runs until apt is done - no runcmd, no sentinel, no
+        # poweroff. And nothing outside will cut it short either: cloud-final.service
+        # is Type=oneshot, for which systemd disables the start timeout by default.
+        #
+        # apt does NOT wait for ever on its own - its HTTP method carries a timeout
+        # of its own (ServerState starts at 30 s) - but that is per connection, and
+        # it is spent again on every index file and every retry, which is how a dead
+        # mirror turns into a VM that looks hung for a long time without ever being
+        # hung.
+        #
+        # Acquire::http::Timeout covers both the connection and the data timer, so
+        # shrinking it and capping the retries bounds the whole thing. A failed apt
+        # still lets cloud-init reach power_state, which is what turns a long silence
+        # into a verdict.
+        [void]$lines.Add("  conf: |")
+        [void]$lines.Add("    Acquire::http::Timeout `"20`";")
+        [void]$lines.Add("    Acquire::https::Timeout `"20`";")
+        [void]$lines.Add("    Acquire::Retries `"2`";")
     }
-    # Bounded timeouts, so an unreachable mirror costs minutes rather than most of an
-    # hour. Read out of the image itself: package_update_upgrade_install is the FIRST
-    # module in cloud_final_modules and power_state_change is the LAST, so nothing after
-    # apt runs until apt is done - no runcmd, no sentinel, no poweroff. And nothing
-    # outside will cut it short either: cloud-final.service is Type=oneshot, for which
-    # systemd disables the start timeout by default.
-    #
-    # apt does NOT wait for ever on its own - its HTTP method carries a timeout of its
-    # own (ServerState starts at 30 s) - but that is per connection, and it is spent
-    # again on every index file and every retry, which is how a dead mirror turns into
-    # a VM that looks hung for a long time without ever being hung.
-    #
-    # Acquire::http::Timeout covers both the connection and the data timer, so shrinking
-    # it and capping the retries bounds the whole thing. A failed apt still lets
-    # cloud-init reach power_state, which is what turns a long silence into a verdict.
-    [void]$lines.Add("  conf: |")
-    [void]$lines.Add("    Acquire::http::Timeout `"20`";")
-    [void]$lines.Add("    Acquire::https::Timeout `"20`";")
-    [void]$lines.Add("    Acquire::Retries `"2`";")
     [void]$lines.Add("package_update: true")
     if ($ApplyUpdates) { [void]$lines.Add("package_upgrade: true") }
     if ($packages.Count -gt 0) {
         [void]$lines.Add("packages:")
         foreach ($package in $packages) { [void]$lines.Add("  - '$package'") }
     }
-    # policy-rc.d, written before anything is installed and removed as the first runcmd.
-    # An exit code of 101 is the Debian convention for "do not start this service", and
-    # invoke-rc.d and deb-systemd-invoke - which is what dpkg's postinst scripts call -
-    # both honour it. It costs nothing and it buys back a minute and a half of every
-    # bake.
-    #
-    # The daemon it is aimed at is hv-kvp-daemon. Its unit carries
-    # `BindsTo=sys-devices-virtual-misc-vmbus\x21hv_kvp.device`, and systemd only has a
-    # .device unit for a device that udev tagged with TAG+="systemd". The rule that does
-    # that tagging ships in linux-cloud-tools-common - the package being installed right
-    # now - so it arrives long after the hv_kvp uevent was processed at boot. The device
-    # is there, the tag is not, the device unit never appears, and the 90-second default
-    # device timeout runs out in full before dpkg gets its `Could not execute systemctl`
-    # and moves on. It is a bake-only race: a VM built from this gold boots with the rule
-    # already in place and the daemon starts normally.
-    #
-    # bootcmd, not write_files, because bootcmd is the first module of the init stage and
-    # write_files is conditional here - a second write_files key would collide with the
-    # aliases one below.
-    [void]$lines.Add("bootcmd:")
-    [void]$lines.Add('  - [ sh, -c, ''printf "#!/bin/sh\nexit 101\n" > /usr/sbin/policy-rc.d && chmod 0755 /usr/sbin/policy-rc.d'' ]')
+    # Whatever this family has to settle before the package manager runs. bootcmd, not
+    # write_files, because bootcmd is the first module of the init stage while the
+    # package install is the first module of the FINAL stage - and because write_files
+    # is conditional here, so a second write_files key would collide with the aliases
+    # one below. What each family puts here, and why, is in Get-LinuxFamilyProfile.
+    $bootCommands = @($familyProfile.BootCommands)
+    if ($bootCommands.Count -gt 0) {
+        [void]$lines.Add("bootcmd:")
+        foreach ($command in $bootCommands) {
+            [void]$lines.Add("  - [ sh, -c, '" + $command + "' ]")
+        }
+    }
     if ($wantAliases) {
         # profile.d covers an SSH session, which is a login shell, and every user that
         # already exists. /etc/skel is what the per-VM user gets: cloud-init creates that
@@ -5046,18 +5421,23 @@ function Get-BakeUserData {
 
     # The service block goes first: the only thing it was there to hold back is the
     # package install, and that is the module before this one.
-    [void]$lines.Add("  - [ sh, -c, 'rm -f /usr/sbin/policy-rc.d' ]")
+    if ($familyProfile.UsesPolicyRcD) {
+        [void]$lines.Add("  - [ sh, -c, 'rm -f /usr/sbin/policy-rc.d' ]")
+    }
     # BAKE-KERNEL is the kernel the GOLD will boot, not the one the bake is running on.
     # The bake never reboots, so `uname -r` here is always the kernel the image shipped
     # with - it reported 7.0.0-31-generic on a run that had just installed the azure
     # kernel and set it as the default, and the host logged that as "guest kernel", which
-    # is the one thing this line exists to say. /boot/vmlinuz is maintained by the kernel
-    # postinst and points at the newest installed kernel, which is the same one
-    # grub-mkconfig puts first. The case guard is for an image where /boot/vmlinuz is
-    # absent or is not the symlink it is meant to be: falling back to the running kernel
-    # keeps the sentinel parseable rather than emitting an empty field the host would
-    # read the next word into.
-    [void]$lines.Add('  - [ sh, -c, ''v=$(readlink /boot/vmlinuz 2>/dev/null); case "$v" in vmlinuz-?*) v=${v#vmlinuz-} ;; *) v=$(uname -r) ;; esac; echo BAKE-KERNEL $v'' ]')
+    # is the one thing this line exists to say.
+    #
+    # How it is answered is the family's business: on Debian, /boot/vmlinuz is
+    # maintained by the kernel postinst and points at the newest installed kernel,
+    # which is the same one grub-mkconfig puts first; on the RHEL family there is no
+    # such symlink and grubby reads the BootLoaderSpec entries and prints the default
+    # kernel's path outright. Both guard the same way - an unexpected answer falls
+    # back to the running kernel, so the sentinel stays parseable rather than emitting
+    # an empty field the host would read the next word into.
+    [void]$lines.Add("  - [ sh, -c, '" + $familyProfile.KernelReport + "' ]")
     [void]$lines.Add('  - [ sh, -c, ''echo BAKE-RUNNING-KERNEL $(uname -r)'' ]')
     # What replaced `dpkg -l | grep -c hyperv`. That counted lines matching "hyperv" in
     # the package list, which on Ubuntu is zero however well the bake went - the daemons
@@ -5074,7 +5454,12 @@ function Get-BakeUserData {
         # installed` is the line dpkg prints for a package that is installed and
         # configured, and nothing else prints it - a package that was removed but kept
         # its config files says `deinstall ok config-files`.
-        [void]$lines.Add('  - [ sh, -c, ''for p in ' + $packageList + '; do if dpkg -s $p 2>/dev/null | grep -q "^Status: install ok installed"; then echo BAKE-PKG $p ok; else echo BAKE-PKG $p MISSING; fi; done'' ]')
+        [void]$lines.Add("  - [ sh, -c, '" + ($familyProfile.PackageProbe -f $packageList) + "' ]")
+    }
+    # After the probe, so a family whose packages have to be enabled by hand says so
+    # on the console line above before it tries.
+    foreach ($command in @($familyProfile.ServiceCommands)) {
+        [void]$lines.Add("  - [ sh, -c, '" + $command + "' ]")
     }
 
     # No sshd edits here, and that is a correction rather than an omission.
@@ -5112,7 +5497,9 @@ function Get-BakeUserData {
     }
     [void]$lines.Add("  - [ cloud-init, clean, '--logs', '--machine-id' ]")
     [void]$lines.Add("  - [ sh, -c, 'rm -f /etc/ssh/ssh_host_*' ]")
-    [void]$lines.Add("  - [ sh, -c, 'rm -f /etc/netplan/50-cloud-init.yaml' ]")
+    foreach ($artifact in @($familyProfile.NetworkArtifacts)) {
+        [void]$lines.Add("  - [ sh, -c, 'rm -f $artifact' ]")
+    }
     [void]$lines.Add("  - [ sh, -c, 'truncate -s 0 /etc/machine-id' ]")
     # The diagnostic account goes here, at the end, once everything that might have
     # needed it has succeeded. -f because the account may own a running process, -r to
@@ -5211,9 +5598,21 @@ function Get-BakeNetworkConfig {
     [void]$lines.Add("    dhcp6: false")
     [void]$lines.Add("    addresses: ['$ipAddress/$prefix']")
     if (-not [string]::IsNullOrWhiteSpace($gateway)) {
-        # `gateway4` is deprecated; a default route says the same thing and keeps working.
+        # `gateway4` is deprecated and newer netplan warns on it or drops it, so the
+        # default route is written as a route.
+        #
+        # 0.0.0.0/0 rather than the `to: default` netplan also accepts, and that is
+        # not a style choice. On the Debian family cloud-init hands the v2 config to
+        # netplan more or less as written, so netplan's own vocabulary is all that
+        # matters. On the RHEL family there is no netplan: cloud-init has to parse the
+        # v2 config itself and render NetworkManager keyfiles, and the parser only
+        # learned to resolve `default` into a network in 25.3 (network_state.py,
+        # `if addr == "default"`). Rocky 10 ships cloud-init 24.4, which raises
+        # `Address default is not a valid ip network`, fails stage init-local, and
+        # leaves the machine on DHCP with the static address silently unapplied.
+        # 0.0.0.0/0 is a network on every version and netplan takes it too.
         [void]$lines.Add("    routes:")
-        [void]$lines.Add("      - to: default")
+        [void]$lines.Add("      - to: 0.0.0.0/0")
         [void]$lines.Add("        via: '$gateway'")
     }
     if ($dns.Count -gt 0) {
@@ -5323,7 +5722,23 @@ function Invoke-LinuxBakeBoot {
 
         # The third-party UEFI CA, not the Windows template - these images are signed
         # through shim, and the Windows template simply does not boot them.
-        Set-VMFirmware -VMName $vmName -EnableSecureBoot On -SecureBootTemplate "MicrosoftUEFICertificateAuthority" -ErrorAction Stop
+        #
+        # Unless the entry says it has no shim to validate, which is a property of the
+        # distribution rather than a preference: Arch signs nothing, so Secure Boot on
+        # a Gen 2 VM stops its image before the kernel, and the only correct answer is
+        # off. A missing SecureBoot field means on, so every other gold is unaffected
+        # and a new entry has to opt out on purpose.
+        $wantSecureBoot = $true
+        if ($null -ne $Entry.PSObject.Properties["SecureBoot"] -and $null -ne $Entry.SecureBoot) {
+            $wantSecureBoot = [bool]$Entry.SecureBoot
+        }
+        if ($wantSecureBoot) {
+            Set-VMFirmware -VMName $vmName -EnableSecureBoot On -SecureBootTemplate "MicrosoftUEFICertificateAuthority" -ErrorAction Stop
+        }
+        else {
+            Write-Log "Secure Boot off for this bake - $($Entry.Name) ships no signed shim" -Tag "Info"
+            Set-VMFirmware -VMName $vmName -EnableSecureBoot Off -ErrorAction Stop
+        }
 
         # Pin a static MAC before reading one. A dynamic MAC is generated by the host
         # when the VM first STARTS, so reading it straight after New-VM gives all
@@ -5356,7 +5771,10 @@ function Invoke-LinuxBakeBoot {
 
         $mirrorUri = ""
         if ($Config) { $mirrorUri = Get-AptMirrorUri -Entry $Entry -RegionCode ([string]$Config.BakeMirrorRegion) }
-        if ([string]::IsNullOrWhiteSpace($mirrorUri)) {
+        if (-not (Get-LinuxFamilyProfile -Family $Entry.Family).OffersMirror) {
+            Write-Log "Package mirror: chosen by the distribution's metalink" -Tag "Info"
+        }
+        elseif ([string]::IsNullOrWhiteSpace($mirrorUri)) {
             Write-Log "apt mirror: the distribution's default" -Tag "Info"
         }
         else {
@@ -5824,31 +6242,41 @@ function Start-LinuxInteractiveConfiguration {
         # Which mirror apt talks to. The stock cloud image points at archive.ubuntu.com
         # or deb.debian.org, and a badly routed one turns a kernel install into a long
         # wait - which is what a slow bake usually is.
-        $mirrorItems = @([PSCustomObject]@{ Id = "default"; Label = "Default - archive.ubuntu.com / deb.debian.org" })
-        foreach ($region in @(Get-AptMirrorCatalog)) {
-            # NOT $host. That is the automatic variable holding the host object, and
-            # PowerShell resolves variables dynamically - shadowing it here would hand a
-            # string to every function called from this scope, including the one that
-            # reads $Host.UI to decide whether the console can do colour.
-            $mirrorHost = if ($entry.Distro -eq "ubuntu") { [string]$region.Ubuntu } else { [string]$region.Debian }
-            # A region with no mirror for THIS distribution is not offered: picking it
-            # would silently fall back, which looks like the setting did nothing.
-            if ([string]::IsNullOrWhiteSpace($mirrorHost)) { continue }
-            $mirrorItems += [PSCustomObject]@{ Id = $region.Code; Label = "$($region.Name)  -  $mirrorHost" }
+        #
+        # Asked for the Debian family only. Fedora and Rocky reach their mirrors
+        # through metalink, which already picks by geography and keeps a list to fail
+        # over to; a question whose every answer is worse than the default is not a
+        # question. $bakeMirrorRegion stays "default", which Get-AptMirrorUri turns
+        # into an empty URI, which leaves the apt block out entirely.
+        $bakeMirrorRegion = "default"
+        if ((Get-LinuxFamilyProfile -Family $entry.Family).OffersMirror) {
+            $mirrorItems = @([PSCustomObject]@{ Id = "default"; Label = "Default - archive.ubuntu.com / deb.debian.org" })
+            foreach ($region in @(Get-AptMirrorCatalog)) {
+                # NOT $host. That is the automatic variable holding the host object, and
+                # PowerShell resolves variables dynamically - shadowing it here would hand
+                # a string to every function called from this scope, including the one
+                # that reads $Host.UI to decide whether the console can do colour.
+                $mirrorHost = if ($entry.Distro -eq "ubuntu") { [string]$region.Ubuntu } else { [string]$region.Debian }
+                # A region with no mirror for THIS distribution is not offered: picking it
+                # would silently fall back, which looks like the setting did nothing.
+                if ([string]::IsNullOrWhiteSpace($mirrorHost)) { continue }
+                $mirrorItems += [PSCustomObject]@{ Id = $region.Code; Label = "$($region.Name)  -  $mirrorHost" }
+            }
+
+            # Default from the region the format locale already named - de-DE means
+            # Germany, and typing that twice is the kind of question a picker should
+            # answer itself.
+            $localeCountry = ""
+            $localeParts = $locale -split "-"
+            if ($localeParts.Count -ge 2) { $localeCountry = $localeParts[$localeParts.Count - 1].ToLowerInvariant() }
+            $mirrorDefault = [array]::IndexOf(@($mirrorItems.Id), $localeCountry)
+            if ($mirrorDefault -lt 0) { $mirrorDefault = 0 }
+
+            $bakeMirrorRegion = Show-Menu -Title "Which apt mirror should the bake use?" -Items $mirrorItems -SelectedIndex $mirrorDefault `
+                -Heading "Package mirror" -HeadingHint "Pre-selected from the regional format. It is baked into the gold, so every VM inherits it" `
+                -StatusLines ([ordered]@{ distro = $entry.Name; switch = $switchName })
+            if ($null -eq $bakeMirrorRegion) { return $null }
         }
-
-        # Default from the region the format locale already named - de-DE means Germany,
-        # and typing that twice is the kind of question a picker should answer itself.
-        $localeCountry = ""
-        $localeParts = $locale -split "-"
-        if ($localeParts.Count -ge 2) { $localeCountry = $localeParts[$localeParts.Count - 1].ToLowerInvariant() }
-        $mirrorDefault = [array]::IndexOf(@($mirrorItems.Id), $localeCountry)
-        if ($mirrorDefault -lt 0) { $mirrorDefault = 0 }
-
-        $bakeMirrorRegion = Show-Menu -Title "Which apt mirror should the bake use?" -Items $mirrorItems -SelectedIndex $mirrorDefault `
-            -Heading "Package mirror" -HeadingHint "Pre-selected from the regional format. It is baked into the gold, so every VM inherits it" `
-            -StatusLines ([ordered]@{ distro = $entry.Name; switch = $switchName })
-        if ($null -eq $bakeMirrorRegion) { return $null }
 
         # Not a question any more. The answer was yes on every bake that has been run
         # here, and a gold that ships packages the image was already shipping updates for
@@ -5875,6 +6303,7 @@ function Start-LinuxInteractiveConfiguration {
         $featureItems = @()
         foreach ($feature in @(Get-LinuxGoldFeatureCatalog)) {
             if (-not [string]::IsNullOrWhiteSpace($feature.Distro) -and $feature.Distro -ne $entry.Distro) { continue }
+            if (-not [string]::IsNullOrWhiteSpace($feature.Family) -and $feature.Family -ne $entry.Family) { continue }
             $featureItems += [PSCustomObject]@{
                 Id       = $feature.Id
                 Label    = $feature.Label
@@ -5940,12 +6369,17 @@ function Start-LinuxInteractiveConfiguration {
             }
             Write-FastfetchInfoRow -Label "vlan" -Value $(if ($bakeVlanId -gt 0) { [string]$bakeVlanId } else { "untagged" }) -LabelWidth 24 -IndentWidth 2
 
-            $mirrorShown = Get-AptMirrorUri -Entry $entry -RegionCode $bakeMirrorRegion
-            if ([string]::IsNullOrWhiteSpace($mirrorShown)) { $mirrorShown = "distribution default" }
-            Write-FastfetchInfoRow -Label "apt mirror" -Value $mirrorShown -LabelWidth 24 -IndentWidth 2
+            # Only where it was asked. A row reading "distribution default" beside a
+            # Fedora gold invites the question of where the setting is, and the answer
+            # is that there is no setting - metalink picked the mirror.
+            if ((Get-LinuxFamilyProfile -Family $entry.Family).OffersMirror) {
+                $mirrorShown = Get-AptMirrorUri -Entry $entry -RegionCode $bakeMirrorRegion
+                if ([string]::IsNullOrWhiteSpace($mirrorShown)) { $mirrorShown = "distribution default" }
+                Write-FastfetchInfoRow -Label "apt mirror" -Value $mirrorShown -LabelWidth 24 -IndentWidth 2
+            }
 
             Write-FastfetchInfoRow -Label "installs" -Value (@($entry.BakePackages) -join ", ") -LabelWidth 24 -IndentWidth 2
-            $languagePackShown = Get-UbuntuLanguagePack -Entry $entry -LanguageTag $language
+            $languagePackShown = Get-LinuxLanguagePack -Entry $entry -LanguageTag $language
             if (-not [string]::IsNullOrWhiteSpace($languagePackShown)) {
                 Write-FastfetchInfoRow -Label "language pack" -Value $languagePackShown -LabelWidth 24 -IndentWidth 2
             }
@@ -6070,7 +6504,7 @@ function Invoke-LinuxGoldRun {
     # packages themselves and needs nothing extra. The bake is where this belongs: it is
     # the one boot with a network.
     $bakePackages = @($Config.BakeExtraPackages)
-    $languagePack = Get-UbuntuLanguagePack -Entry $entry -LanguageTag ([string]$Config.Language)
+    $languagePack = Get-LinuxLanguagePack -Entry $entry -LanguageTag ([string]$Config.Language)
     if (-not [string]::IsNullOrWhiteSpace($languagePack)) {
         Write-Log "Adding $languagePack for $($Config.Language)" -Tag "Info"
         $bakePackages += $languagePack

@@ -2497,6 +2497,91 @@ const IMAGE_CATALOG = [
     noServerRoles: true,
     secureBootTemplate: "MicrosoftUEFICertificateAuthority",
     defaults: { useDifferencingDisk: false, enableSecureBoot: true, enableVtpm: false, startAfterCreate: true, memoryGB: 2, cpuCount: 2 }
+  },
+  {
+    id: "debian12",
+    label: "Debian 12 (Bookworm)",
+    icon: "os-server-panes.svg",
+    kind: "linux",
+    osFamily: "linux",
+    distro: "debian",
+    edition: "",
+    experience: "",
+    noServerRoles: true,
+    secureBootTemplate: "MicrosoftUEFICertificateAuthority",
+    defaults: { useDifferencingDisk: false, enableSecureBoot: true, enableVtpm: false, startAfterCreate: true, memoryGB: 2, cpuCount: 2 }
+  },
+  {
+    /* Fedora and Rocky ship a Microsoft-signed shim, so the same Secure Boot
+       template the other Linux golds use applies unchanged. */
+    id: "fedora43",
+    label: "Fedora 43",
+    icon: "os-server-panes.svg",
+    kind: "linux",
+    osFamily: "linux",
+    distro: "fedora",
+    edition: "",
+    experience: "",
+    noServerRoles: true,
+    secureBootTemplate: "MicrosoftUEFICertificateAuthority",
+    defaults: { useDifferencingDisk: false, enableSecureBoot: true, enableVtpm: false, startAfterCreate: true, memoryGB: 2, cpuCount: 2 }
+  },
+  {
+    id: "fedora42",
+    label: "Fedora 42",
+    icon: "os-server-panes.svg",
+    kind: "linux",
+    osFamily: "linux",
+    distro: "fedora",
+    edition: "",
+    experience: "",
+    noServerRoles: true,
+    secureBootTemplate: "MicrosoftUEFICertificateAuthority",
+    defaults: { useDifferencingDisk: false, enableSecureBoot: true, enableVtpm: false, startAfterCreate: true, memoryGB: 2, cpuCount: 2 }
+  },
+  {
+    id: "rocky10",
+    label: "Rocky Linux 10",
+    icon: "os-server-panes.svg",
+    kind: "linux",
+    osFamily: "linux",
+    distro: "rocky",
+    edition: "",
+    experience: "",
+    noServerRoles: true,
+    secureBootTemplate: "MicrosoftUEFICertificateAuthority",
+    defaults: { useDifferencingDisk: false, enableSecureBoot: true, enableVtpm: false, startAfterCreate: true, memoryGB: 2, cpuCount: 2 }
+  },
+  {
+    id: "rocky9",
+    label: "Rocky Linux 9",
+    icon: "os-server-panes.svg",
+    kind: "linux",
+    osFamily: "linux",
+    distro: "rocky",
+    edition: "",
+    experience: "",
+    noServerRoles: true,
+    secureBootTemplate: "MicrosoftUEFICertificateAuthority",
+    defaults: { useDifferencingDisk: false, enableSecureBoot: true, enableVtpm: false, startAfterCreate: true, memoryGB: 2, cpuCount: 2 }
+  },
+  {
+    /* Secure Boot OFF, and not as a preference. Arch ships no Microsoft-signed shim,
+       so there is nothing for the third-party UEFI CA to validate and a Gen 2 VM with
+       Secure Boot on stops before the kernel. The gold's sidecar says the same thing,
+       and Build-Vms.ps1 turns it off anyway if a config asks for it - this default is
+       so nobody has to find that out. */
+    id: "arch",
+    label: "Arch Linux",
+    icon: "os-server-panes.svg",
+    kind: "linux",
+    osFamily: "linux",
+    distro: "arch",
+    edition: "",
+    experience: "",
+    noServerRoles: true,
+    secureBootTemplate: "MicrosoftUEFICertificateAuthority",
+    defaults: { useDifferencingDisk: false, enableSecureBoot: false, enableVtpm: false, startAfterCreate: true, memoryGB: 2, cpuCount: 2 }
   }
 ];
 
