@@ -3688,7 +3688,24 @@ function Get-LinuxDomainJoinCommands {
     $realmUser = ConvertTo-RealmLoginUser -User $joinUser
     if ([string]::IsNullOrWhiteSpace($realmUser)) { return $commands.ToArray() }
 
+    # --install=/ on the apt family, and it is not an install instruction: it is the
+    # switch that stops realmd asking PackageKit whether the client packages exist.
+    #
+    # A Debian 13 gold proved why. Every package realmd wants was installed by the
+    # seed and present to dpkg, and the join still failed with "Necessary packages are
+    # not installed: sssd-tools sssd libnss-sss libpam-sss adcli". realmd's journal
+    # says what it really hit: "PackageKit not available: The name
+    # org.freedesktop.PackageKit was not provided by any .service files". The cloud
+    # image ships no PackageKit, so the query returns nothing and realmd concludes the
+    # packages are missing. With --install=/ it trusts the prefix instead and joins.
+    #
+    # The RHEL family is not given it: those images DO carry PackageKit, the joins
+    # there work, and a switch that changes how realmd resolves packages is not
+    # something to hand a family that never needed it.
     $joinArgs = "--unattended --user=" + (ConvertTo-ShellSingleQuoted -Value $realmUser)
+    if (([string]$Family).Trim().ToLowerInvariant() -eq "debian") {
+        $joinArgs = "--install=/ " + $joinArgs
+    }
     if (-not [string]::IsNullOrWhiteSpace($ouPath)) {
         $joinArgs += " --computer-ou=" + (ConvertTo-ShellSingleQuoted -Value $ouPath)
     }
@@ -3696,6 +3713,17 @@ function Get-LinuxDomainJoinCommands {
             " | realm join $joinArgs " + (ConvertTo-ShellSingleQuoted -Value $domain) +
             " && echo DOMAIN-JOIN-OK || echo DOMAIN-JOIN-FAILED"
     [void]$commands.Add($join)
+
+    # Debian leaves sssd installed and stopped. realmd writes /etc/sssd/sssd.conf and
+    # walks away; the unit ships disabled, so a VM that joined perfectly still resolves
+    # no domain user until something starts it - `id administrator@domain` answers "no
+    # such user" on a box whose realm list says kerberos-member. Verified on a Debian
+    # 13 VM: enable --now, and the same lookup comes back with the full group set.
+    #
+    # Not for the RHEL family: realmd starts sssd there itself, and those joins work.
+    if (([string]$Family).Trim().ToLowerInvariant() -eq "debian") {
+        [void]$commands.Add("systemctl enable --now sssd || true")
+    }
 
     # A home directory on first login.
     #
@@ -3830,6 +3858,24 @@ function Get-LinuxLocaleCommands {
     }
 
     if (([string]$Family).Trim().ToLowerInvariant() -eq "rhel") {
+        # The langpack first, and this is a correction: the comment above used to say
+        # the gold had already installed it, which is only true of the gold's OWN
+        # language. A gold baked in en-US and a VM asked for de_DE formats is the
+        # ordinary case in this lab, and there the locale simply is not on the disk.
+        #
+        # What that looked like on a Rocky 9 VM: "Failed to issue method call: Locale
+        # de_DE.UTF-8 not installed, refusing" from systemd-localed, the fallback then
+        # writing the LC_* lines into /etc/locale.conf anyway, and every SSH login
+        # afterwards greeted by "setlocale: LC_TIME: cannot change locale
+        # (de_DE.UTF-8): No such file or directory".
+        #
+        # Guarded by rpm -q so a VM whose gold does carry the pack costs nothing, and
+        # `|| true` because a lab without a route to a mirror should end up with the
+        # fallback file rather than a failed boot stage.
+        $languageCode = ([string]$Locale -split "[_.@]")[0]
+        if (-not [string]::IsNullOrWhiteSpace($languageCode)) {
+            [void]$commands.Add("rpm -q glibc-langpack-$languageCode >/dev/null 2>&1 || dnf install -y glibc-langpack-$languageCode || true")
+        }
         [void]$commands.Add("localectl set-locale $assignments || printf '%b\n' '$appends' >> /etc/locale.conf")
         return $commands.ToArray()
     }
@@ -3862,7 +3908,11 @@ function Get-CloudInitUserData {
         [string]$Locale,
         [string]$Keymap,
         [string]$TimeZone,
-        [string]$Family
+        [string]$Family,
+        # Distro as well as Family, because they answer different questions: Fedora and
+        # Rocky share the rhel family and package manager, and exactly one of them has
+        # an Azure Arc agent.
+        [string]$Distro
     )
 
     $userName = ([string]$Server.localUserName).Trim()
@@ -3895,6 +3945,19 @@ function Get-CloudInitUserData {
     catch {
         Write-Log "Azure Arc for '$HostName': $($_.Exception.Message)" -Tag "Error"
         throw
+    }
+    # Fedora has no Connected Machine agent. The installer at aka.ms/azcmagent refuses
+    # it by name - "unsupported Linux distribution: Fedora Linux:43.43" - so the agent
+    # never lands, and the connect that follows fails on /opt/azcmagent/bin/azcmagent,
+    # a path that does not exist. Observed on a Fedora 43 VM, whose cloud-init log
+    # carries exactly those two lines.
+    #
+    # Skipped with a warning rather than attempted: a package install and three
+    # connect retries with a minute of sleep between them is four minutes of first
+    # boot spent proving something Microsoft documents.
+    if ($null -ne $arcConfig -and ([string]$Distro).Trim().ToLowerInvariant() -eq "fedora") {
+        Write-Log "Azure Arc for '$HostName' skipped - Azure Arc has no agent for Fedora" -Tag "Warn"
+        $arcConfig = $null
     }
     if ($null -ne $arcConfig -and ([string]$arcConfig.authMode) -ne "servicePrincipal") {
         # hostContext signs in with the HOST's Az PowerShell session and calls
@@ -4015,6 +4078,39 @@ function Get-CloudInitUserData {
             [void]$runCommands.Add($command)
         }
     }
+    # LAST, and the reason it exists: the seed disk is detached and deleted after this
+    # boot, but cloud-init has already copied everything it was given onto the guest's
+    # own disk - and "everything" is the local account password in clear, the domain
+    # join password, and the Arc service principal secret. A root shell on any VM this
+    # builds could read all three out of /var/lib/cloud for the life of the machine.
+    #
+    # What holds a copy, all of it under /var/lib/cloud/instances/<instance-id>/:
+    #   user-data.txt            the seed verbatim
+    #   user-data.txt.i          the same after MIME processing
+    #   cloud-config.txt         the merged config, chpasswd block included
+    #   vendor-data*             empty on NoCloud, scrubbed anyway rather than assumed
+    #   scripts/runcmd           every runcmd line, secrets and all
+    #   obj.pkl                  the pickled datasource, which carries userdata_raw
+    #
+    # obj.pkl goes too, and that is a deliberate trade: without it a later boot has no
+    # cached datasource and logs that it found none. Harmless here - the seed is gone
+    # by then, the network config and hostname are written to the filesystem, and the
+    # per-instance work is already marked done in sem/ - and the alternative is
+    # leaving the whole seed pickled on disk.
+    #
+    # scripts/runcmd is REMOVED rather than truncated, because this command is running
+    # from inside it: unlinking a file a shell still has open is safe on Linux, while
+    # truncating it under the interpreter is how the rest of a script becomes garbage.
+    #
+    # /run/cloud-init holds the sensitive instance-data too; that one is tmpfs and
+    # would go at the next boot anyway, so this only shortens the window.
+    [void]$runCommands.Add(
+        "find /var/lib/cloud/instances -maxdepth 2 -type f " +
+        "\( -name 'user-data.txt*' -o -name 'cloud-config.txt' -o -name 'vendor-data.txt*' " +
+        "-o -name 'vendor-cloud-config.txt' -o -name 'obj.pkl' \) -delete 2>/dev/null; " +
+        "rm -f /run/cloud-init/instance-data-sensitive.json /var/lib/cloud/instance/scripts/runcmd; " +
+        "echo SEED-SCRUBBED")
+
     if ($runCommands.Count -gt 0) {
         [void]$lines.Add("runcmd:")
         # Double-quoted, not single: a realm join carries single-quoted shell words
@@ -4629,6 +4725,9 @@ function Set-LinuxProvisioning {
     # gold from before the field existed, and Get-LinuxLocaleCommands reads that as
     # the Debian family - which is what every gold built before it was.
     $family = ""
+    # Empty for a gold built before the sidecar recorded a distro; every check on
+    # it asks "is this one particular distribution", so empty simply answers no.
+    $distro = ""
 
     if (-not [string]::IsNullOrWhiteSpace($GoldPath)) {
         $manifestPath = "$GoldPath.json"
@@ -4640,6 +4739,7 @@ function Set-LinuxProvisioning {
                 if ($manifest.keyboardLayout) { $keymap   = Get-LinuxKeymap     -LocaleTag ([string]$manifest.keyboardLayout) }
                 if ($manifest.timeZone)       { $timeZone = [string]$manifest.timeZone }
                 if ($manifest.family)         { $family   = [string]$manifest.family }
+                if ($manifest.distro)         { $distro   = [string]$manifest.distro }
             }
             catch {
                 Write-Log "Could not read the gold manifest '$manifestPath': $($_.Exception.Message)" -Tag "Warn"
@@ -4653,7 +4753,7 @@ function Set-LinuxProvisioning {
     if ([string]::IsNullOrWhiteSpace($language)) { $language = $locale }
 
     $userData = Get-CloudInitUserData -Server $Server -Defaults $Defaults -HostName $HostName `
-        -Language $language -Locale $locale -Keymap $keymap -TimeZone $timeZone -Family $family
+        -Language $language -Locale $locale -Keymap $keymap -TimeZone $timeZone -Family $family -Distro $distro
     $metaData = Get-CloudInitMetaData -HostName $HostName
     $networkConfig = Get-CloudInitNetworkConfig -Server $Server -MacAddress $NicMacAddress
 

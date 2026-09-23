@@ -1884,11 +1884,19 @@ function Show-MultiSelectMenu {
         throw "Show-MultiSelectMenu requires at least one item."
     }
 
-    $index = 0
+    # A locked row is shown and never reached: it is there to say what is already
+    # decided - what the bake installs whatever anyone ticks - beside what is not.
+    # The cursor skips it, Space does nothing to it, and it is not in the answer.
+    $isLocked = { param($row) [bool]$row.IsLocked }
+
     $selected = @{}
     foreach ($item in $Items) {
         $selected[[string]$item.Id] = [bool]$item.Selected
     }
+
+    $index = 0
+    while ($index -lt $Items.Count -and (& $isLocked $Items[$index])) { $index++ }
+    if ($index -ge $Items.Count) { $index = 0 }
 
     $useRawUi = Test-MenuHostSupported
     $hasSections = (@($Items | Where-Object { -not [string]::IsNullOrWhiteSpace([string]$_.Section) })).Count -gt 0
@@ -1963,22 +1971,36 @@ function Show-MultiSelectMenu {
 
             $section = [string]$item.Section
             if (-not [string]::IsNullOrWhiteSpace($section) -and $section -ne $lastSection) {
+                # A blank line before every heading but the first, and none after it:
+                # the heading belongs to the rows under it, so the gap goes between the
+                # groups rather than between a group's name and its contents. Build-Vms
+                # draws its own sections the same way.
                 if ($null -ne $lastSection) { Write-Host "" }
                 Write-Studio -Text "  $section" -Key "fg"
+                # A section that carries a note keeps its blank lines: the note is a
+                # paragraph, and a paragraph jammed against rows reads as a row.
                 if ($SectionNotes.ContainsKey($section)) {
                     Write-Host ""
                     foreach ($line in @($SectionNotes[$section])) {
                         if ([string]::IsNullOrWhiteSpace($line)) { Write-Host "" }
                         else { Write-Studio -Text "  $line" -Key "muted" }
                     }
+                    Write-Host ""
                 }
-                Write-Host ""
                 $lastSection = $section
             }
 
             $id    = [string]$item.Id
             $mark  = if ($selected[$id]) { "[x]" } else { "[ ]" }
             $label = "$mark  $($item.Label)"
+
+            # Drawn like a ticked row that cannot be untucked, and never with the
+            # cursor on it - the cursor is a promise that Space will do something.
+            if (& $isLocked $item) {
+                Write-Host "    $indent" -NoNewline
+                Write-Studio -Text $label -Key "muted"
+                continue
+            }
 
             if ($isSelectedRow) {
                 Write-Studio -Text "  $indent> " -Key "accent" -NoNewline
@@ -2015,16 +2037,25 @@ function Show-MultiSelectMenu {
             $charKey = [string]$key.Character
 
             if ($virtualKey -eq 38) {
-                $index = if ($index -le 0) { $rows.Count - 1 } else { $index - 1 }
+                # Step until the row can be landed on. Bounded by the row count, so a
+                # list that somehow locked every row stops rather than spinning.
+                for ($step = 0; $step -lt $rows.Count; $step++) {
+                    $index = if ($index -le 0) { $rows.Count - 1 } else { $index - 1 }
+                    if (-not (& $isLocked $rows[$index])) { break }
+                }
                 continue
             }
             if ($virtualKey -eq 40) {
-                $index = if ($index -ge ($rows.Count - 1)) { 0 } else { $index + 1 }
+                for ($step = 0; $step -lt $rows.Count; $step++) {
+                    $index = if ($index -ge ($rows.Count - 1)) { 0 } else { $index + 1 }
+                    if (-not (& $isLocked $rows[$index])) { break }
+                }
                 continue
             }
             if ($virtualKey -eq 32) {
-                # Nothing to toggle on the continue row.
+                # Nothing to toggle on the continue row, and nothing on a locked one.
                 if ($rows[$index].IsContinue) { continue }
+                if (& $isLocked $rows[$index]) { continue }
                 $id = [string]$rows[$index].Id
                 $selected[$id] = -not $selected[$id]
                 continue
@@ -2032,6 +2063,7 @@ function Show-MultiSelectMenu {
             if ($virtualKey -eq 13) {
                 $chosen = @()
                 foreach ($item in $Items) {
+                    if (& $isLocked $item) { continue }
                     $id = [string]$item.Id
                     if ($selected[$id]) {
                         $chosen += $id
@@ -2056,6 +2088,7 @@ function Show-MultiSelectMenu {
             if ([string]::IsNullOrWhiteSpace($raw)) {
                 $chosen = @()
                 foreach ($item in $Items) {
+                    if (& $isLocked $item) { continue }
                     $id = [string]$item.Id
                     if ($selected[$id]) {
                         $chosen += $id
@@ -2066,7 +2099,7 @@ function Show-MultiSelectMenu {
             }
             if ($raw -match "^\d+$") {
                 $num = [int]$raw
-                if ($num -ge 1 -and $num -le $Items.Count) {
+                if ($num -ge 1 -and $num -le $Items.Count -and -not (& $isLocked $Items[$num - 1])) {
                     $id = [string]$Items[$num - 1].Id
                     $selected[$id] = -not $selected[$id]
                 }
@@ -2088,9 +2121,12 @@ function Show-VhdxConfigForm {
         [string]$DefaultType = "Fixed"
     )
 
+    # No descriptions beside the two names. Fixed and Dynamic are the words Hyper-V
+    # itself uses and anyone choosing between them already knows which they want; the
+    # sentence after each was two lines of screen restating that.
     $typeOptions = @(
-        [PSCustomObject]@{ Id = "Fixed";   Label = "Fixed";   Description = "pre-allocated, best performance" }
-        [PSCustomObject]@{ Id = "Dynamic"; Label = "Dynamic"; Description = "grows on demand, saves host space" }
+        [PSCustomObject]@{ Id = "Fixed";   Label = "Fixed" }
+        [PSCustomObject]@{ Id = "Dynamic"; Label = "Dynamic" }
     )
 
     if (-not (Test-MenuHostSupported)) {
@@ -2153,7 +2189,7 @@ function Show-VhdxConfigForm {
             $opt = $typeOptions[$i]
             $rowIndex = $i + 1
             $mark = if ($opt.Id -eq $selectedType) { "(*)" } else { "( )" }
-            $label = "$mark $($opt.Label)  - $($opt.Description)"
+            $label = "$mark $($opt.Label)"
             if ($cursor -eq $rowIndex) {
                 Write-Studio -Text "    > " -Key "accent" -NoNewline
                 Write-Studio -Text $label -Key "fg"
@@ -4432,6 +4468,9 @@ function Get-LinuxFamilyProfile {
             # Arch branch appends to that file instead.
             LanguagePackFormat = ""
             BootCommands    = @()
+            # Nothing. pacman installs no meta-packages here and leaves no orphans to
+            # collect: `hyperv` is asked for by name and nothing else came with it.
+            CleanupCommands = @()
         }
     }
 
@@ -4488,6 +4527,12 @@ function Get-LinuxFamilyProfile {
             )
             # Nothing: hyperv-daemons enables its own units through systemd presets.
             ServiceCommands = @()
+            # Nothing here either, and deliberately. dnf keeps installonly_limit
+            # kernels on purpose and `dnf autoremove` on this family has a habit of
+            # proposing rather more than the leftovers of one install. The apt
+            # counterpart below exists because a real gold came out with a message
+            # about it; this one has not, so it stays empty.
+            CleanupCommands = @()
         }
     }
 
@@ -4521,6 +4566,76 @@ function Get-LinuxFamilyProfile {
         # Nothing: dpkg's postinst scripts enable what they install, which is the
         # whole reason policy-rc.d above has to stop them starting it too.
         ServiceCommands    = @()
+        # The one thing the azure-kernel install leaves behind. linux-azure brings its
+        # own image, modules and tools and leaves the cloud image's kernel packages
+        # with nothing depending on them, so the first `apt upgrade` on a VM built
+        # from the gold opens with "The following packages were automatically
+        # installed and are no longer required" and seven linux-7.0.0-31 lines.
+        #
+        # A plain autoremove does NOT clear them, which a gold proved: the packages
+        # left behind are the kernel the BAKE IS RUNNING ON - the cloud image booted
+        # it, linux-azure only becomes the default at the next boot that never comes -
+        # and /etc/apt/apt.conf.d/01autoremove-kernels names the running kernel in
+        # APT::NeverAutoRemove. apt was protecting them exactly as designed.
+        #
+        # So the protection list is moved aside for the one command that needs it gone
+        # and put straight back. Nothing else is touched: the azure kernel is safe
+        # because linux-azure was asked for BY NAME and is therefore manually
+        # installed, and its image and modules are its dependencies. Removing the
+        # running kernel's files is harmless here - every module this VM still needs
+        # is already loaded, and the next thing it does is power off for good.
+        #
+        # The restored file re-lists a version that no longer exists, which costs
+        # nothing: NeverAutoRemove is a list of patterns, and the next kernel install
+        # regenerates the file anyway.
+        CleanupCommands    = @(
+            'f=/etc/apt/apt.conf.d/01autoremove-kernels; [ -f "$f" ] && mv "$f" "$f.bake"; DEBIAN_FRONTEND=noninteractive apt-get -y --purge autoremove; [ -f "$f.bake" ] && mv "$f.bake" "$f"; echo BAKE-AUTOREMOVE done'
+        )
+    }
+}
+
+function Test-NameResolutionFailure {
+    # True when a thrown error is "the remote name could not be resolved" and nothing
+    # else. PowerShell wraps a .NET method's exception in a MethodInvocationException,
+    # so the WebException is one level down rather than on the record itself.
+    param([Parameter(Mandatory = $true)][object]$ErrorRecord)
+
+    $exception = $ErrorRecord.Exception
+    while ($null -ne $exception) {
+        if ($exception -is [System.Net.WebException] -and
+            $exception.Status -eq [System.Net.WebExceptionStatus]::NameResolutionFailure) {
+            return $true
+        }
+        $exception = $exception.InnerException
+    }
+    return $false
+}
+
+function Invoke-WithDnsRetry {
+    <#
+        Runs a web fetch, and on a name resolution failure only, flushes the Windows DNS
+        client cache and runs it once more.
+
+        This exists for one observed failure. Every other host in the catalog is an A
+        record; cloud.debian.org is a CNAME to a rotating sponsor mirror, and the CNAME
+        and the mirror's addresses are cached with their own TTLs. When the addresses
+        expire while the CNAME is still held, getaddrinfo answers 11001 and .NET reports
+        "The remote name could not be resolved: 'cloud.debian.org'" - on a host whose
+        DNS is working, and which resolves the same name a second later.
+
+        Anything that is not a resolution failure is rethrown untouched: a 404 or a dead
+        mirror must not be retried into looking like a DNS problem.
+    #>
+    param([Parameter(Mandatory = $true)][scriptblock]$Action)
+
+    try { return (& $Action) }
+    catch {
+        if (-not (Test-NameResolutionFailure -ErrorRecord $_)) { throw }
+        Write-Log "Name resolution failed - flushing the DNS cache and retrying once" -Tag "Warn"
+        try { Clear-DnsClientCache -ErrorAction Stop }
+        catch { & ipconfig.exe /flushdns | Out-Null }
+        Start-Sleep -Seconds 2
+        return (& $Action)
     }
 }
 
@@ -4583,7 +4698,7 @@ function Get-PublishedChecksum {
     )
 
     try {
-        $text = Get-WebText -Uri $ChecksumUrl
+        $text = Invoke-WithDnsRetry -Action { Get-WebText -Uri $ChecksumUrl }
     }
     catch {
         Write-Log "Could not fetch '$ChecksumUrl': $($_.Exception.Message)" -Tag "Warn"
@@ -4653,8 +4768,10 @@ function Get-CachedLinuxImage {
         Write-Log "Cached '$fileName' is stale - fetching" -Tag "Info"
     }
 
-    $null = Invoke-ImageDownload -Uri $Entry.Url -Destination $imagePath `
-        -ExpectedChecksum $expected -Algorithm $Entry.Algorithm
+    $null = Invoke-WithDnsRetry -Action {
+        Invoke-ImageDownload -Uri $Entry.Url -Destination $imagePath `
+            -ExpectedChecksum $expected -Algorithm $Entry.Algorithm
+    }
     return $imagePath
 }
 
@@ -4745,7 +4862,10 @@ function New-LinuxGoldImage {
         [Parameter(Mandatory = $true)][string]$ImagePath,
         [Parameter(Mandatory = $true)][string]$OutputDirectory,
         [Parameter(Mandatory = $true)][int]$DiskSizeGB,
-        [ValidateSet("Dynamic", "Fixed")][string]$VhdType = "Dynamic",
+        # Fixed, like the Windows path. A gold is written once and copied for every VM
+        # after it, so the one disk whose layout is worth paying for up front is this
+        # one - and the form defaults to Fixed too, so this is what it agrees with.
+        [ValidateSet("Dynamic", "Fixed")][string]$VhdType = "Fixed",
         [string]$GoldName,
         [string]$WorkDirectory
     )
@@ -4872,55 +4992,104 @@ function Get-LinuxGoldFeatureCatalog {
         The Linux half of the optional features picker, and the same idea as the Windows
         one next door: decisions baked into the gold once, rather than repeated per VM.
 
-        Nothing here installs a package. Every entry is a file the bake writes or a line
-        it edits, so none of them need a mirror to be reachable - which matters, because
-        a feature that only works when apt does is a feature that fails on the day the
-        network is the problem.
+        Most entries install nothing: they are a file the bake writes or a line it
+        edits, so they work whether or not a mirror is reachable. Packages names the
+        exception - fastfetch is a program, and a program has to be fetched. Those
+        names join the bake's own install list, which means the existing BAKE-PKG
+        probe reports one that did not arrive instead of a gold quietly missing it.
 
-        An entry can name a Distro or a Family; the picker leaves it out for anything
-        else rather than offering a tick that would do nothing. Distro is for what is
-        genuinely one distribution's - motd-news is Ubuntu's alone - and Family for
-        what a whole package family shares, like the .bashrc line Debian and Ubuntu
-        ship commented out and Fedora does not ship at all.
+        An entry can name a Distro, a Family or an explicit ImageIds list; the picker
+        leaves it out for anything else rather than offering a tick that would do
+        nothing. Distro is for what is genuinely one distribution's - motd-news is
+        Ubuntu's alone - Family for what a whole package family shares, and ImageIds
+        for what is decided per RELEASE rather than per distribution: fastfetch is in
+        Ubuntu from 25.10 and in Debian from 13, so the 24.04 and 12 golds are left
+        off the list rather than offered a tick that installs nothing.
     #>
 
     return @(
         [PSCustomObject]@{
+            # Off, like every other entry. Nothing here is a default: a gold should
+            # come out as the distribution ships it unless somebody ticked otherwise.
             Id        = "aliases"
             Label     = "Shell aliases (ll, la, l, cls, .., cd.., colour ls/grep)"
-            DefaultOn = $true
-            Distro    = ""
-            Family    = ""
-        }
-        [PSCustomObject]@{
-            # Off by default: both images ship it commented out, and a gold should not
-            # quietly disagree with the distribution about how a shell looks. Still on
-            # the list for anyone who wants it - it is one tick.
-            Id        = "colorprompt"
-            Label     = "Colour prompt (force_color_prompt)"
             DefaultOn = $false
             Distro    = ""
-            # Debian family. force_color_prompt is a line those two ship commented
-            # out in /etc/skel/.bashrc; Fedora and Rocky have no such line to
-            # uncomment - their prompt is coloured by /etc/profile.d/ already - so
-            # the tick would edit nothing.
-            Family    = "debian"
+            Family    = ""
+            ImageIds  = @()
+            Packages  = @()
         }
         [PSCustomObject]@{
+            # Path in bold blue, then a chevron that is green after a success and red
+            # after a failure. Deliberately nothing else: no git, which is what would
+            # have cost two processes on every prompt in every shell.
+            #
+            # It goes into /etc/skel/.bashrc and nowhere else - not /etc/profile.d,
+            # which would apply it to root and to every existing account as well. The
+            # per-VM user is the one whose prompt this is, and cloud-init copies skel
+            # into that account's home when it creates it on the gold's first boot.
+            #
+            # PROMPT_COMMAND rather than a static PS1 with a $(...) in it: the colour
+            # depends on $?, and a substitution inside PS1 is a subshell on every
+            # prompt. A function that picks between two literal strings forks nothing.
+            Id        = "prompt"
+            Label     = "Prompt in .bashrc (bold blue path, green/red chevron) - no git, no subshell"
+            DefaultOn = $false
+            Distro    = ""
+            Family    = ""
+            ImageIds  = @()
+            Packages  = @()
+        }
+        [PSCustomObject]@{
+            # The only entry that installs anything, and off by default because it is
+            # a banner rather than a setting.
+            #
+            # It runs from /etc/skel/.bashrc, which is what the per-VM user inherits
+            # when cloud-init creates that account on first boot - not from
+            # /etc/profile.d, where it would print a second time in any shell that
+            # reads both. The line guards twice: `case $- in *i*` so it never prints
+            # into a non-interactive shell, which is what turns an scp or an sftp
+            # into a protocol error, and `command -v fastfetch` so a gold whose
+            # install did not arrive gets a quiet shell rather than an error on
+            # every login.
+            #
+            # ImageIds, not Distro: Ubuntu packaged fastfetch from 25.10 and Debian
+            # from 13, so the two older golds in this catalog cannot have it from
+            # their own archives. Rocky has it in EPEL, which the bake enables for
+            # this tick alone.
+            Id        = "fastfetch"
+            Label     = "fastfetch on login (system summary in the shell)"
+            DefaultOn = $false
+            Distro    = ""
+            Family    = ""
+            ImageIds  = @("ubuntu2604", "debian13", "fedora43", "fedora42", "rocky10", "rocky9", "arch")
+            Packages  = @("fastfetch")
+        }
+        [PSCustomObject]@{
+            # Measured, not assumed:        [PSCustomObject]@{
             # Measured, not assumed: /etc/default/motd-news ships ENABLED=1 with
             # URLS="https://motd.ubuntu.com" and WAIT=5, so every login on an isolated
             # network waits up to five seconds on a fetch that cannot succeed. The
             # adverts beside it are the Pro/ESM contract line, landscape sysinfo, the
             # updates-available count and the HWE end-of-life notice.
-            # Off by default like the colour prompt: it edits files the distribution
-            # ships and disables scripts it installed, which is a decision to take on
-            # purpose rather than to inherit. The five-second login stall is the reason
-            # to take it, and it is one tick away.
+            # Off by default: it edits files the distribution ships and disables
+            # scripts it installed, which is a decision to take on purpose rather
+            # than to inherit. The five-second login stall is the reason to take it.
+            #
+            # The chmod list is not the whole answer and cannot be. Ubuntu's
+            # /etc/update-motd.d is filled by half a dozen packages - base-files,
+            # update-notifier-common, ubuntu-pro-client, landscape-common, fwupd -
+            # and naming each script is a list that goes stale with the next release.
+            # So the tick also drops a .hushlogin: pam_motd skips the MOTD entirely
+            # when it finds one, static and dynamic alike, and sshd skips its own
+            # "Last login" line for the same file. One file, whatever the scripts.
             Id        = "quietmotd"
-            Label     = "Quiet the login banner (no motd-news fetch, no Pro/ESM adverts)"
+            Label     = "Quiet the SSH login (no motd at all, no last-login line)"
             DefaultOn = $false
             Distro    = "ubuntu"
             Family    = ""
+            ImageIds  = @()
+            Packages  = @()
         }
     )
 }
@@ -5284,8 +5453,9 @@ function Get-BakeUserData {
     $familyProfile = Get-LinuxFamilyProfile -Family $Entry.Family
 
     $wantAliases = (@($Features) -contains "aliases")
-    $wantColorPrompt = (@($Features) -contains "colorprompt")
     $wantQuietMotd = (@($Features) -contains "quietmotd")
+    $wantFastfetch = (@($Features) -contains "fastfetch")
+    $wantPrompt = (@($Features) -contains "prompt")
 
     $packages = @()
     foreach ($package in @($Entry.BakePackages)) {
@@ -5293,6 +5463,15 @@ function Get-BakeUserData {
     }
     foreach ($package in @($ExtraPackages)) {
         if (-not [string]::IsNullOrWhiteSpace([string]$package)) { $packages += ([string]$package).Trim() }
+    }
+    # A ticked feature can name packages of its own, and they go in the SAME list as
+    # everything else - so the install is one transaction and the BAKE-PKG probe says
+    # by name which of them arrived.
+    foreach ($feature in @(Get-LinuxGoldFeatureCatalog)) {
+        if (-not (@($Features) -contains $feature.Id)) { continue }
+        foreach ($package in @($feature.Packages)) {
+            if (-not [string]::IsNullOrWhiteSpace([string]$package)) { $packages += ([string]$package).Trim() }
+        }
     }
     $packages = @($packages | Select-Object -Unique)
 
@@ -5382,11 +5561,23 @@ function Get-BakeUserData {
     # is conditional here, so a second write_files key would collide with the aliases
     # one below. What each family puts here, and why, is in Get-LinuxFamilyProfile.
     $bootCommands = @($familyProfile.BootCommands)
+    # fastfetch is not in Rocky's own repositories - it is in EPEL, and EPEL is one
+    # package away. In bootcmd rather than runcmd because the repository has to exist
+    # before the package module runs, and that module is the first thing in the final
+    # stage; a runcmd would enable EPEL long after the install it was for had failed.
+    if ($wantFastfetch -and ([string]$Entry.Distro) -eq "rocky") {
+        $bootCommands += 'dnf install -y epel-release'
+    }
     if ($bootCommands.Count -gt 0) {
         [void]$lines.Add("bootcmd:")
         foreach ($command in $bootCommands) {
             [void]$lines.Add("  - [ sh, -c, '" + $command + "' ]")
         }
+    }
+    # One write_files key for however many of the file features are ticked - a second
+    # one would be a duplicate mapping key, which is a YAML error rather than a merge.
+    if ($wantAliases -or $wantPrompt -or $wantFastfetch) {
+        [void]$lines.Add("write_files:")
     }
     if ($wantAliases) {
         # profile.d covers an SSH session, which is a login shell, and every user that
@@ -5395,7 +5586,6 @@ function Get-BakeUserData {
         # is also what covers a non-login interactive shell, where profile.d is not read.
         # Hence both, and the skel line sources the same file rather than copying it, so
         # there is one place to read and no chance of the two drifting.
-        [void]$lines.Add("write_files:")
         [void]$lines.Add("  - path: /etc/profile.d/99-hv-studio-aliases.sh")
         [void]$lines.Add("    permissions: '0644'")
         [void]$lines.Add("    content: |")
@@ -5409,6 +5599,98 @@ function Get-BakeUserData {
         [void]$lines.Add("      alias cls='clear'")
         [void]$lines.Add("      alias ..='cd ..'")
         [void]$lines.Add("      alias cd..='cd ..'")
+    }
+    if ($wantFastfetch) {
+        # fastfetch's own config, in skel so the per-VM user gets it when cloud-init
+        # creates that account. Written here rather than left to the default view,
+        # which leads with a GPU, a display resolution and a terminal name - three
+        # things a headless VM either does not have or cannot tell you anything
+        # useful about.
+        #
+        # The box characters are \u escapes, not literal bytes. This script is ASCII
+        # from end to end and carries no BOM, and Windows PowerShell 5.1 reads a file
+        # without one as ANSI - a literal U+2502 in here would reach the guest as
+        # mojibake. JSON unescapes them on the guest's side, where the locale is
+        # UTF-8 and the console font has the glyphs.
+        #
+        # One more thing worth knowing before editing the widths: fastfetch measures
+        # key.width in BYTES. Every key starts with the same three-byte bar, so 16
+        # buys the same 13 columns for all of them; change the prefix and the values
+        # go ragged.
+        [void]$lines.Add("  - path: /etc/skel/.config/fastfetch/config.jsonc")
+        [void]$lines.Add("    permissions: '0644'")
+        [void]$lines.Add("    content: |")
+        [void]$lines.Add('      {')
+        [void]$lines.Add('        "display": { "separator": "  ", "key": { "width": 16 } },')
+        [void]$lines.Add('        "modules": [')
+        [void]$lines.Add('          "break",')
+        [void]$lines.Add('          { "type": "title", "format": "  {#1;36}{user-name}{#}{#90}@{#}{#1;36}{host-name}{#}" },')
+        [void]$lines.Add('          { "type": "custom", "format": "{#90}\u250c\u2500 {#}{#1;36}System{#} {#90}\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500{#}" },')
+        [void]$lines.Add('          { "type": "os", "key": "\u2502  OS" , "keyColor": "36" },')
+        [void]$lines.Add('          { "type": "kernel", "key": "\u2502  Kernel" , "keyColor": "36" },')
+        [void]$lines.Add('          { "type": "host", "key": "\u2502  Platform" , "keyColor": "36" },')
+        [void]$lines.Add('          { "type": "uptime", "key": "\u2502  Uptime" , "keyColor": "36" },')
+        [void]$lines.Add('          { "type": "packages", "key": "\u2502  Packages" , "keyColor": "36" },')
+        [void]$lines.Add('          { "type": "shell", "key": "\u2502  Shell" , "keyColor": "36" },')
+        [void]$lines.Add('          { "type": "locale", "key": "\u2502  Locale" , "keyColor": "36" },')
+        [void]$lines.Add('          { "type": "datetime", "key": "\u2502  Time", "format": "{year}-{month-pretty}-{day-pretty} {hour-pretty}:{minute-pretty}" , "keyColor": "36" },')
+        [void]$lines.Add('          { "type": "custom", "format": "{#90}\u251c\u2500 {#}{#1;35}Resources{#} {#90}\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500{#}" },')
+        [void]$lines.Add('          { "type": "cpu", "key": "\u2502  CPU" , "keyColor": "35" },')
+        [void]$lines.Add('          { "type": "memory", "key": "\u2502  Memory" , "keyColor": "35" },')
+        [void]$lines.Add('          { "type": "disk", "key": "\u2502  Disk", "folders": "/" , "keyColor": "35" },')
+        [void]$lines.Add('          { "type": "custom", "format": "{#90}\u251c\u2500 {#}{#1;33}Network{#} {#90}\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500{#}" },')
+        [void]$lines.Add('          { "type": "localip", "key": "\u2502  Local IP" , "keyColor": "33" },')
+        [void]$lines.Add('          { "type": "command", "key": "\u2502  Gateway", "text": "ip route show default 2>/dev/null | awk ''{print $3; exit}''" , "keyColor": "33" },')
+        [void]$lines.Add('          { "type": "dns", "key": "\u2502  DNS" , "keyColor": "33" },')
+        [void]$lines.Add('          { "type": "custom", "format": "{#90}\u2514\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500{#}" },')
+        [void]$lines.Add('          "break",')
+        [void]$lines.Add('          { "type": "colors", "paddingLeft": 2 }')
+        [void]$lines.Add('        ]')
+        [void]$lines.Add('      }')
+    }
+    if ($wantPrompt) {
+        # append: true, so this is the last thing in skel's .bashrc and therefore the
+        # last word on PS1 - Debian and Ubuntu both set one further up that same file,
+        # and a prompt written above theirs would simply be overwritten.
+        #
+        # write_files rather than a runcmd echo: the body is several lines with quotes,
+        # brackets and escapes in it, and every one of those would have to survive
+        # YAML, sh -c and echo in turn to land the way it was written.
+        [void]$lines.Add("  - path: /etc/skel/.bashrc")
+        [void]$lines.Add("    append: true")
+        [void]$lines.Add("    content: |")
+        [void]$lines.Add('      ')
+        [void]$lines.Add("      # Baked by HyperV-VM-Studio. Bold blue path, then a chevron: green after a")
+        [void]$lines.Add("      # command that succeeded, red after one that did not.")
+        [void]$lines.Add('      #')
+        [void]$lines.Add("      # The chevron is built from escapes rather than written as a literal, so")
+        [void]$lines.Add("      # this file stays ASCII from the build host to the guest - and from BYTE")
+        [void]$lines.Add("      # escapes rather than \u276f, which is not the same thing: bash converts a")
+        [void]$lines.Add("      # \u escape in the shell's current locale and prints the escape TEXT when it")
+        [void]$lines.Add("      # cannot, so a shell that starts before LANG is set would show a literal")
+        [void]$lines.Add("      # \u276F in the prompt. \xe2\x9d\xaf is the same character already encoded.")
+        [void]$lines.Add("      #")
+        [void]$lines.Add("      # And a plain > where the locale is not UTF-8 at all, because a multi-byte")
+        [void]$lines.Add("      # glyph on a latin1 console is three wrong characters, not one right one.")
+        [void]$lines.Add('      case "${LC_ALL:-${LC_CTYPE:-$LANG}}" in')
+        [void]$lines.Add('          *[Uu][Tt][Ff]*) __hv_chevron=$''\xe2\x9d\xaf'' ;;')
+        [void]$lines.Add("          *) __hv_chevron='>' ;;")
+        [void]$lines.Add('      esac')
+        [void]$lines.Add('      __hv_prompt() {')
+        [void]$lines.Add('          if [ $? -eq 0 ]; then')
+        [void]$lines.Add('              PS1="\[\e[1;34m\]\w\[\e[0m\] \[\e[1;32m\]$__hv_chevron\[\e[0m\] "')
+        [void]$lines.Add('          else')
+        [void]$lines.Add('              PS1="\[\e[1;34m\]\w\[\e[0m\] \[\e[1;31m\]$__hv_chevron\[\e[0m\] "')
+        [void]$lines.Add('          fi')
+        [void]$lines.Add('      }')
+        [void]$lines.Add('      # Appended, not assigned: Debian and Ubuntu already keep a window-title')
+        [void]$lines.Add('      # writer in PROMPT_COMMAND, and replacing it would be a second change')
+        [void]$lines.Add('      # nobody asked for.')
+        [void]$lines.Add('      case "$PROMPT_COMMAND" in')
+        [void]$lines.Add('          *__hv_prompt*) ;;')
+        [void]$lines.Add('          "") PROMPT_COMMAND=__hv_prompt ;;')
+        [void]$lines.Add('          *) PROMPT_COMMAND="$PROMPT_COMMAND; __hv_prompt" ;;')
+        [void]$lines.Add('      esac')
     }
 
     [void]$lines.Add("runcmd:")
@@ -5461,6 +5743,12 @@ function Get-BakeUserData {
     foreach ($command in @($familyProfile.ServiceCommands)) {
         [void]$lines.Add("  - [ sh, -c, '" + $command + "' ]")
     }
+    # After the probe, so BAKE-PKG has already said what arrived before anything is
+    # removed - a gold that came out short and a gold that tidied up after itself
+    # should not look the same in the transcript.
+    foreach ($command in @($familyProfile.CleanupCommands)) {
+        [void]$lines.Add("  - [ sh, -c, '" + $command + "' ]")
+    }
 
     # No sshd edits here, and that is a correction rather than an omission.
     #
@@ -5482,10 +5770,18 @@ function Get-BakeUserData {
     if ($wantAliases) {
         [void]$lines.Add('  - [ sh, -c, "grep -q 99-hv-studio-aliases /etc/skel/.bashrc || echo \". /etc/profile.d/99-hv-studio-aliases.sh\" >> /etc/skel/.bashrc" ]')
     }
-    if ($wantColorPrompt) {
-        # Both images ship this line commented out; uncommenting it in skel is what the
-        # per-VM user inherits when cloud-init creates the account at first boot.
-        [void]$lines.Add('  - [ sh, -c, "sed -i s/^#force_color_prompt=yes/force_color_prompt=yes/ /etc/skel/.bashrc || true" ]')
+    if ($wantFastfetch) {
+        # /etc/skel, like the aliases line above: it is what cloud-init copies into the
+        # per-VM user's home when it creates that account on the gold's first boot.
+        # The `case $- in *i*` is what keeps a banner out of a non-interactive shell -
+        # printing into one is how an scp or an sftp session becomes a protocol error -
+        # and `command -v` keeps a gold whose install did not arrive quiet rather than
+        # printing "fastfetch: not found" at every login.
+        # printf, not blank lines in the config: a trailing break there is absorbed by
+        # whatever logo rows are still unprinted, so the gap only appears on a
+        # distribution whose module list happens to be taller than its logo. Three
+        # lines, so the banner is not sitting under the prompt.
+        [void]$lines.Add('  - [ sh, -c, "grep -q hv-studio-fastfetch /etc/skel/.bashrc || echo ''command -v fastfetch >/dev/null 2>&1 && case $- in *i*) fastfetch; printf \"\\n\\n\\n\" ;; esac # hv-studio-fastfetch'' >> /etc/skel/.bashrc" ]')
     }
     if ($wantQuietMotd) {
         # ENABLED=0 stops the fetch itself; the chmod stops the scripts that print the
@@ -5494,6 +5790,12 @@ function Get-BakeUserData {
         # banner that has ever mattered.
         [void]$lines.Add('  - [ sh, -c, "sed -i s/^ENABLED=1/ENABLED=0/ /etc/default/motd-news 2>/dev/null || true" ]')
         [void]$lines.Add('  - [ sh, -c, "chmod -x /etc/update-motd.d/50-motd-news /etc/update-motd.d/91-contract-ua-esm-status /etc/update-motd.d/50-landscape-sysinfo /etc/update-motd.d/90-updates-available /etc/update-motd.d/95-hwe-eol /etc/update-motd.d/10-help-text 2>/dev/null || true" ]')
+        # What the chmod list cannot cover: everything else that prints on an SSH
+        # login. pam_motd honours .hushlogin for the dynamic motd, the static
+        # /etc/motd and /etc/legal; sshd honours the same file for "Last login".
+        # /etc/skel is the per-VM user; /root is the account someone reaches for when
+        # that user is the thing being debugged.
+        [void]$lines.Add('  - [ sh, -c, "touch /etc/skel/.hushlogin /root/.hushlogin" ]')
     }
     [void]$lines.Add("  - [ cloud-init, clean, '--logs', '--machine-id' ]")
     [void]$lines.Add("  - [ sh, -c, 'rm -f /etc/ssh/ssh_host_*' ]")
@@ -6071,7 +6373,7 @@ function Start-LinuxInteractiveConfiguration {
             format   = (Get-LinuxLocaleName -LocaleTag $locale)
             timezone = $timeZone
         }) `
-        -DefaultSizeGB $entry.DefaultDiskGB -MinSizeGB 8 -MaxSizeGB 2048 -DefaultType "Dynamic"
+        -DefaultSizeGB $entry.DefaultDiskGB -MinSizeGB 8 -MaxSizeGB 2048 -DefaultType "Fixed"
     if ($null -eq $vhdxConfig) { return $null }
     $diskGB = $vhdxConfig.SizeGB
     $vhdType = $vhdxConfig.Type
@@ -6301,9 +6603,26 @@ function Start-LinuxInteractiveConfiguration {
     $bakeFeatures = @()
     if ($switchName -ne "__skip__") {
         $featureItems = @()
+        # What the bake installs whatever anyone ticks, shown first and locked. It is
+        # the answer to "did the Hyper-V tools get in?" asked BEFORE the build rather
+        # than after it, and on Ubuntu it is also where the azure kernel becomes
+        # visible - the one thing that makes that gold different from the stock image.
+        foreach ($package in @($entry.BakePackages)) {
+            if ([string]::IsNullOrWhiteSpace([string]$package)) { continue }
+            $featureItems += [PSCustomObject]@{
+                Id       = "baked:$package"
+                Label    = [string]$package
+                Selected = $true
+                IsLocked = $true
+                Section  = "Required"
+            }
+        }
         foreach ($feature in @(Get-LinuxGoldFeatureCatalog)) {
             if (-not [string]::IsNullOrWhiteSpace($feature.Distro) -and $feature.Distro -ne $entry.Distro) { continue }
             if (-not [string]::IsNullOrWhiteSpace($feature.Family) -and $feature.Family -ne $entry.Family) { continue }
+            # Per-release rather than per-distribution: a feature that only exists in
+            # some of a distribution's releases names the golds it works on.
+            if (@($feature.ImageIds).Count -gt 0 -and -not (@($feature.ImageIds) -contains $entry.ImageId)) { continue }
             $featureItems += [PSCustomObject]@{
                 Id       = $feature.Id
                 Label    = $feature.Label
@@ -6311,7 +6630,7 @@ function Start-LinuxInteractiveConfiguration {
                 Section  = "Optional"
             }
         }
-        if ($featureItems.Count -gt 0) {
+        if (@($featureItems | Where-Object { -not $_.IsLocked }).Count -gt 0) {
             $bakeFeatures = Show-MultiSelectMenu -Title "Optional features" -Items $featureItems -AllowEmpty `
                 -Subtitle "Space toggles - baked into the gold, not per VM" `
                 -ContinueLabel "Continue" `
@@ -6455,7 +6774,7 @@ function Invoke-LinuxGoldRun {
     Write-Log "$($entry.Name) -> '$goldName' ($target)" -Tag "Info"
     Write-Log ("Language {0}, format {1}" -f $Config.Language, $Config.Locale) -Tag "Info"
     Write-Log ("Keymap {0}, time zone {1}" -f (Get-LinuxKeymap -LocaleTag $Config.KeyboardLayout), $Config.TimeZone) -Tag "Info"
-    $diskType = if ($Config.VhdType) { $Config.VhdType } else { "Dynamic" }
+    $diskType = if ($Config.VhdType) { $Config.VhdType } else { "Fixed" }
     Write-Log ("Disk {0} GB {1}" -f $Config.DiskSizeGB, $diskType) -Tag "Info"
     Write-Log ("Output {0}" -f $Config.OutputDirectory) -Tag "Info"
 
@@ -6478,7 +6797,7 @@ function Invoke-LinuxGoldRun {
         $checksum = (Get-FileHash -LiteralPath $imagePath -Algorithm $entry.Algorithm).Hash.ToLowerInvariant()
         $vhdxPath = New-LinuxGoldImage -Entry $entry -ImagePath $imagePath `
             -OutputDirectory $Config.OutputDirectory -DiskSizeGB $Config.DiskSizeGB `
-            -VhdType $(if ($Config.VhdType) { [string]$Config.VhdType } else { "Dynamic" }) -GoldName $goldName
+            -VhdType $(if ($Config.VhdType) { [string]$Config.VhdType } else { "Fixed" }) -GoldName $goldName
     }
     catch {
         Write-Log "Failed to build the gold: $($_.Exception.Message)" -Tag "Error"
@@ -6487,7 +6806,7 @@ function Invoke-LinuxGoldRun {
 
     $null = Write-LinuxGoldManifest -VhdPath $vhdxPath -Entry $entry -Target $target `
         -Language $Config.Language -Locale $Config.Locale -KeyboardLayout $Config.KeyboardLayout `
-        -TimeZone $Config.TimeZone -VhdType $(if ($Config.VhdType) { [string]$Config.VhdType } else { "Dynamic" }) `
+        -TimeZone $Config.TimeZone -VhdType $(if ($Config.VhdType) { [string]$Config.VhdType } else { "Fixed" }) `
         -SourceChecksum $checksum
 
     if ([string]::IsNullOrWhiteSpace([string]$Config.BakeSwitchName)) {
