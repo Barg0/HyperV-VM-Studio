@@ -11,7 +11,13 @@ for Windows media, so a several-hundred-MB image can never be committed by accid
 |------|---------------------|
 | `ubuntu-24.04-server-cloudimg-amd64.img` | cloud-images.ubuntu.com, qcow2 |
 | `ubuntu-26.04-server-cloudimg-amd64.img` | cloud-images.ubuntu.com, qcow2 |
+| `debian-12-genericcloud-amd64.qcow2` | cloud.debian.org, qcow2 |
 | `debian-13-genericcloud-amd64.qcow2` | cloud.debian.org, qcow2 |
+| `Fedora-Cloud-Base-Generic-42-1.1.x86_64.qcow2` | download.fedoraproject.org, qcow2 |
+| `Fedora-Cloud-Base-Generic-43-1.6.x86_64.qcow2` | download.fedoraproject.org, qcow2 |
+| `Rocky-9-GenericCloud-Base.latest.x86_64.qcow2` | dl.rockylinux.org, qcow2 |
+| `Rocky-10-GenericCloud-Base.latest.x86_64.qcow2` | dl.rockylinux.org, qcow2 |
+| `Arch-Linux-x86_64-cloudimg.qcow2` | geo.mirror.pkgbuild.com, qcow2 |
 
 A `.part` file is a download that did not finish. The builder writes to `<name>.part`
 and renames only once the stream has closed cleanly, so a truncated file can never be
@@ -23,8 +29,14 @@ A cached image is re-used when its checksum still matches the one the distributi
 publishes beside it; otherwise it is fetched again. Deleting a file here costs nothing
 but the download.
 
-**What the checksum proves**: the image and its `SHA256SUMS`/`SHA512SUMS` arrived over
-the same TLS connection from the same mirror. That catches a corrupted or truncated
-download. It is **not** a signature check — neither Ubuntu's signed `SHA256SUMS` nor
-Debian's unsigned one is verified with gpg, because there is no gpg on a stock Windows
+Two listing formats are read, because the distributions do not agree on one. Ubuntu
+and Debian publish coreutils format — `<hash>  <name>`, one line per file. Fedora and
+Rocky publish BSD format — `SHA256 (<name>) = <hash>` — and Fedora wraps the whole
+listing in a PGP clearsigned document, whose armour lines match neither pattern and
+are simply skipped.
+
+**What the checksum proves**: the image and its checksum listing arrived over the same
+TLS connection from the same mirror. That catches a corrupted or truncated download.
+It is **not** a signature check — not Ubuntu's signed `SHA256SUMS`, not Fedora's signed
+`CHECKSUM`, not Rocky's detached `.asc` — because there is no gpg on a stock Windows
 host. Do not read a passing checksum as "the mirror is trustworthy".

@@ -991,7 +991,8 @@ function Get-LinuxGoldIds {
     # gold's file name - hv-enus-ubuntu2604. Keep in step with Get-LinuxImageCatalog in
     # New-Vhdx.ps1. Their only job here is to let a Linux id past the Windows rules
     # table; everything after that is the ordinary three-segment lookup.
-    return @("ubuntu2604", "ubuntu2404", "debian13")
+    return @("ubuntu2604", "ubuntu2404", "debian13", "debian12",
+             "fedora43", "fedora42", "rocky10", "rocky9", "arch")
 }
 
 function Test-IsLinuxImageId {
@@ -3470,17 +3471,29 @@ function ConvertTo-YamlDoubleQuoted {
 function Get-LinuxDomainJoinPackages {
     <#
         realmd does the join and writes the sssd, krb5, nsswitch and PAM configuration;
-        the rest is what has to be installed for it to be able to.
+        the rest is what has to be installed for it to be able to. The names differ by
+        family, and so does the list: this is not the same set spelled twice.
 
-        oddjob and oddjob-mkhomedir USED to be in this list, on the belief that a
-        domain user would otherwise log in with no home directory. That is RHEL
-        thinking and it is wrong here. Checked on a joined Ubuntu 26.04 box: both
-        packages install, oddjobd runs - and does nothing, because Debian and Ubuntu
-        ship no pam-configs profile for it, so pam_oddjob_mkhomedir.so sits on disk
-        unreferenced. What these distributions use is the plain kernel-side
-        pam_mkhomedir.so, wired up by pam-auth-update. See the mkhomedir command in
-        Get-LinuxDomainJoinCommands.
+        oddjob and oddjob-mkhomedir are in the RHEL list and NOT in the Debian one.
+        They used to be in both, on the belief that a domain user would otherwise log
+        in with no home directory. That is RHEL thinking and it is wrong on Debian.
+        Checked on a joined Ubuntu 26.04 box: both packages install, oddjobd runs -
+        and does nothing, because Debian and Ubuntu ship no pam-configs profile for
+        it, so pam_oddjob_mkhomedir.so sits on disk unreferenced. What those
+        distributions use is the plain kernel-side pam_mkhomedir.so, wired up by
+        pam-auth-update. On RHEL the reverse holds: authselect's `with-mkhomedir`
+        feature wires up pam_oddjob_mkhomedir.so and needs oddjobd running. See the
+        mkhomedir command in Get-LinuxDomainJoinCommands.
     #>
+    param([string]$Family)
+
+    if (([string]$Family).Trim().ToLowerInvariant() -eq "rhel") {
+        return @(
+            "realmd", "sssd", "sssd-tools", "adcli", "krb5-workstation",
+            "samba-common-tools", "oddjob", "oddjob-mkhomedir"
+        )
+    }
+
     return @(
         "realmd", "sssd", "sssd-tools", "adcli", "krb5-user",
         "libnss-sss", "libpam-sss", "samba-common-bin"
@@ -3660,7 +3673,7 @@ function Get-LinuxDomainJoinCommands {
            permits every domain user, so an empty list means "leave that alone" rather
            than "permit nobody".
     #>
-    param([object]$DomainJoin)
+    param([object]$DomainJoin, [string]$Family)
 
     $commands = New-Object System.Collections.Generic.List[string]
 
@@ -3691,31 +3704,48 @@ function Get-LinuxDomainJoinCommands {
     # logs in to a directory that is not there.
     #
     # Ubuntu and Debian do this with pam_mkhomedir.so through pam-auth-update rather
-    # than with oddjob, which is why the oddjob packages are no longer installed. The
+    # than with oddjob, which is why the oddjob packages are not in their list. The
     # stock "mkhomedir" profile would work, but it leaves homes at the pam_mkhomedir
     # default of umask 0022 - drwxr-xr-x, every domain user able to read every other
     # one's home. So a profile of our own goes in beside it with umask=0077, matching
     # the mode a local user's home already gets.
     #
-    # The tab between "optional" and the module name is what pam-auth-update's parser
-    # expects; spaces there are not accepted.
-    $profileLines = @(
-        "Name: Create home directory on login (private)",
-        "Default: yes",
-        "Priority: 0",
-        "Session-Type: Additional",
-        "Session-Interactive-Only: yes",
-        "Session:",
-        "`toptional`t`t`tpam_mkhomedir.so umask=0077"
-    )
-    $profileWrite = "printf '%s\n'"
-    foreach ($line in $profileLines) { $profileWrite += " " + (ConvertTo-ShellSingleQuoted -Value $line) }
-    $profileWrite += " > /usr/share/pam-configs/mkhomedir-private"
+    # The RHEL family has no pam-auth-update and no /usr/share/pam-configs; editing
+    # /etc/pam.d by hand there is how a machine ends up with an authselect profile
+    # that overwrites the edit on its next update. authselect is the supported way,
+    # `with-mkhomedir` is its name for this, and it wires up pam_oddjob_mkhomedir.so,
+    # which needs oddjobd running - hence the two extra packages on that side.
+    # Privacy is handled differently too: HOME_MODE in /etc/login.defs is what
+    # oddjob-mkhomedir reads, so 0700 there is the same decision as umask=0077 here.
+    if (([string]$Family).Trim().ToLowerInvariant() -eq "rhel") {
+        $mkhomedir = "sed -i 's/^#*HOME_MODE.*/HOME_MODE\t0700/' /etc/login.defs; " +
+                     "grep -q '^HOME_MODE' /etc/login.defs || printf 'HOME_MODE\t0700\n' >> /etc/login.defs; " +
+                     "systemctl enable --now oddjobd; " +
+                     "authselect select sssd with-mkhomedir --force" +
+                     " && echo MKHOMEDIR-OK || echo MKHOMEDIR-FAILED"
+        [void]$commands.Add($mkhomedir)
+    }
+    else {
+        # The tab between "optional" and the module name is what pam-auth-update's
+        # parser expects; spaces there are not accepted.
+        $profileLines = @(
+            "Name: Create home directory on login (private)",
+            "Default: yes",
+            "Priority: 0",
+            "Session-Type: Additional",
+            "Session-Interactive-Only: yes",
+            "Session:",
+            "`toptional`t`t`tpam_mkhomedir.so umask=0077"
+        )
+        $profileWrite = "printf '%s\n'"
+        foreach ($line in $profileLines) { $profileWrite += " " + (ConvertTo-ShellSingleQuoted -Value $line) }
+        $profileWrite += " > /usr/share/pam-configs/mkhomedir-private"
 
-    $mkhomedir = $profileWrite + "; " +
-                 "DEBIAN_FRONTEND=noninteractive pam-auth-update --enable mkhomedir-private" +
-                 " && echo MKHOMEDIR-OK || echo MKHOMEDIR-FAILED"
-    [void]$commands.Add($mkhomedir)
+        $mkhomedir = $profileWrite + "; " +
+                     "DEBIAN_FRONTEND=noninteractive pam-auth-update --enable mkhomedir-private" +
+                     " && echo MKHOMEDIR-OK || echo MKHOMEDIR-FAILED"
+        [void]$commands.Add($mkhomedir)
+    }
 
     $sudoTokens = @()
     foreach ($group in @($DomainJoin.sudoGroups)) {
@@ -3756,6 +3786,59 @@ function Get-LinuxDomainJoinCommands {
     return $commands.ToArray()
 }
 
+function Get-LinuxLocaleCommands {
+    <#
+        The shell that makes the FORMAT locale exist and points the LC_* variables at
+        it. Two families, two different answers, and neither works on the other:
+
+        Debian and Ubuntu carry `locales`, so locale-gen generates whatever is asked
+        for with no network, and update-locale writes /etc/default/locale. The RHEL
+        family has neither command. Its locales come pre-generated inside
+        glibc-langpack-<lang> - which the gold installed during its bake, because
+        there is no way to make one afterwards - and localectl writes /etc/locale.conf.
+
+        localectl needs systemd-localed, which is socket-activated and will start on
+        demand; the fallback appends the same assignments to /etc/locale.conf, which
+        is the file localectl would have written. Belt and braces for one line, and
+        the line is what every LC_* on the machine depends on.
+
+        An empty Family is a gold built before the sidecar recorded one, and every
+        one of those was Debian.
+    #>
+    param([string]$Family, [string]$Locale)
+
+    $commands = New-Object System.Collections.Generic.List[string]
+    if ([string]::IsNullOrWhiteSpace($Locale)) { return $commands.ToArray() }
+
+    $formatVariables = @("LC_TIME","LC_NUMERIC","LC_MONETARY","LC_PAPER","LC_MEASUREMENT",
+                         "LC_ADDRESS","LC_TELEPHONE","LC_NAME","LC_IDENTIFICATION")
+    $assignments = ($formatVariables | ForEach-Object { "$_=$Locale" }) -join " "
+    # The same assignments one per line, for the fallback that writes the file the
+    # way localectl would have.
+    $appends = ($formatVariables | ForEach-Object { "$_=$Locale" }) -join "\n"
+
+    if (([string]$Family).Trim().ToLowerInvariant() -eq "arch") {
+        # Arch has locale-gen but no update-locale, and its /etc/locale.gen is a list
+        # of locales to generate rather than a config file - so the format locale is
+        # APPENDED to it. It has to be: cloud-init's own locale module ran earlier in
+        # this boot and overwrote that file with the LANG locale alone, so anything
+        # written before then is gone, and anything not in the file is not generated.
+        # localectl then writes /etc/locale.conf, the same file the RHEL branch ends at.
+        [void]$commands.Add("grep -q '^$Locale ' /etc/locale.gen || printf '%s UTF-8\n' '$Locale' >> /etc/locale.gen; locale-gen")
+        [void]$commands.Add("localectl set-locale $assignments || printf '%b\n' '$appends' >> /etc/locale.conf")
+        return $commands.ToArray()
+    }
+
+    if (([string]$Family).Trim().ToLowerInvariant() -eq "rhel") {
+        [void]$commands.Add("localectl set-locale $assignments || printf '%b\n' '$appends' >> /etc/locale.conf")
+        return $commands.ToArray()
+    }
+
+    [void]$commands.Add("locale-gen $Locale || true")
+    [void]$commands.Add("update-locale $assignments")
+    return $commands.ToArray()
+}
+
 function Get-CloudInitUserData {
     <#
         The Linux answer file.
@@ -3778,7 +3861,8 @@ function Get-CloudInitUserData {
         [string]$Language,
         [string]$Locale,
         [string]$Keymap,
-        [string]$TimeZone
+        [string]$TimeZone,
+        [string]$Family
     )
 
     $userName = ([string]$Server.localUserName).Trim()
@@ -3820,6 +3904,17 @@ function Get-CloudInitUserData {
         $arcConfig = $null
     }
 
+    # A domain join on Arch is not a package away. realmd and adcli are not in Arch's
+    # official repositories at all - sssd and samba are, those two are not - so the
+    # packages cannot be installed and `realm join` is a command the VM will not have.
+    # Saying so here is the difference between a machine that did not join and a
+    # machine whose first boot ran a join that failed with "command not found" and
+    # carried on as though nothing were wrong.
+    if ($null -ne $domainJoin -and ([string]$Family).Trim().ToLowerInvariant() -eq "arch") {
+        Write-Log "Domain join for '$HostName' skipped - realmd and adcli are not packaged for Arch" -Tag "Warn"
+        $domainJoin = $null
+    }
+
     $packages = @()
     if ($null -ne $arcConfig) {
         # The install script is fetched with curl. Ubuntu's cloud image has it, Debian's
@@ -3831,7 +3926,7 @@ function Get-CloudInitUserData {
         # Installed per VM rather than baked, by decision: a gold stays lean and only
         # the machines that actually join pay for it. The cost is that a joining VM
         # needs the package mirror AND the domain controller reachable on first boot.
-        foreach ($package in @(Get-LinuxDomainJoinPackages)) { $packages += $package }
+        foreach ($package in @(Get-LinuxDomainJoinPackages -Family $Family)) { $packages += $package }
     }
     foreach ($package in @($Server.packages)) {
         $trimmed = ([string]$package).Trim()
@@ -3856,7 +3951,13 @@ function Get-CloudInitUserData {
 
     [void]$lines.Add("users:")
     [void]$lines.Add("  - name: $userName")
-    [void]$lines.Add("    groups: [sudo]")
+    # wheel on the RHEL family and Arch, sudo on Debian and Ubuntu - the same split
+    # Get-LinuxFamilyProfile makes in New-Vhdx.ps1, and for the same reason: naming a
+    # group the distribution does not have leaves an empty one behind and grants
+    # nothing through it. The `sudo:` line below is what actually hands out sudo, so a
+    # wrong group here has never broken a VM - it has just been wrong.
+    $adminGroup = if (([string]$Family).Trim().ToLowerInvariant() -in @("rhel", "arch")) { "wheel" } else { "sudo" }
+    [void]$lines.Add("    groups: [$adminGroup]")
     [void]$lines.Add("    shell: /bin/bash")
     [void]$lines.Add("    sudo: 'ALL=(ALL) NOPASSWD:ALL'")
     [void]$lines.Add("    lock_passwd: false")
@@ -3884,29 +3985,24 @@ function Get-CloudInitUserData {
     }
 
     # The LC_* format family. cloud-init has no module for the language/format split, so
-    # this is runcmd: generate the format locale (it is not the one the locale module
+    # this is runcmd: make the format locale exist (it is not the one the locale module
     # just generated) and point the nine format variables at it. LC_MESSAGES is
     # deliberately absent - leaving it unset is what keeps messages on LANG.
     #
-    # Both distributions carry `locales`, so locale-gen needs no network. Ubuntu also
-    # carries console-setup, keyboard-configuration and kbd; Debian's genericcloud image
-    # carries none of them, which is why the Debian gold installs them during its bake.
     # One runcmd block, whatever fills it - cloud-init takes the key once and a second
     # `runcmd:` in the same document silently replaces the first.
     $runCommands = New-Object System.Collections.Generic.List[string]
     if (-not [string]::IsNullOrWhiteSpace($Locale) -and $Locale -ne $Language) {
-        $formatVariables = @("LC_TIME","LC_NUMERIC","LC_MONETARY","LC_PAPER","LC_MEASUREMENT",
-                             "LC_ADDRESS","LC_TELEPHONE","LC_NAME","LC_IDENTIFICATION")
-        $assignments = ($formatVariables | ForEach-Object { "$_=$Locale" }) -join " "
-        [void]$runCommands.Add("locale-gen $Locale || true")
-        [void]$runCommands.Add("update-locale $assignments")
+        foreach ($command in @(Get-LinuxLocaleCommands -Family $Family -Locale $Locale)) {
+            [void]$runCommands.Add($command)
+        }
     }
 
     # Last, and after the packages that cloud-init installs earlier in this same file:
     # realm join cannot run until realmd exists, and the locale work above has no
     # opinion about any of it.
     if ($null -ne $domainJoin) {
-        foreach ($command in @(Get-LinuxDomainJoinCommands -DomainJoin $domainJoin)) {
+        foreach ($command in @(Get-LinuxDomainJoinCommands -DomainJoin $domainJoin -Family $Family)) {
             [void]$runCommands.Add($command)
         }
     }
@@ -4004,10 +4100,21 @@ function Get-CloudInitNetworkConfig {
     [void]$lines.Add("    dhcp6: false")
     [void]$lines.Add("    addresses: ['$ipAddress/$prefix']")
     if (-not [string]::IsNullOrWhiteSpace($gateway)) {
-        # `gateway4` is deprecated and newer netplan warns on it or drops it; a default
-        # route says the same thing and keeps working.
+        # `gateway4` is deprecated and newer netplan warns on it or drops it, so the
+        # default route is written as a route.
+        #
+        # 0.0.0.0/0 rather than the `to: default` netplan also accepts, and that is
+        # not a style choice. On the Debian family cloud-init hands the v2 config to
+        # netplan more or less as written, so netplan's own vocabulary is all that
+        # matters. On the RHEL family there is no netplan: cloud-init has to parse the
+        # v2 config itself and render NetworkManager keyfiles, and the parser only
+        # learned to resolve `default` into a network in 25.3 (network_state.py,
+        # `if addr == "default"`). Rocky 10 ships cloud-init 24.4, which raises
+        # `Address default is not a valid ip network`, fails stage init-local, and
+        # leaves the machine on DHCP with the static address silently unapplied.
+        # 0.0.0.0/0 is a network on every version and netplan takes it too.
         [void]$lines.Add("    routes:")
-        [void]$lines.Add("      - to: default")
+        [void]$lines.Add("      - to: 0.0.0.0/0")
         [void]$lines.Add("        via: '$gateway'")
     }
     if ($dns.Count -gt 0) {
@@ -4516,6 +4623,12 @@ function Set-LinuxProvisioning {
     $locale = ""
     $keymap = ""
     $timeZone = ""
+    # The package family the gold was built from. New-Vhdx.ps1 records it in the
+    # sidecar because the seed cannot tell a Rocky gold from a Debian one by looking
+    # at the disk, and the two generate a locale in different ways. Empty means a
+    # gold from before the field existed, and Get-LinuxLocaleCommands reads that as
+    # the Debian family - which is what every gold built before it was.
+    $family = ""
 
     if (-not [string]::IsNullOrWhiteSpace($GoldPath)) {
         $manifestPath = "$GoldPath.json"
@@ -4526,6 +4639,7 @@ function Set-LinuxProvisioning {
                 if ($manifest.locale)         { $locale   = Get-LinuxLocaleName -LocaleTag ([string]$manifest.locale) }
                 if ($manifest.keyboardLayout) { $keymap   = Get-LinuxKeymap     -LocaleTag ([string]$manifest.keyboardLayout) }
                 if ($manifest.timeZone)       { $timeZone = [string]$manifest.timeZone }
+                if ($manifest.family)         { $family   = [string]$manifest.family }
             }
             catch {
                 Write-Log "Could not read the gold manifest '$manifestPath': $($_.Exception.Message)" -Tag "Warn"
@@ -4539,7 +4653,7 @@ function Set-LinuxProvisioning {
     if ([string]::IsNullOrWhiteSpace($language)) { $language = $locale }
 
     $userData = Get-CloudInitUserData -Server $Server -Defaults $Defaults -HostName $HostName `
-        -Language $language -Locale $locale -Keymap $keymap -TimeZone $timeZone
+        -Language $language -Locale $locale -Keymap $keymap -TimeZone $timeZone -Family $family
     $metaData = Get-CloudInitMetaData -HostName $HostName
     $networkConfig = Get-CloudInitNetworkConfig -Server $Server -MacAddress $NicMacAddress
 
@@ -5964,6 +6078,18 @@ function New-ProvisionedVm {
     $enableSecureBoot = $true
     if ($null -ne $Server.enableSecureBoot) {
         $enableSecureBoot = [bool]$Server.enableSecureBoot
+    }
+    # The gold gets the last word, and only ever to say no. New-Vhdx.ps1 records
+    # secureBoot in the sidecar for an image whose distribution ships no signed shim -
+    # Arch - and such a VM does not boot with Secure Boot on, whatever the config asks
+    # for. A config that says yes there is wrong rather than unlucky, so this says so
+    # out loud rather than leaving someone with a VM that starts and shows nothing.
+    if ($enableSecureBoot) {
+        $goldManifest = Get-GoldImageManifest -GoldPath $ctx.GoldPath
+        if ($null -ne $goldManifest -and $null -ne $goldManifest.secureBoot -and -not [bool]$goldManifest.secureBoot) {
+            Write-Log "Secure Boot off on '$hyperVName' - its gold ships no signed shim and would not boot with it on" -Tag "Warn"
+            $enableSecureBoot = $false
+        }
     }
     if ($enableSecureBoot) {
         # These cloud images are signed by Microsoft's THIRD-PARTY UEFI CA, through shim.
