@@ -2515,6 +2515,13 @@ const IMAGE_CATALOG = [
     /* Fedora and Rocky ship a Microsoft-signed shim, so the same Secure Boot
        template the other Linux golds use applies unchanged. */
     id: "fedora43",
+    /* Azure Arc does not support Fedora, and this is Microsoft's answer rather than a
+       guess: the installer from aka.ms/azcmagent stops with "unsupported Linux
+       distribution: Fedora Linux", so azcmagent is never on the disk and the connect
+       that follows fails on a path that does not exist. A VM here can be ticked into
+       an Arc principal and would simply never arrive in the portal, which is the
+       worst of the three possible outcomes. */
+    noAzureArc: true,
     label: "Fedora 43",
     icon: "os-server-panes.svg",
     kind: "linux",
@@ -2528,6 +2535,13 @@ const IMAGE_CATALOG = [
   },
   {
     id: "fedora42",
+    /* Azure Arc does not support Fedora, and this is Microsoft's answer rather than a
+       guess: the installer from aka.ms/azcmagent stops with "unsupported Linux
+       distribution: Fedora Linux", so azcmagent is never on the disk and the connect
+       that follows fails on a path that does not exist. A VM here can be ticked into
+       an Arc principal and would simply never arrive in the portal, which is the
+       worst of the three possible outcomes. */
+    noAzureArc: true,
     label: "Fedora 42",
     icon: "os-server-panes.svg",
     kind: "linux",
@@ -2573,6 +2587,13 @@ const IMAGE_CATALOG = [
        so nobody has to find that out. */
     id: "arch",
     label: "Arch Linux",
+    /* Not a preference and not a default: Arch signs no shim, so there is nothing for
+       the third-party UEFI CA to validate and a Gen 2 VM with Secure Boot on stops
+       before the kernel with no message that says why. A gold built from this image
+       hung at the boot screen exactly once, which is once more than it should have.
+       The toggle is forced off and disabled wherever this image is chosen, and the
+       export writes false whatever a loaded config carried. */
+    noSecureBoot: true,
     icon: "os-server-panes.svg",
     kind: "linux",
     osFamily: "linux",
@@ -2584,6 +2605,49 @@ const IMAGE_CATALOG = [
     defaults: { useDifferencingDisk: false, enableSecureBoot: false, enableVtpm: false, startAfterCreate: true, memoryGB: 2, cpuCount: 2 }
   }
 ];
+
+/* What New-Vhdx.ps1 bakes into each Linux gold, mirrored here so a card can SHOW it.
+   Read-only on purpose: these are already installed by the time a VM exists, so a tick
+   would be a lie in either position - clearing it removes nothing and setting it
+   installs nothing. They are listed because a gold that silently carries the azure
+   kernel and the Hyper-V daemons is a gold nobody can tell apart from one that does
+   not, and "did the tools get in?" is the first question anyone asks of it.
+
+   Duplicated from the bake's own catalog rather than derived from it: this file is a
+   single page that runs from a file:// URL with no build step and cannot read a .ps1.
+   Adding a distribution means both lists, which is the cost of that. */
+const LINUX_BAKED_PACKAGES = {
+  ubuntu2604: ["linux-azure", "linux-cloud-tools-azure"],
+  ubuntu2404: ["linux-azure", "linux-cloud-tools-azure"],
+  debian13:   ["hyperv-daemons", "kbd", "console-setup", "keyboard-configuration"],
+  debian12:   ["hyperv-daemons", "kbd", "console-setup", "keyboard-configuration"],
+  fedora43:   ["hyperv-daemons"],
+  fedora42:   ["hyperv-daemons"],
+  rocky10:    ["hyperv-daemons"],
+  rocky9:     ["hyperv-daemons"],
+  arch:       ["hyperv"]
+};
+/** True when Azure Arc has no agent for this image's distribution. */
+function imageRefusesAzureArc(img) {
+  return !!(img && img.noAzureArc);
+}
+
+/** True when this image cannot boot with Secure Boot on, whatever anyone ticked. */
+function imageRefusesSecureBoot(img) {
+  return !!(img && img.noSecureBoot);
+}
+/** Secure Boot as it will actually be built: the image gets a veto, the VM gets a say. */
+function effectiveSecureBoot(s) {
+  if (imageRefusesSecureBoot(findImage(s && s.imageId))) return false;
+  return !!(s && s.enableSecureBoot);
+}
+
+/** The baked list for a VM's image, or nothing for a Windows one or a custom gold. */
+function linuxBakedPackages(s) {
+  const img = findImage(s && s.imageId);
+  if (!isLinuxImage(img)) return [];
+  return LINUX_BAKED_PACKAGES[img.id] || [];
+}
 
 /* One predicate, used everywhere a card, a validation or an export has to decide
    whether it is looking at a Linux machine. Reads osFamily rather than kind so a
@@ -3013,7 +3077,10 @@ function vlanHintText(vlanId) {
   return v ? `Access mode · tagged VLAN ${v}` : "Access mode · untagged";
 }
 
-const LINUX_DISTRO_LABEL = { ubuntu: "Ubuntu", debian: "Debian" };
+const LINUX_DISTRO_LABEL = {
+  ubuntu: "Ubuntu", debian: "Debian", fedora: "Fedora",
+  rocky: "Rocky Linux", arch: "Arch Linux"
+};
 
 function imageReleaseLabel(img) {
   /* Linux first: these carry noServerRoles too, and that branch would give every
@@ -3789,12 +3856,21 @@ function effectiveDomainJoinAccount(s) {
   const dj = (s && s.domainJoin) || {};
   return dj.enabled ? findDomainJoinAccount(dj.accountId) : null;
 }
+/* Linux onboards too: Build-Vms.ps1 writes the azcmagent install and connect into the
+   cloud-init seed, so a service principal reaches a Linux VM the same as a Windows one.
+   Host context does not - that is Connect-AzConnectedMachine over PowerShell Direct,
+   which the build warns about and skips - so a Linux VM under such a principal carries
+   no Arc anywhere in the studio either. */
 function effectiveAzureArcPrincipal(s) {
-  if (isLinuxServer(s)) return null;
+  // The distribution gets a veto before the principal is even looked up: an image
+  // Arc has no agent for onboards nothing, whichever principal it was attached to.
+  if (imageRefusesAzureArc(findImage(s && s.imageId))) return null;
   const globalPrincipal = azureArcAllVmsPrincipal();
-  if (globalPrincipal) return globalPrincipal;
   const arc = (s && s.azureArc) || {};
-  return arc.enabled ? findAzureArcPrincipal(arc.principalId) : null;
+  const principal = globalPrincipal || (arc.enabled ? findAzureArcPrincipal(arc.principalId) : null);
+  if (!principal) return null;
+  if (principal.authMode === "hostContext" && isLinuxServer(s)) return null;
+  return principal;
 }
 
 function serversForDomainJoinAccount(accountId) {
@@ -5200,7 +5276,7 @@ function buildConfig() {
       cpuCount: Number(s.cpuCount) || 2,
       vlanId: s.vlanId === "" || s.vlanId == null ? null : Number(s.vlanId),
       useDifferencingDisk: !!s.useDifferencingDisk,
-      enableSecureBoot: !!s.enableSecureBoot,
+      enableSecureBoot: effectiveSecureBoot(s),
       enableVtpm: !!s.enableVtpm,
       startAfterCreate: !!s.startAfterCreate,
       nicName: effectiveNicName(s, 0),
@@ -5336,8 +5412,12 @@ function buildConfig() {
     if (state.defaults.cluster && state.defaults.cluster.enabled) {
       row.cluster = { enabled: clusterIncludesServer(s) };
     }
+    // Same veto as the card: no azureArc block for an image Arc has no agent for, so
+    // Build-Vms.ps1 is never handed a VM it would spend a package install and three
+    // connect retries failing to onboard.
     const globalArcPrincipal = azureArcAllVmsPrincipal();
-    if (globalArcPrincipal || (s.azureArc && s.azureArc.enabled && s.azureArc.principalId)) {
+    if (!imageRefusesAzureArc(findImage(s.imageId)) &&
+        (globalArcPrincipal || (s.azureArc && s.azureArc.enabled && s.azureArc.principalId))) {
       const p = globalArcPrincipal || findAzureArcPrincipal(s.azureArc.principalId);
       row.azureArc = { enabled: true, principalId: globalArcPrincipal ? globalArcPrincipal.id : s.azureArc.principalId };
       // Dual-write resolved landing-zone fields so Build-Vms works even if catalog lookup fails
@@ -7778,13 +7858,35 @@ function renderServerCard(s) {
       <div class="section collapsible ${packagesOpen ? "" : "collapsed"}">
         <div class="section-head" data-nested="${esc(s._id)}-packages">
           <span class="section-chevron">${chevron()}</span>
-          <img src="${iconSrc("extensions.svg")}"> Extra packages
+          <img src="${iconSrc("extensions.svg")}"> Packages
           <span class="section-meta">${(() => {
             const count = linuxPackageList(s).length;
-            return count ? `${count} package${count === 1 ? "" : "s"}` : "none";
+            const baked = linuxBakedPackages(s).length;
+            const extra = count ? `${count} extra` : "";
+            if (!baked) return extra || "none";
+            return `${baked} in the gold${extra ? " \u00b7 " + extra : ""}`;
           })()}</span>
         </div>
         <div class="section-body">
+          ${(() => {
+            const baked = linuxBakedPackages(s);
+            if (!baked.length) return "";
+            const img = findImage(s.imageId);
+            const kernel = baked.some(p => p.startsWith("linux-azure"));
+            return `
+            <p class="hint" style="margin-top:12px">Already in the gold \u2014 New-Vhdx.ps1 installed ${kernel
+              ? "the Azure-tuned kernel and its Hyper-V tools"
+              : "the Hyper-V integration daemons"} during the bake, so nothing here is fetched again when a VM is
+              built from ${esc(img.label)}. Shown because it cannot be seen from outside, and disabled because
+              there is nothing left to decide.</p>
+            <div class="dns-list" style="display:flex; flex-direction:column; gap:6px; margin-top:12px">
+              ${baked.map(pkg => `
+              <div class="list-row">
+                <input value="${esc(pkg)}" disabled style="background-image:url('${iconSrc("extensions.svg")}')">
+              </div>`).join("")}
+            </div>
+            <div class="section-head" style="margin:16px 0 0;padding:0">Extra packages</div>`;
+          })()}
           <p class="hint" style="margin-top:12px">Installed by cloud-init on first boot, one package per row — the names go into the seed ISO exactly as typed, so they are the distribution's own. The VM needs a network path to its mirrors at first boot or the whole list is skipped.</p>
           <div class="dns-list" style="display:flex; flex-direction:column; gap:6px; margin-top:12px">
             ${(() => {
@@ -7846,16 +7948,19 @@ function renderServerCard(s) {
         <div class="section-head" data-nested="${esc(s._id)}-boot">
           <span class="section-chevron">${chevron()}</span>
           <img src="${iconSrc("secure-boot.svg")}"> Boot / disk
-          <span class="section-meta">${s.useDifferencingDisk ? "Differencing" : "Full copy"}${s.enableSecureBoot ? " · Secure Boot" : ""}${!isLinux && s.enableVtpm ? " · vTPM" : ""}</span>
+          <span class="section-meta">${s.useDifferencingDisk ? "Differencing" : "Full copy"}${effectiveSecureBoot(s) ? " · Secure Boot" : ""}${!isLinux && s.enableVtpm ? " · vTPM" : ""}</span>
         </div>
         <div class="section-body">
           <div class="toggle-grid" style="margin-top:12px">
             ${toggleWithWarn(`data-s="${esc(s._id)}" data-k="useDifferencingDisk"`, "Differencing disk", s.useDifferencingDisk, DIFF_DISK_TIP)}
-            ${toggle(`data-s="${esc(s._id)}" data-k="enableSecureBoot"`, "Secure Boot", s.enableSecureBoot)}
+            ${imageRefusesSecureBoot(img)
+              ? toggle(`data-s="${esc(s._id)}" data-k="enableSecureBoot"`, "Secure Boot", false, true, "not possible on this image")
+              : toggle(`data-s="${esc(s._id)}" data-k="enableSecureBoot"`, "Secure Boot", s.enableSecureBoot)}
             ${isLinux ? "" : toggle(`data-s="${esc(s._id)}" data-k="enableVtpm"`, "vTPM (Win11)", s.enableVtpm)}
             ${toggle(`data-s="${esc(s._id)}" data-k="startAfterCreate"`, "Start after create", s.startAfterCreate)}
           </div>
-          ${isLinux && s.enableSecureBoot ? `<p class="hint" style="margin-top:8px">Secure Boot uses the <code>MicrosoftUEFICertificateAuthority</code> template — these images are signed by the third-party UEFI CA, not by the Windows one. The Windows template does not boot them.</p>` : ""}
+          ${imageRefusesSecureBoot(img) ? `<p class="hint" style="margin-top:8px">${esc(img.label)} ships no Microsoft-signed shim, so there is nothing for the UEFI CA to validate — a Gen 2 VM with Secure Boot on stops before the kernel. Build-Vms.ps1 turns it off as well; this switch is off so the config says the same thing.</p>` : ""}
+          ${isLinux && effectiveSecureBoot(s) ? `<p class="hint" style="margin-top:8px">Secure Boot uses the <code>MicrosoftUEFICertificateAuthority</code> template — these images are signed by the third-party UEFI CA, not by the Windows one. The Windows template does not boot them.</p>` : ""}
           <p class="hint" style="margin-top:8px">Default copies the gold image to an independent disk — enable Differencing only for labs (see tooltip).</p>
         </div>
       </div>
@@ -8751,6 +8856,14 @@ function validate() {
         warn(`Arc principal ${label} uses host context, which only works for Windows — ${linux.map(s => s.name).join(", ")} will be skipped. Switch it to a service principal to onboard them.`, "Azure Arc");
       }
     }
+    /* Attached, and never going to arrive. Microsoft ships no Connected Machine agent
+       for these distributions - the installer refuses them by name - so the tick is
+       the one thing here that looks like it worked and did not. */
+    const unsupported = serversForArcPrincipal(p.id || p._id)
+      .filter(x => imageRefusesAzureArc(findImage(x.imageId)));
+    if (unsupported.length) {
+      warn(`Arc principal ${label} is attached to ${unsupported.map(x => x.name).join(", ")}, which Azure Arc has no agent for — those VMs are exported without an Arc block and will not onboard.`, "Azure Arc");
+    }
   });
 
   /* --- Virtual machines --- */
@@ -9060,7 +9173,7 @@ function reviewServerRows(s) {
       : (state.defaults.vhdPath || state.defaults.vmPath || "Hyper-V host default")) +
     kvRow("OS disk", effectiveOsDiskFileName(s) + (s.useDifferencingDisk ? " (differencing)" : " (full copy)") + (hasCustomOsDiskName(s) ? " · renamed" : "")) +
     kvRow("Nested virtualization", yesNo(!!s.nestedVirtualization)) +
-    kvRow("Secure Boot / vTPM", `${yesNo(s.enableSecureBoot)} / ${yesNo(s.enableVtpm)}`) +
+    kvRow("Secure Boot / vTPM", `${yesNo(effectiveSecureBoot(s))} / ${yesNo(s.enableVtpm)}`) +
     kvRow("Start after create", yesNo(s.startAfterCreate)) +
     kvRow("Automatic start action", autoStartActionLabel(s)) +
     kvRow("Network adapter", effectiveNicName(s, 0)) +
