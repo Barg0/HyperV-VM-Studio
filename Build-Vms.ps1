@@ -3955,8 +3955,14 @@ function Get-CloudInitUserData {
     # Skipped with a warning rather than attempted: a package install and three
     # connect retries with a minute of sleep between them is four minutes of first
     # boot spent proving something Microsoft documents.
-    if ($null -ne $arcConfig -and ([string]$Distro).Trim().ToLowerInvariant() -eq "fedora") {
-        Write-Log "Azure Arc for '$HostName' skipped - Azure Arc has no agent for Fedora" -Tag "Warn"
+    #
+    # Arch is skipped on the same terms: it is not on Microsoft's supported list and
+    # the installer only drives apt, yum and zypper. Not observed failing here - the
+    # studio never offers the tick, and this is the backstop for a hand-edited config.
+    $arcDistro = ([string]$Distro).Trim().ToLowerInvariant()
+    if ($null -ne $arcConfig -and $arcDistro -in @("fedora", "arch")) {
+        $arcDistroName = if ($arcDistro -eq "arch") { "Arch Linux" } else { "Fedora" }
+        Write-Log "Azure Arc for '$HostName' skipped - Azure Arc has no agent for $arcDistroName" -Tag "Warn"
         $arcConfig = $null
     }
     if ($null -ne $arcConfig -and ([string]$arcConfig.authMode) -ne "servicePrincipal") {
