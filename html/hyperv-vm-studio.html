@@ -44,6 +44,7 @@
     --success-text: #aeda86; --danger-text: #f98fa3;
     --role-client: #7dcfff;
     --role-linux: #e6de78;
+    --role-server: #9ece6a;
     /* Nested virtualization gets its own hue so the tinted extras collide with neither
        Core's amber nor Desktop's blue in the same line. */
     --flag-nested: #bb9af7;
@@ -1345,7 +1346,13 @@
   .btn.row.selected .op-check { background: var(--accent); border-color: var(--accent); color: var(--accent-fg); }
   .btn.row .op-name { font-weight: 600; }
   .btn.row .op-meta { margin-left: auto; font-size: 11px; color: var(--fg-muted); }
-  .ou-pick-selected { margin-top: 10px; font-size: 12px; color: var(--fg-muted); }
+  .btn.row .op-pill {
+    margin-left: auto; color: var(--pill-hue);
+    border-color: color-mix(in srgb, var(--pill-hue) 45%, var(--border));
+    background: color-mix(in srgb, var(--pill-hue) 14%, var(--bg));
+  }
+  .btn.row.vetoed { opacity: .45; cursor: not-allowed; }
+  .btn.row.vetoed:hover { background: transparent; }
   .picker { position: relative; width: 100%; }
   .picker-row { display: flex; align-items: center; gap: 8px; }
   .picker-row .picker { flex: 1; min-width: 0; }
@@ -1562,7 +1569,6 @@
     <p class="hint" id="memberPickerHint" style="margin-bottom:8px">Select guest cluster nodes that share this VHD Set.</p>
     <div class="ou-picker-search"><input id="memberPickerFilter" placeholder="Filter VMs…"></div>
     <div class="ou-picker-tree" id="memberPickerList"></div>
-    <div class="ou-pick-selected">Selected: <code id="memberPickerSelectedLabel">none</code></div>
     <div class="actions">
       <button class="btn" type="button" id="memberPickerClear">Clear</button>
       <button class="btn" type="button" id="memberPickerCancel">Cancel</button>
@@ -2594,6 +2600,14 @@ const IMAGE_CATALOG = [
        The toggle is forced off and disabled wherever this image is chosen, and the
        export writes false whatever a loaded config carried. */
     noSecureBoot: true,
+    /* realmd and adcli are not in Arch's official repositories, so there is no
+       `realm join` to run and Build-Vms.ps1 drops the join with a warning. The studio
+       says so first: no tick, no badge, no domainJoin block in the export. */
+    noDomainJoin: true,
+    /* Azure Arc lists no Arch release among its supported distributions, and the
+       agent installer only knows apt, yum and zypper - never tried here, blocked on
+       Microsoft's word the same as Fedora rather than after a four-minute failure. */
+    noAzureArc: true,
     icon: "os-server-panes.svg",
     kind: "linux",
     osFamily: "linux",
@@ -2630,6 +2644,11 @@ const LINUX_BAKED_PACKAGES = {
 /** True when Azure Arc has no agent for this image's distribution. */
 function imageRefusesAzureArc(img) {
   return !!(img && img.noAzureArc);
+}
+
+/** True when this image's distribution has no packaged way to join a domain. */
+function imageRefusesDomainJoin(img) {
+  return !!(img && img.noDomainJoin);
 }
 
 /** True when this image cannot boot with Secure Boot on, whatever anyone ticked. */
@@ -3851,6 +3870,7 @@ function azureArcAllVmsPrincipal() {
   return (state.azureArcPrincipals || []).length === 1 ? state.azureArcPrincipals[0] : null;
 }
 function effectiveDomainJoinAccount(s) {
+  if (imageRefusesDomainJoin(findImage(s && s.imageId))) return null;
   const globalAcc = domainJoinAllVmsAccount();
   if (globalAcc) return globalAcc;
   const dj = (s && s.domainJoin) || {};
@@ -5077,6 +5097,7 @@ function applyTheme(themeId) {
      consistent with the icon a row carries. */
   set("--role-client", bands.host);
   set("--role-linux", bands.linux);
+  set("--role-server", bands.work);
   set("--flag-nested", bands.ident);
   /* Secrets are reached from Deploy and the blade's own icon already sits on that band;
      the reveal control takes the same hue rather than a colour invented for it. */
@@ -5371,7 +5392,10 @@ function buildConfig() {
     }
     // "Use for every VM" resolves at export time into per-VM rows, exactly like the
     // cluster blade's addAllVms - Build-Vms.ps1 only ever sees per-VM domainJoin/azureArc.
-    const globalDjAccount = domainJoinAllVmsAccount();
+    // Same veto as the card: an image with no way to join gets no domainJoin block,
+    // which Build-Vms.ps1 would only drop with a warning.
+    const djRefused = imageRefusesDomainJoin(findImage(s.imageId));
+    const globalDjAccount = djRefused ? null : domainJoinAllVmsAccount();
     if (globalDjAccount) {
       row.domainJoin = { enabled: true, accountId: globalDjAccount.id };
       if (s.domainJoin && s.domainJoin.ouPath) row.domainJoin.ouPath = s.domainJoin.ouPath;
@@ -5380,7 +5404,7 @@ function buildConfig() {
       if (globalDjAccount.joinUser) row.domainJoin.joinUser = globalDjAccount.joinUser;
       if (globalDjAccount.joinPassword) row.domainJoin.joinPassword = globalDjAccount.joinPassword;
     }
-    else if (s.domainJoin && s.domainJoin.enabled && s.domainJoin.accountId) {
+    else if (!djRefused && s.domainJoin && s.domainJoin.enabled && s.domainJoin.accountId) {
       const acc = findDomainJoinAccount(s.domainJoin.accountId);
       row.domainJoin = { enabled: true, accountId: s.domainJoin.accountId };
       if (s.domainJoin.ouPath) row.domainJoin.ouPath = s.domainJoin.ouPath;
@@ -11420,17 +11444,44 @@ function renderMemberPickerList() {
   list.innerHTML = filtered.length ? filtered.map(n => {
     const sel = ctx.selected.includes(n);
     const server = state.servers.find(x => x.name === n);
-    return `<button type="button" class="btn row ${sel ? "selected" : ""}" data-pick-vm="${esc(n)}">
+    const img = findImage(server.imageId);
+    const veto = memberPickerVeto(ctx, server);
+    // The release pill: "2025", "Windows 11", "Ubuntu" - the same headline the image
+    // picker groups by, on the same band as the VM glyph beside it.
+    const pill = img
+      ? `<span class="op-pill pill role" style="--pill-hue:${MEMBER_PICKER_BAND_VAR[serverGlyphBand(server)] || "var(--role-server)"}">${esc(imageReleaseLabel(img))}</span>`
+      : "";
+    return `<button type="button" class="btn row ${sel ? "selected" : ""} ${veto ? "vetoed" : ""}" data-pick-vm="${esc(n)}"${veto ? ` aria-disabled="true" title="${esc(veto)}"` : ""}>
       <span class="op-check">✓</span>
       <img src="${iconSrcBand("vm.svg", serverGlyphBand(server))}" width="16" height="16">
       <span class="op-name">${esc(n)}</span>
-      <span class="op-meta">Gen2</span>
+      ${pill}
     </button>`;
   }).join("") : '<div class="hint" style="padding:14px">No named virtual machines yet. Add VMs first.</div>';
-  document.getElementById("memberPickerSelectedLabel").textContent = ctx.selected.length ? ctx.selected.join(", ") : "none";
+}
+/* Band to the theme variable that carries it: client blue, server green, Linux yellow,
+   Azure Local purple, a custom gold on the Deploy band like its icon. */
+const MEMBER_PICKER_BAND_VAR = {
+  host: "var(--role-client)", work: "var(--role-server)", linux: "var(--role-linux)",
+  ident: "var(--flag-nested)", deploy: "var(--secret-glyph)"
+};
+/* Why a VM cannot join what the picker is attaching, or "" when it can. Mirrors the
+   vetoes effectiveAzureArcPrincipal applies, so a row greyed here is exactly a VM the
+   build would skip anyway. */
+function memberPickerVeto(ctx, server) {
+  const img = findImage(server && server.imageId);
+  if (ctx.mode === "domainJoin") {
+    return imageRefusesDomainJoin(img) ? "realmd and adcli are not packaged for " + (img.label || "this distribution") : "";
+  }
+  if (ctx.mode !== "azureArc") return "";
+  if (imageRefusesAzureArc(img)) return "Azure Arc has no agent for " + (img.label || "this distribution");
+  const a = state.azureArcPrincipals.find(x => x._id === ctx.targetId);
+  if (a && a.authMode === "hostContext" && isLinuxServer(server)) return "Host context cannot onboard a Linux VM";
+  return "";
 }
 function toggleMemberPickerVm(name) {
   const ctx = state.memberPicker;
+  if (!ctx.selected.includes(name) && memberPickerVeto(ctx, state.servers.find(x => x.name === name))) return;
   if (ctx.selected.includes(name)) ctx.selected = ctx.selected.filter(n => n !== name);
   else ctx.selected.push(name);
   renderMemberPickerList();
