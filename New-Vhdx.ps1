@@ -5020,7 +5020,7 @@ function Get-LinuxGoldFeatureCatalog {
             Packages  = @()
         }
         [PSCustomObject]@{
-            # Path in bold blue, then a chevron that is green after a success and red
+            # Path in bold blue, then a > that is green after a success and red
             # after a failure. Deliberately nothing else: no git, which is what would
             # have cost two processes on every prompt in every shell.
             #
@@ -5033,7 +5033,7 @@ function Get-LinuxGoldFeatureCatalog {
             # depends on $?, and a substitution inside PS1 is a subshell on every
             # prompt. A function that picks between two literal strings forks nothing.
             Id        = "prompt"
-            Label     = "Prompt in .bashrc (bold blue path, green/red chevron) - no git, no subshell"
+            Label     = "Prompt in .bashrc (bold blue path, green/red >) - no git, no subshell"
             DefaultOn = $false
             Distro    = ""
             Family    = ""
@@ -5683,27 +5683,17 @@ function Get-BakeUserData {
         [void]$lines.Add("    append: true")
         [void]$lines.Add("    content: |")
         [void]$lines.Add('      ')
-        [void]$lines.Add("      # Baked by HyperV-VM-Studio. Bold blue path, then a chevron: green after a")
+        [void]$lines.Add("      # Baked by HyperV-VM-Studio. Bold blue path, then a >: green after a")
         [void]$lines.Add("      # command that succeeded, red after one that did not.")
         [void]$lines.Add('      #')
-        [void]$lines.Add("      # The chevron is built from escapes rather than written as a literal, so")
-        [void]$lines.Add("      # this file stays ASCII from the build host to the guest - and from BYTE")
-        [void]$lines.Add("      # escapes rather than \u276f, which is not the same thing: bash converts a")
-        [void]$lines.Add("      # \u escape in the shell's current locale and prints the escape TEXT when it")
-        [void]$lines.Add("      # cannot, so a shell that starts before LANG is set would show a literal")
-        [void]$lines.Add("      # \u276F in the prompt. \xe2\x9d\xaf is the same character already encoded.")
-        [void]$lines.Add("      #")
-        [void]$lines.Add("      # And a plain > where the locale is not UTF-8 at all, because a multi-byte")
-        [void]$lines.Add("      # glyph on a latin1 console is three wrong characters, not one right one.")
-        [void]$lines.Add('      case "${LC_ALL:-${LC_CTYPE:-$LANG}}" in')
-        [void]$lines.Add('          *[Uu][Tt][Ff]*) __hv_chevron=$''\xe2\x9d\xaf'' ;;')
-        [void]$lines.Add("          *) __hv_chevron='>' ;;")
-        [void]$lines.Add('      esac')
+        [void]$lines.Add("      # A plain ASCII > rather than a chevron glyph. U+276F was here first and")
+        [void]$lines.Add("      # drew as an empty box over SSH from Windows, whose console fonts do not")
+        [void]$lines.Add("      # carry it - and a > needs no locale check, it is one byte everywhere.")
         [void]$lines.Add('      __hv_prompt() {')
         [void]$lines.Add('          if [ $? -eq 0 ]; then')
-        [void]$lines.Add('              PS1="\[\e[1;34m\]\w\[\e[0m\] \[\e[1;32m\]$__hv_chevron\[\e[0m\] "')
+        [void]$lines.Add('              PS1="\[\e[1;34m\]\w\[\e[0m\] \[\e[1;32m\]>\[\e[0m\] "')
         [void]$lines.Add('          else')
-        [void]$lines.Add('              PS1="\[\e[1;34m\]\w\[\e[0m\] \[\e[1;31m\]$__hv_chevron\[\e[0m\] "')
+        [void]$lines.Add('              PS1="\[\e[1;34m\]\w\[\e[0m\] \[\e[1;31m\]>\[\e[0m\] "')
         [void]$lines.Add('          fi')
         [void]$lines.Add('      }')
         [void]$lines.Add('      # Appended, not assigned: Debian and Ubuntu already keep a window-title')
