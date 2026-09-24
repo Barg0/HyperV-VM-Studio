@@ -2582,11 +2582,11 @@ function Get-FilePickerEntries {
 
 function Get-DefaultIsoBrowseRoot {
     <#
-      isos\ next to the script is the project's convention for keeping Windows and Features
+      media\ next to the script is the project's convention for keeping Windows and Features
       on Demand media together. Nothing requires it - but when that folder exists and holds
       at least one .iso, open the browser there instead of at the drive list.
     #>
-    $isoFolder = Join-Path -Path $PSScriptRoot -ChildPath "isos"
+    $isoFolder = Join-Path -Path $PSScriptRoot -ChildPath "media"
     if (Test-Path -LiteralPath $isoFolder -PathType Container) {
         $found = @(Get-ChildItem -LiteralPath $isoFolder -File -Filter "*.iso" -Recurse -ErrorAction SilentlyContinue |
             Select-Object -First 1)
@@ -5045,7 +5045,6 @@ function Get-LinuxGoldFeatureCatalog {
             Packages  = @("fastfetch")
         }
         [PSCustomObject]@{
-            # Measured, not assumed:        [PSCustomObject]@{
             # Measured, not assumed: /etc/default/motd-news ships ENABLED=1 with
             # URLS="https://motd.ubuntu.com" and WAIT=5, so every login on an isolated
             # network waits up to five seconds on a fetch that cannot succeed. The
@@ -5062,11 +5061,21 @@ function Get-LinuxGoldFeatureCatalog {
             # So the tick also drops a .hushlogin: pam_motd skips the MOTD entirely
             # when it finds one, static and dynamic alike, and sshd skips its own
             # "Last login" line for the same file. One file, whatever the scripts.
+            #
+            # The Debian family, not Ubuntu alone. Debian shows the uname line from
+            # update-motd.d/10-uname, the static /etc/motd licence text and "Last
+            # login", and the .hushlogin alone takes all three - verified on a Debian
+            # 13 VM on 2026-09-24. The motd-news and chmod half is Ubuntu's and stays
+            # Ubuntu's.
+            #
+            # Nowhere else. Fedora and Arch print nothing on an SSH login. Rocky prints
+            # cockpit's "Activate the web console" line, which says where the
+            # machine's web UI is, and "Last login" - nothing worth a tick to remove.
             Id        = "quietmotd"
             Label     = "Quiet SSH login"
             DefaultOn = $false
-            Distro    = "ubuntu"
-            Family    = ""
+            Distro    = ""
+            Family    = "debian"
             ImageIds  = @()
             Packages  = @()
         }
@@ -5791,13 +5800,15 @@ function Get-BakeUserData {
         # lines, so the banner is not sitting under the prompt.
         [void]$lines.Add('  - [ sh, -c, "grep -q hv-studio-fastfetch /etc/skel/.bashrc || echo ''command -v fastfetch >/dev/null 2>&1 && case $- in *i*) fastfetch; printf \"\\n\\n\\n\" ;; esac # hv-studio-fastfetch'' >> /etc/skel/.bashrc" ]')
     }
-    if ($wantQuietMotd) {
+    if ($wantQuietMotd -and ([string]$Entry.Distro) -eq "ubuntu") {
         # ENABLED=0 stops the fetch itself; the chmod stops the scripts that print the
         # adverts. 00-header and the reboot-required notice are deliberately left alone -
         # the first says what the machine is and the second is the one line on a login
         # banner that has ever mattered.
         [void]$lines.Add('  - [ sh, -c, "sed -i s/^ENABLED=1/ENABLED=0/ /etc/default/motd-news 2>/dev/null || true" ]')
         [void]$lines.Add('  - [ sh, -c, "chmod -x /etc/update-motd.d/50-motd-news /etc/update-motd.d/91-contract-ua-esm-status /etc/update-motd.d/50-landscape-sysinfo /etc/update-motd.d/90-updates-available /etc/update-motd.d/95-hwe-eol /etc/update-motd.d/10-help-text 2>/dev/null || true" ]')
+    }
+    if ($wantQuietMotd) {
         # What the chmod list cannot cover: everything else that prints on an SSH
         # login. pam_motd honours .hushlogin for the dynamic motd, the static
         # /etc/motd and /etc/legal; sshd honours the same file for "Last login".
@@ -6653,7 +6664,7 @@ function Start-LinuxInteractiveConfiguration {
     }
     # Worked out once: the summary shows it and the config carries it, and two
     # Join-Path calls for one path is one of them waiting to disagree with the other.
-    $cacheDirectory = Join-Path -Path $PSScriptRoot -ChildPath "lnx-images"
+    $cacheDirectory = Join-Path -Path $PSScriptRoot -ChildPath "media"
 
     # Final confirmation, the same shape the Windows path uses: every setting rendered
     # above a Continue/Cancel menu, so the last thing before a build that downloads

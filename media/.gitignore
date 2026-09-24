@@ -1,0 +1,6 @@
+# Keep the folder, never the contents - ISOs are multi-GB, cloud images hundreds of MB,
+# and neither must end up in git.
+*
+!.gitignore
+!.gitkeep
+!README.md

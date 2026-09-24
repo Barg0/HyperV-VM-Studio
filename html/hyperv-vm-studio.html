@@ -880,7 +880,7 @@
   .req-box svg { width: 16px; height: 16px; flex-shrink: 0; margin-top: 1px; color: var(--danger); }
   .req-box strong { color: var(--danger-text); font-weight: 600; }
 
-  /* "Keep the ISO in isos\" recommendation above the FoD toggles */
+  /* "Keep the ISO in media\" recommendation above the FoD toggles */
   .fod-banner {
     display: flex; gap: 10px; align-items: flex-start; font-size: 12px; line-height: 1.55;
     background: var(--accent-soft); border: 1px solid color-mix(in srgb, var(--accent) 32%, var(--border));
@@ -6397,7 +6397,7 @@ function renderOverview() {
           <p>Run <code>New-Vhdx.ps1</code> in an elevated PowerShell window on the host. It opens a full-screen menu — nothing
           is passed on the command line, you walk through the screens with the arrow keys. In order:</p>
           <ul>
-            <li><strong>Windows ISO</strong> — a mounted drive or a file. Put your ISOs in <code>isos\\</code> next to the
+            <li><strong>Windows ISO</strong> — a mounted drive or a file. Put your ISOs in <code>media\\</code> next to the
             script and the file browser starts there.</li>
             <li><strong>Deployment target</strong> — choose Hyper-V.</li>
             <li><strong>Editions</strong> — tick every Datacenter / Standard, Desktop / Core variant you want out of this ISO.
@@ -6679,12 +6679,12 @@ function renderGeneral() {
       <label class="field"><span>Default SSH authorized key</span>
         <div class="edit-field">
           <input data-d="sshAuthorizedKey" data-name-input="sshkey:gs" class="keep-border" value="${esc(d.sshAuthorizedKey || "")}" placeholder="ssh-ed25519 AAAAC3Nza... user@host" spellcheck="false"${state.nameEdit["sshkey:gs"] ? "" : " readonly"}>
+          <button class="btn icon" type="button" data-name-edit="sshkey:gs"
+            title="${state.nameEdit["sshkey:gs"] ? "Done" : "Edit the key"}" aria-label="${state.nameEdit["sshkey:gs"] ? "Done" : "Edit the key"}">${state.nameEdit["sshkey:gs"] ? checkIcon() : pencilIcon()}</button>
           <button class="btn icon" type="button" data-gen-ssh="gs"
             title="Generate an Ed25519 key pair" aria-label="Generate an SSH key pair">${regenIcon()}</button>
           <button class="btn icon" type="button" data-dl-ssh="gs"${sshPrivateKeys.gs ? "" : " disabled"}
             title="${sshPrivateKeys.gs ? "Download the private key" : "Generate a key pair first"}" aria-label="Download the private key">${downloadIcon()}</button>
-          <button class="btn icon" type="button" data-name-edit="sshkey:gs"
-            title="${state.nameEdit["sshkey:gs"] ? "Done" : "Edit the key"}" aria-label="${state.nameEdit["sshkey:gs"] ? "Done" : "Edit the key"}">${state.nameEdit["sshkey:gs"] ? checkIcon() : pencilIcon()}</button>
         </div>
         <span class="hint">Public key only. Every Linux VM inherits this unless its own card overrides it. A Linux VM with no key anywhere can only be reached with its password, at the Hyper-V console.${sshPrivateKeys.gs
           ? " <strong>The private key is held in this tab and in no save token</strong> — download it before you leave the page."
@@ -7258,7 +7258,7 @@ function renderServerAppsSection(s) {
 function fodBanner(medium, note, docsUrl) {
   return `<div class="fod-banner">
     <img src="${iconSrc("download.svg")}" alt="">
-    <div><strong>Keep the ${medium} ISO in <code>isos\\</code></strong> — ${note}${docsUrl
+    <div><strong>Keep the ${medium} ISO in <code>media\\</code></strong> — ${note}${docsUrl
       ? ` <a href="${esc(docsUrl)}" target="_blank" rel="noopener">Microsoft docs</a>` : ""}</div>
   </div>`;
 }
@@ -7750,12 +7750,12 @@ function renderServerCard(s) {
                 const keyUnlocked = !!state.nameEdit[`sshkey:${s._id}`];
                 return `<div class="edit-field">
                 <input data-s="${esc(s._id)}" data-k="sshAuthorizedKey" data-name-input="sshkey:${esc(s._id)}" class="keep-border" value="${esc(s.sshAuthorizedKey || "")}" placeholder="ssh-ed25519 AAAAC3Nza... user@host" spellcheck="false"${keyUnlocked ? "" : " readonly"}>
+                <button class="btn icon" type="button" data-name-edit="sshkey:${esc(s._id)}"
+                  title="${keyUnlocked ? "Done" : "Edit the key"}" aria-label="${keyUnlocked ? "Done" : "Edit the key"}">${keyUnlocked ? checkIcon() : pencilIcon()}</button>
                 <button class="btn icon" type="button" data-gen-ssh="${esc(s._id)}"
                   title="Generate an Ed25519 key pair" aria-label="Generate an SSH key pair">${regenIcon()}</button>
                 <button class="btn icon" type="button" data-dl-ssh="${esc(s._id)}"${sshPrivateKeys[s._id] ? "" : " disabled"}
                   title="${sshPrivateKeys[s._id] ? "Download the private key" : "Generate a key pair first"}" aria-label="Download the private key">${downloadIcon()}</button>
-                <button class="btn icon" type="button" data-name-edit="sshkey:${esc(s._id)}"
-                  title="${keyUnlocked ? "Done" : "Edit the key"}" aria-label="${keyUnlocked ? "Done" : "Edit the key"}">${keyUnlocked ? checkIcon() : pencilIcon()}</button>
               </div>
               <span class="hint">Public key only. Blank falls back to the key in General Settings; with neither, the password is the only way in.${sshPrivateKeys[s._id]
                 ? " <strong>The private key is held in this tab and in no save token</strong> — download it before you leave the page."
@@ -9760,7 +9760,9 @@ document.getElementById("main").addEventListener("click", e => {
     if (!key) { toast("Generate a key pair first", true); return; }
     const target = scope === "gs" ? null : state.servers.find(x => x._id === scope);
     const name = sshKeyFileName(target);
-    downloadTextFile(name, key);
+    // octet-stream, not text/plain: the name has no extension, and a browser
+    // handed text/plain saves it as <name>.txt - a key file ssh -i then cannot find.
+    downloadTextFile(name, key, "application/octet-stream");
     toast(name + " downloaded - chmod 600 it");
     return;
   }
