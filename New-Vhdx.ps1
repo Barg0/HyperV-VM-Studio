@@ -4566,31 +4566,10 @@ function Get-LinuxFamilyProfile {
         # Nothing: dpkg's postinst scripts enable what they install, which is the
         # whole reason policy-rc.d above has to stop them starting it too.
         ServiceCommands    = @()
-        # The one thing the azure-kernel install leaves behind. linux-azure brings its
-        # own image, modules and tools and leaves the cloud image's kernel packages
-        # with nothing depending on them, so the first `apt upgrade` on a VM built
-        # from the gold opens with "The following packages were automatically
-        # installed and are no longer required" and seven linux-7.0.0-31 lines.
-        #
-        # A plain autoremove does NOT clear them, which a gold proved: the packages
-        # left behind are the kernel the BAKE IS RUNNING ON - the cloud image booted
-        # it, linux-azure only becomes the default at the next boot that never comes -
-        # and /etc/apt/apt.conf.d/01autoremove-kernels names the running kernel in
-        # APT::NeverAutoRemove. apt was protecting them exactly as designed.
-        #
-        # So the protection list is moved aside for the one command that needs it gone
-        # and put straight back. Nothing else is touched: the azure kernel is safe
-        # because linux-azure was asked for BY NAME and is therefore manually
-        # installed, and its image and modules are its dependencies. Removing the
-        # running kernel's files is harmless here - every module this VM still needs
-        # is already loaded, and the next thing it does is power off for good.
-        #
-        # The restored file re-lists a version that no longer exists, which costs
-        # nothing: NeverAutoRemove is a list of patterns, and the next kernel install
-        # regenerates the file anyway.
-        CleanupCommands    = @(
-            'f=/etc/apt/apt.conf.d/01autoremove-kernels; [ -f "$f" ] && mv "$f" "$f.bake"; DEBIAN_FRONTEND=noninteractive apt-get -y --purge autoremove; [ -f "$f.bake" ] && mv "$f.bake" "$f"; echo BAKE-AUTOREMOVE done'
-        )
+        # Nothing. The generic kernel linux-azure leaves behind cannot be autoremoved
+        # here - the bake is running on it and apt protects the running kernel - so
+        # Build-Vms.ps1 does it on the VM's first boot, which is on the azure kernel.
+        CleanupCommands    = @()
     }
 }
 

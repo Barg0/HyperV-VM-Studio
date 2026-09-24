@@ -4084,6 +4084,15 @@ function Get-CloudInitUserData {
             [void]$runCommands.Add($command)
         }
     }
+    # The kernel the gold was baked on. The Ubuntu bake installs linux-azure but never
+    # reboots, so it runs on the cloud image's generic kernel to the end - and apt will
+    # not autoremove the kernel it is running on. This first boot is on the azure
+    # kernel, so here the old one is just packages nothing needs and a plain autoremove
+    # takes it. On Debian it finds nothing and costs a second.
+    if (([string]$Family).Trim().ToLowerInvariant() -eq "debian") {
+        [void]$runCommands.Add("DEBIAN_FRONTEND=noninteractive apt-get -y --purge autoremove")
+    }
+
     # LAST, and the reason it exists: the seed disk is detached and deleted after this
     # boot, but cloud-init has already copied everything it was given onto the guest's
     # own disk - and "everything" is the local account password in clear, the domain
