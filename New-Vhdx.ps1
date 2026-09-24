@@ -5611,11 +5611,11 @@ function Get-BakeUserData {
         # mojibake. JSON unescapes them on the guest's side, where the locale is
         # UTF-8 and the console font has the glyphs.
         #
-        # Colour lives in the keys and nowhere else. Each key walks the same run as a
-        # stock fastfetch - blue, magenta, cyan, green, yellow, grey - so the rows read
-        # as groups instead of one wall of cyan. The frame and the section names are the
-        # terminal's own foreground: {#0} ahead of the bar clears the default key colour
-        # fastfetch opens every key with, so only the label after it is tinted.
+        # Each key walks the same run as a stock fastfetch - blue, magenta, cyan,
+        # green, yellow, red - so the rows read as groups instead of one wall of cyan.
+        # The frame and its bars are grey and the section names the terminal's own
+        # foreground: {#0;90} ahead of the bar clears the default key colour fastfetch
+        # opens every key with, and {#0} after it hands the label back untinted.
         #
         # User and host take the distribution's colour, the same one its logo is drawn
         # in. Named here rather than left to fastfetch: most logos also set the title
@@ -5624,7 +5624,7 @@ function Get-BakeUserData {
         #
         # key.width is a column, not a byte count: fastfetch moves the cursor there with
         # CSI G (2.21 onwards, and every packaged version here is newer), so the escapes
-        # inside a key cost nothing. 16 leaves room for the bar and "Local IP".
+        # inside a key cost nothing. 16 leaves room for the bar and "Packages".
         $titleColor = switch ([string]$Entry.Distro) {
             "ubuntu" { "1;31" }
             "debian" { "1;31" }
@@ -5648,24 +5648,24 @@ function Get-BakeUserData {
         [void]$lines.Add('        "modules": [')
         [void]$lines.Add('          "break",')
         [void]$lines.Add('          { "type": "title", "color": { "user": "' + $titleColor + '", "at": "1", "host": "' + $titleColor + '" } },')
-        [void]$lines.Add('          { "type": "custom", "format": "\u250c\u2500 {#1}System{#} \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500" },')
-        [void]$lines.Add('          { "type": "os", "key": "{#0}\u2502  {#1;34}OS" },')
-        [void]$lines.Add('          { "type": "kernel", "key": "{#0}\u2502  {#1;34}Kernel" },')
-        [void]$lines.Add('          { "type": "host", "key": "{#0}\u2502  {#1;35}Platform" },')
-        [void]$lines.Add('          { "type": "uptime", "key": "{#0}\u2502  {#1;35}Uptime" },')
-        [void]$lines.Add('          { "type": "packages", "key": "{#0}\u2502  {#1;35}Packages" },')
-        [void]$lines.Add('          { "type": "shell", "key": "{#0}\u2502  {#1;36}Shell" },')
-        [void]$lines.Add('          { "type": "locale", "key": "{#0}\u2502  {#1;36}Locale" },')
-        [void]$lines.Add('          { "type": "datetime", "key": "{#0}\u2502  {#1;36}Time", "format": "{year}-{month-pretty}-{day-pretty} {hour-pretty}:{minute-pretty}" },')
-        [void]$lines.Add('          { "type": "custom", "format": "\u251c\u2500 {#1}Resources{#} \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500" },')
-        [void]$lines.Add('          { "type": "cpu", "key": "{#0}\u2502  {#1;32}CPU" },')
-        [void]$lines.Add('          { "type": "memory", "key": "{#0}\u2502  {#1;33}Memory" },')
-        [void]$lines.Add('          { "type": "disk", "key": "{#0}\u2502  {#1;33}Disk", "folders": "/" },')
-        [void]$lines.Add('          { "type": "custom", "format": "\u251c\u2500 {#1}Network{#} \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500" },')
-        [void]$lines.Add('          { "type": "localip", "key": "{#0}\u2502  {#1;90}Local IP" },')
-        [void]$lines.Add('          { "type": "command", "key": "{#0}\u2502  {#1;90}Gateway", "text": "ip route show default 2>/dev/null | awk ''{print $3; exit}''" },')
-        [void]$lines.Add('          { "type": "dns", "key": "{#0}\u2502  {#1;90}DNS" },')
-        [void]$lines.Add('          { "type": "custom", "format": "\u2514\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500" },')
+        [void]$lines.Add('          { "type": "custom", "format": "{#90}\u250c\u2500{#} {#1}System{#} {#90}\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500{#}" },')
+        [void]$lines.Add('          { "type": "os", "key": "{#0;90}\u2502{#0}  {#1;34}OS" },')
+        [void]$lines.Add('          { "type": "kernel", "key": "{#0;90}\u2502{#0}  {#1;34}Kernel" },')
+        [void]$lines.Add('          { "type": "host", "key": "{#0;90}\u2502{#0}  {#1;35}Platform" },')
+        [void]$lines.Add('          { "type": "uptime", "key": "{#0;90}\u2502{#0}  {#1;35}Uptime" },')
+        [void]$lines.Add('          { "type": "packages", "key": "{#0;90}\u2502{#0}  {#1;35}Packages" },')
+        [void]$lines.Add('          { "type": "shell", "key": "{#0;90}\u2502{#0}  {#1;36}Shell" },')
+        [void]$lines.Add('          { "type": "locale", "key": "{#0;90}\u2502{#0}  {#1;36}Locale" },')
+        [void]$lines.Add('          { "type": "datetime", "key": "{#0;90}\u2502{#0}  {#1;36}Time", "format": "{year}-{month-pretty}-{day-pretty} {hour-pretty}:{minute-pretty}" },')
+        [void]$lines.Add('          { "type": "custom", "format": "{#90}\u251c\u2500{#} {#1}Resources{#} {#90}\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500{#}" },')
+        [void]$lines.Add('          { "type": "cpu", "key": "{#0;90}\u2502{#0}  {#1;32}CPU" },')
+        [void]$lines.Add('          { "type": "memory", "key": "{#0;90}\u2502{#0}  {#1;33}Memory" },')
+        [void]$lines.Add('          { "type": "disk", "key": "{#0;90}\u2502{#0}  {#1;33}Disk", "folders": "/" },')
+        [void]$lines.Add('          { "type": "custom", "format": "{#90}\u251c\u2500{#} {#1}Network{#} {#90}\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500{#}" },')
+        [void]$lines.Add('          { "type": "localip", "key": "{#0;90}\u2502{#0}  {#1;31}IP" },')
+        [void]$lines.Add('          { "type": "command", "key": "{#0;90}\u2502{#0}  {#1;31}Gateway", "text": "ip route show default 2>/dev/null | awk ''{print $3; exit}''" },')
+        [void]$lines.Add('          { "type": "dns", "key": "{#0;90}\u2502{#0}  {#1;31}DNS" },')
+        [void]$lines.Add('          { "type": "custom", "format": "{#90}\u2514\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500{#}" },')
         [void]$lines.Add('          "break",')
         [void]$lines.Add('          { "type": "colors", "paddingLeft": 2 }')
         [void]$lines.Add('        ]')
