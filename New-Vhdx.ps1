@@ -5033,15 +5033,15 @@ function Get-LinuxGoldFeatureCatalog {
             # every login.
             #
             # ImageIds, not Distro: Ubuntu packaged fastfetch from 25.10 and Debian
-            # from 13, so the two older golds in this catalog cannot have it from
-            # their own archives. Rocky has it in EPEL, which the bake enables for
-            # this tick alone.
+            # from 13, so the older golds cannot have it from their own archives.
+            # Rocky has it in EPEL and Ubuntu 24.04 in fastfetch's own PPA, and the
+            # bake adds either one for this tick alone. Debian 12 has neither.
             Id        = "fastfetch"
             Label     = "fastfetch on login (system summary in the shell)"
             DefaultOn = $false
             Distro    = ""
             Family    = ""
-            ImageIds  = @("ubuntu2604", "debian13", "fedora43", "fedora42", "rocky10", "rocky9", "arch")
+            ImageIds  = @("ubuntu2604", "ubuntu2404", "debian13", "fedora43", "fedora42", "rocky10", "rocky9", "arch")
             Packages  = @("fastfetch")
         }
         [PSCustomObject]@{
@@ -5527,6 +5527,16 @@ function Get-BakeUserData {
         [void]$lines.Add("    Acquire::http::Timeout `"20`";")
         [void]$lines.Add("    Acquire::https::Timeout `"20`";")
         [void]$lines.Add("    Acquire::Retries `"2`";")
+        # fastfetch on 24.04 comes from the PPA its own author publishes - noble's
+        # archive never carried it. cloud-init adds a ppa: source through
+        # add-apt-repository, which fetches the signing key from Launchpad, so there
+        # is no key to ship here. The source stays in the gold, so fastfetch keeps
+        # getting updates on every VM built from it.
+        if ($wantFastfetch -and ([string]$Entry.ImageId) -eq "ubuntu2404") {
+            [void]$lines.Add("  sources:")
+            [void]$lines.Add("    fastfetch:")
+            [void]$lines.Add("      source: 'ppa:zhangsongcui3371/fastfetch'")
+        }
     }
     [void]$lines.Add("package_update: true")
     if ($ApplyUpdates) { [void]$lines.Add("package_upgrade: true") }
