@@ -16,10 +16,11 @@
 
 ## <picture><source media="(prefers-color-scheme: dark)" srcset=".github/assets/icons/vm-dark.png"><img src=".github/assets/icons/vm-light.png" width="22" alt=""></picture> Quick start
 
-Elevated PowerShell on a Hyper-V host, a Windows ISO in the `isos\` folder:
+Elevated PowerShell on a Hyper-V host, a Windows ISO in the `media\` folder (a Linux gold needs
+no ISO — the script downloads the distribution's cloud image itself):
 
 ```powershell
-.\New-Vhdx.ps1                                # build a gold image — pick the ISO, pick an edition
+.\New-Vhdx.ps1                                # build a gold image — Windows from an ISO, or a Linux distribution
 Start-Process .\html\hyperv-vm-studio.html    # design the lab, then Download config.json
 .\Build-Vms.ps1                               # menu → Build all VMs
 ```
@@ -41,13 +42,14 @@ Three parts, used in that order:
 
 | | |
 |---|---|
-| <picture><source media="(prefers-color-scheme: dark)" srcset=".github/assets/icons/gold-image-dark.png"><img src=".github/assets/icons/gold-image-light.png" width="16" alt=""></picture> **`New-Vhdx.ps1`** | Turns a Windows ISO into a generalized Gen2 gold image. Server 2016–2025, Windows 11 — including Enterprise multi-session and Server 2025 Datacenter: Azure Edition. |
+| <picture><source media="(prefers-color-scheme: dark)" srcset=".github/assets/icons/gold-image-dark.png"><img src=".github/assets/icons/gold-image-light.png" width="16" alt=""></picture> **`New-Vhdx.ps1`** | Turns a Windows ISO into a generalized Gen2 gold image. Server 2016–2025, Windows 11 — including Enterprise multi-session and Server 2025 Datacenter: Azure Edition. Or a Linux cloud image into one: Ubuntu, Debian, Fedora, Rocky Linux, Arch. |
 | <picture><source media="(prefers-color-scheme: dark)" srcset=".github/assets/icons/monitor-dark.png"><img src=".github/assets/icons/monitor-light.png" width="16" alt=""></picture> **The studio** | A single HTML file. Click the lab together — machines, disks, networks, domain join, Windows roles — and download `config.json`. |
-| <picture><source media="(prefers-color-scheme: dark)" srcset=".github/assets/icons/powershell-dark.png"><img src=".github/assets/icons/powershell-light.png" width="16" alt=""></picture> **`Build-Vms.ps1`** | Reads that file on the host. Differencing disks, answer files, VMs created and started. |
+| <picture><source media="(prefers-color-scheme: dark)" srcset=".github/assets/icons/powershell-dark.png"><img src=".github/assets/icons/powershell-light.png" width="16" alt=""></picture> **`Build-Vms.ps1`** | Reads that file on the host. Differencing disks, answer files — or a cloud-init seed for Linux — VMs created and started. |
 
 What that covers, beyond the obvious:
 
 - **Domain join and Azure Arc onboarding** happen on their own at first boot. You never log in to set them up.
+- **Linux VMs** sit in the same lab as the Windows ones — same studio, same config, same build. They join the domain through realmd and sssd and onboard to Arc through cloud-init, just as hands-off.
 - **Azure Local golds** — pick Azure Local as the target and the image applies its locale and time zone at first boot, where Arc provisioning cannot overwrite them. AVD session host golds get built locally instead of exported from Azure.
 - **Guest clusters** — VHD Sets shared between guests and cluster placement on the host, all checked in preflight before anything is created.
 - **A toolbox** for the rest of a lab's life — it migrates VMs off a host before a reinstall, thins out fixed disks, and tears everything down again.
@@ -62,12 +64,13 @@ Run everything on the Hyper-V host itself, in an elevated PowerShell (5.1 or 7 b
 | You need | Notes |
 |----------|-------|
 | Windows with the Hyper-V role | Server or client, Gen2 VMs |
-| A Windows ISO | Server 2016–2025 or Windows 11. Evaluation Center, Visual Studio subscription — any plain install media |
+| A Windows ISO | Server 2016–2025 or Windows 11. Evaluation Center, Visual Studio subscription — any plain install media. Not needed for Linux |
+| Internet access | For Linux golds: the cloud image is downloaded, and the gold boots once to install packages from the distribution's mirrors |
 | Disk space | Tens of GB per gold; differencing keeps the per-VM cost small |
 | A vSwitch | Create it in Hyper-V Manager first; the studio references it by name |
 | Azure subscription | Only for Azure Arc onboarding — optional |
 
-Put the ISO in the `isos\` folder next to the scripts. On the host itself, not a share —
+Put the ISO in the `media\` folder next to the scripts. On the host itself, not a share —
 the script mounts it, and mounting over the network goes badly.
 
 ## <picture><source media="(prefers-color-scheme: dark)" srcset=".github/assets/icons/gold-image-dark.png"><img src=".github/assets/icons/gold-image-light.png" width="22" alt=""></picture> Build gold images — `New-Vhdx.ps1`
@@ -83,7 +86,7 @@ several editions; each becomes its own VHDX.
 
 What the menus ask, in order:
 
-**ISO** — the picker lists whatever is in `isos\`. You can also browse to a path, or point it
+**ISO** — the picker lists whatever is in `media\`. You can also browse to a path, or point it
 at a drive that is already mounted.
 
 **Target platform** — where the gold will be deployed:
@@ -221,22 +224,71 @@ Everything the menu asks can be passed instead — useful once a build is routin
 
 ```powershell
 # Server 2025, both editions, German locale
-.\New-Vhdx.ps1 -IsoPath .\isos\server2025.iso -Target HyperV -ImageIndexes 3,4 -Locale de-DE
+.\New-Vhdx.ps1 -IsoPath .\media\server2025.iso -Target HyperV -ImageIndexes 3,4 -Locale de-DE
 
 # An AVD session host gold for Azure Local: multi-session built from the Pro index
-.\New-Vhdx.ps1 -IsoPath .\isos\win11.iso -Target AzureLocal -MultiSessionImageIndexes 5
+.\New-Vhdx.ps1 -IsoPath .\media\win11.iso -Target AzureLocal -MultiSessionImageIndexes 5
 
 # Datacenter: Azure Edition built from the Server 2025 Datacenter Core index
-.\New-Vhdx.ps1 -IsoPath .\isos\server2025.iso -Target AzureLocal -AzureEditionImageIndexes 3
+.\New-Vhdx.ps1 -IsoPath .\media\server2025.iso -Target AzureLocal -AzureEditionImageIndexes 3
 
 # Windows default BitLocker behavior instead of the opt-out
-.\New-Vhdx.ps1 -IsoPath .\isos\win11.iso -ImageIndexes 5 -PreventDeviceEncryption $false
+.\New-Vhdx.ps1 -IsoPath .\media\win11.iso -ImageIndexes 5 -PreventDeviceEncryption $false
 
 # Edge policy baseline on a Server 2025 gold
-.\New-Vhdx.ps1 -IsoPath .\isos\server2025.iso -ImageIndexes 4 -ConfigureEdge $true
+.\New-Vhdx.ps1 -IsoPath .\media\server2025.iso -ImageIndexes 4 -ConfigureEdge $true
 ```
 
 </details>
+
+### <picture><source media="(prefers-color-scheme: dark)" srcset=".github/assets/icons/gold-image-dark.png"><img src=".github/assets/icons/gold-image-light.png" width="20" alt=""></picture> Linux golds
+
+Pick **Linux** on the first card and `New-Vhdx.ps1` builds a gold from the distribution's
+own cloud image instead of an ISO:
+
+| Distribution | Releases |
+|--------------|----------|
+| Ubuntu | 26.04 LTS, 24.04 LTS |
+| Debian | 13 (Trixie), 12 (Bookworm) |
+| Fedora | 43, 42 |
+| Rocky Linux | 10, 9 |
+| Arch Linux | rolling |
+
+The image is downloaded into `media\`, checked against the checksum the distribution
+publishes beside it, and re-used on the next run while the checksum still matches. It is
+converted to a VHDX in PowerShell — no qemu-img, nothing to install on the host.
+
+Then the gold boots once — the **bake** — on a vSwitch you pick, to install what the stock
+cloud image lacks on Hyper-V: the Azure-tuned kernel on Ubuntu, the Hyper-V integration
+daemons everywhere else. Pending updates are applied in the same boot, so a VM built from the
+gold does not start with a backlog. The menus also ask for the language, regional format,
+keyboard and time zone, the package mirror on Ubuntu and Debian, and any extra packages every
+VM should carry. The bake then erases its own identity — cloud-init state, machine-id, SSH
+host keys — which is the Linux half of what sysprep does for Windows.
+
+**Optional** — four ticks, all off by default, baked into the gold:
+
+| Option | What you get |
+|--------|--------------|
+| Shell aliases | `ll`, `la`, `..`, `cd..` and coloured `ls` / `grep` |
+| Coloured prompt | Path and a `>` that turns red after a failed command |
+| fastfetch at login | A system summary every time a shell opens. Not on Debian 12 — no official package exists for it |
+| Quiet SSH login | No banner, no adverts, no "Last login" line. Ubuntu and Debian only — the others print little or nothing |
+
+Gold names follow the Windows pattern: `hv-enus-ubuntu2604.vhdx`.
+
+Not everything works on every distribution, and the studio knows which — it greys out what a
+VM cannot have rather than letting the build find out:
+
+| | Domain join | Azure Arc | Secure Boot |
+|---|---|---|---|
+| Ubuntu, Debian | ✓ | ✓ | ✓ |
+| Fedora | ✓ | — Microsoft ships no agent for it | ✓ |
+| Rocky Linux | Joins, but sssd does not start afterwards yet — open issue | ✓ | ✓ |
+| Arch Linux | — realmd and adcli are not packaged | — not a supported distribution | — no signed shim |
+
+Arc on Linux needs a service principal — host-context onboarding runs over PowerShell Direct,
+which only Windows guests have.
 
 ## <picture><source media="(prefers-color-scheme: dark)" srcset=".github/assets/blades/overview-dark.png"><img src=".github/assets/blades/overview-light.png" width="22" alt=""></picture> Design the lab — the studio
 
@@ -646,6 +698,14 @@ nothing to click.
 > path — move, rename or rebuild the gold and every VM built from it stops booting. A full
 > copy has no such string attached.
 
+**A Linux VM** gets a cloud-init seed instead of an answer file: a small disk labelled
+`CIDATA` carrying the user, the password, the host name and the network settings. The build
+starts the VM for its first boot and waits for it to power off — cloud-init does that once it
+is done. In that boot the guest sets its locale, joins the domain, onboards to Arc, removes
+the kernel the gold was baked on (Ubuntu), and finally deletes its own copies of the seed. The host
+then detaches and deletes the seed disk, which holds the password in clear. A VM that never
+powers off keeps its seed attached, so it can still be looked at.
+
 Two details worth knowing. Windows redacts the passwords inside the answer file once Setup has
 used them. And with host-context Arc, the host waits for PowerShell Direct after each start
 and onboards the VM itself, so the secret never enters the guest.
@@ -745,7 +805,7 @@ Same menu style as `Build-Vms.ps1`.
 ├─ <picture><source media="(prefers-color-scheme: dark)" srcset=".github/assets/icons/monitor-dark.png"><img src=".github/assets/icons/monitor-light.png" width="16" alt=""></picture> html\hyperv-vm-studio.html    the studio
 ├─ <picture><source media="(prefers-color-scheme: dark)" srcset=".github/assets/icons/integration-dark.png"><img src=".github/assets/icons/integration-light.png" width="16" alt=""></picture> guest-files\                first-boot payloads injected per VM
 ├─ <picture><source media="(prefers-color-scheme: dark)" srcset=".github/assets/icons/update-dark.png"><img src=".github/assets/icons/update-light.png" width="16" alt=""></picture> toolbox\                    migrate / convert / remove
-├─ <picture><source media="(prefers-color-scheme: dark)" srcset=".github/assets/icons/iso-media-dark.png"><img src=".github/assets/icons/iso-media-light.png" width="16" alt=""></picture> isos\                       your ISOs
+├─ <picture><source media="(prefers-color-scheme: dark)" srcset=".github/assets/icons/iso-media-dark.png"><img src=".github/assets/icons/iso-media-light.png" width="16" alt=""></picture> media\                      your ISOs, cloud image cache
 ├─ <picture><source media="(prefers-color-scheme: dark)" srcset=".github/assets/icons/gold-image-dark.png"><img src=".github/assets/icons/gold-image-light.png" width="16" alt=""></picture> vhdx\                       built golds
 └─ <picture><source media="(prefers-color-scheme: dark)" srcset=".github/assets/icons/monitor-dark.png"><img src=".github/assets/icons/monitor-light.png" width="16" alt=""></picture> logs\                       one timestamped log per run
 </pre>
@@ -770,6 +830,9 @@ Guest: `C:\ProgramData\VmDeployLogs\GuestProvision.log`, same format.
 | `Config not found` | Export from the studio, save next to `Build-Vms.ps1` |
 | `No gold image for imageId=…` | Build that edition with `New-Vhdx.ps1`; check `vhdx\` |
 | `More than one gold image for imageId=…` | Interactive: pick in the language card. Unattended: `-GoldLanguage` or set the studio locale |
+| Linux bake log: `BAKE-PKG <name> MISSING` | The gold came out without that package — usually a mirror the bake VM could not reach. Check the bake switch and addressing, then bake again |
+| Linux VM `did not power off` | cloud-init is still working or failed. Log in on the Hyper-V console and read `/var/log/cloud-init-output.log`; the seed stays attached until you remove it |
+| Linux domain user: `no such user` after a join | `systemctl is-active sssd` — the join is only usable once sssd runs |
 | Preflight: switch missing | Create the vSwitch; the name in Networks must match exactly |
 | Name too long | 15 NetBIOS characters, lowercase |
 | `…does not support virtual hard disk sharing` | Put the `.vhds` on CSV or SMB 3 |

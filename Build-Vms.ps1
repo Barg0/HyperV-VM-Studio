@@ -2846,7 +2846,7 @@ $script:ServerCoreAppCompatCapability = "ServerCore.AppCompatibility~~~~0.0.1.0"
 
 # Where each Features on Demand medium comes from, decided once per run by Resolve-FodPlans.
 # Keys: "appcompat:<release>" (or "appcompat:*" for a gold with no release hint) and "rsat".
-#   @{ Mode = "Offline"; Source = "E:\LanguagesAndOptionalFeatures"; Iso = "D:\isos\...iso" }
+#   @{ Mode = "Offline"; Source = "E:\LanguagesAndOptionalFeatures"; Iso = "D:\media\...iso" }
 #   @{ Mode = "Online" }   install in the guest at first boot
 #   @{ Mode = "Skip" }     do not install at all
 $script:FodPlanMap = @{}
@@ -6215,6 +6215,14 @@ function New-ProvisionedVm {
         Set-VMFirmware -VMName $hyperVName -EnableSecureBoot On -SecureBootTemplate $secureBootTemplate
         Write-Log "Secure Boot on with the $secureBootTemplate template" -Tag "Debug"
     }
+    else {
+        # Said out loud, not left to the default: New-VM creates every Gen 2 VM with
+        # Secure Boot ON and the MicrosoftWindows template, so "off" that is never
+        # written is on. An Arch VM with enableSecureBoot false came up exactly like
+        # that - Secure Boot enabled, Windows template, stopped before the kernel.
+        Set-VMFirmware -VMName $hyperVName -EnableSecureBoot Off
+        Write-Log "Secure Boot off on '$hyperVName'" -Tag "Debug"
+    }
 
     $enableVtpm = $false
     if ($null -ne $Server.enableVtpm) {
@@ -7058,11 +7066,11 @@ function Get-FilePickerEntries {
 
 function Get-DefaultIsoBrowseRoot {
     <#
-      isos\ next to the script is the project's convention for keeping Windows and Features
+      media\ next to the script is the project's convention for keeping Windows and Features
       on Demand media together. When that folder exists and holds at least one .iso, open
       the browser there instead of at the drive list.
     #>
-    $isoFolder = Join-Path -Path $PSScriptRoot -ChildPath "isos"
+    $isoFolder = Join-Path -Path $PSScriptRoot -ChildPath "media"
     if (Test-Path -LiteralPath $isoFolder -PathType Container) {
         $found = @(Get-ChildItem -LiteralPath $isoFolder -File -Filter "*.iso" -Recurse -ErrorAction SilentlyContinue |
             Select-Object -First 1)
