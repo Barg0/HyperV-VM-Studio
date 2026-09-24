@@ -4991,7 +4991,7 @@ function Get-LinuxGoldFeatureCatalog {
             # Off, like every other entry. Nothing here is a default: a gold should
             # come out as the distribution ships it unless somebody ticked otherwise.
             Id        = "aliases"
-            Label     = "Shell aliases (ll, la, .., cd.., colour ls/grep)"
+            Label     = "Shell aliases"
             DefaultOn = $false
             Distro    = ""
             Family    = ""
@@ -5012,7 +5012,7 @@ function Get-LinuxGoldFeatureCatalog {
             # depends on $?, and a substitution inside PS1 is a subshell on every
             # prompt. A function that picks between two literal strings forks nothing.
             Id        = "prompt"
-            Label     = "Prompt in .bashrc (bold blue path, green/red >) - no git, no subshell"
+            Label     = "Coloured prompt"
             DefaultOn = $false
             Distro    = ""
             Family    = ""
@@ -5037,7 +5037,7 @@ function Get-LinuxGoldFeatureCatalog {
             # Rocky has it in EPEL and Ubuntu 24.04 in fastfetch's own PPA, and the
             # bake adds either one for this tick alone. Debian 12 has neither.
             Id        = "fastfetch"
-            Label     = "fastfetch on login (system summary in the shell)"
+            Label     = "fastfetch at login"
             DefaultOn = $false
             Distro    = ""
             Family    = ""
@@ -5063,7 +5063,7 @@ function Get-LinuxGoldFeatureCatalog {
             # when it finds one, static and dynamic alike, and sshd skips its own
             # "Last login" line for the same file. One file, whatever the scripts.
             Id        = "quietmotd"
-            Label     = "Quiet the SSH login (no motd at all, no last-login line)"
+            Label     = "Quiet SSH login"
             DefaultOn = $false
             Distro    = "ubuntu"
             Family    = ""
@@ -5678,11 +5678,17 @@ function Get-BakeUserData {
         [void]$lines.Add("      # A plain ASCII > rather than a chevron glyph. U+276F was here first and")
         [void]$lines.Add("      # drew as an empty box over SSH from Windows, whose console fonts do not")
         [void]$lines.Add("      # carry it - and a > needs no locale check, it is one byte everywhere.")
+        [void]$lines.Add('      #')
+        [void]$lines.Add("      # Exact colours (38;2;R;G;B - Tokyo Night's blue, green and red) rather")
+        [void]$lines.Add("      # than the palette's 34/32/31. A palette colour is whatever the client's")
+        [void]$lines.Add("      # theme says it is, and the Windows console turns bold blue into its own")
+        [void]$lines.Add("      # harsh bright blue; an exact colour is drawn as sent by every terminal")
+        [void]$lines.Add("      # that matters here. Bold stays on for the ones that can draw it.")
         [void]$lines.Add('      __hv_prompt() {')
         [void]$lines.Add('          if [ $? -eq 0 ]; then')
-        [void]$lines.Add('              PS1="\[\e[1;34m\]\w\[\e[0m\] \[\e[1;32m\]>\[\e[0m\] "')
+        [void]$lines.Add('              PS1="\[\e[1;38;2;122;162;247m\]\w\[\e[0m\] \[\e[1;38;2;158;206;106m\]>\[\e[0m\] "')
         [void]$lines.Add('          else')
-        [void]$lines.Add('              PS1="\[\e[1;34m\]\w\[\e[0m\] \[\e[1;31m\]>\[\e[0m\] "')
+        [void]$lines.Add('              PS1="\[\e[1;38;2;122;162;247m\]\w\[\e[0m\] \[\e[1;38;2;247;118;142m\]>\[\e[0m\] "')
         [void]$lines.Add('          fi')
         [void]$lines.Add('      }')
         [void]$lines.Add('      # Appended, not assigned: Debian and Ubuntu already keep a window-title')
