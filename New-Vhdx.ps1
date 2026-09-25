@@ -5222,6 +5222,56 @@ function Get-AptMirrorUri {
     return ""
 }
 
+function Get-AptSecurityUri {
+    <#
+        Where security updates come from once the primary mirror has been moved, or an
+        empty string for a distribution that has no apt mirror to move.
+
+        This has to be said out loud whenever `primary` is. cloud-init does not keep
+        the image's security source when only the primary is given - it points
+        security at the primary as well. On Debian that is a 404: country mirrors do
+        not carry trixie-security, `apt-get update` exits 100, and the upgrade that
+        follows runs on lists with no security suite in them. A Debian 13 gold came
+        out with "0 upgraded" and a bind9 eight days behind its DSA that way. Ubuntu's
+        country mirrors do carry -security, so there it worked - just not from the
+        distribution's own security host.
+
+        The hosts are the distributions' own defaults, the same ones a VM without a
+        mirror choice uses.
+    #>
+    param([object]$Entry)
+
+    if ($null -eq $Entry) { return "" }
+    if ($Entry.Distro -eq "ubuntu") { return "http://security.ubuntu.com/ubuntu/" }
+    if ($Entry.Distro -eq "debian") { return "https://deb.debian.org/debian-security/" }
+    return ""
+}
+
+function Get-AptMirrorYaml {
+    <#
+        The primary and security keys of a cloud-init apt block, unindented, for a
+        caller to indent into wherever it is writing one. Two callers - the bake's own
+        user-data and the drop-in that carries the mirror into every VM - and the two
+        must never disagree.
+    #>
+    param([object]$Entry, [string]$MirrorUri)
+
+    $yaml = @(
+        "primary:"
+        "  - arches: [default]"
+        "    uri: $MirrorUri"
+    )
+    $securityUri = Get-AptSecurityUri -Entry $Entry
+    if (-not [string]::IsNullOrWhiteSpace($securityUri)) {
+        $yaml += @(
+            "security:"
+            "  - arches: [default]"
+            "    uri: $securityUri"
+        )
+    }
+    return $yaml
+}
+
 function Get-LinuxLanguagePack {
     <#
         The package that has to be installed for a language to exist on the gold, or
@@ -5504,16 +5554,18 @@ function Get-BakeUserData {
         # one-line format, and the module knows which one this release uses. A sed
         # over sources.list would edit a file that is no longer read.
         #
-        # It is set on the BAKE, so it persists into the gold - cloud-init clean does
-        # not revert sources - and every VM built from the gold inherits the same
-        # mirror. `security` is deliberately left alone: security.ubuntu.com and
-        # security.debian.org are single well-served hosts, and pointing them at a
-        # country mirror is how a lab ends up lagging on security updates.
+        # Setting it here only covers the bake. The apt module runs again on every
+        # VM's first boot and rewrites the sources from whatever config it has then,
+        # which for a VM is none - so a Debian 13 VM came up on deb.debian.org from a
+        # gold baked against ftp.de.debian.org. The drop-in under write_files below is
+        # what carries the choice into the VMs.
+        #
+        # `security` goes with `primary`, always - Get-AptSecurityUri says why.
         [void]$lines.Add("apt:")
         if (-not [string]::IsNullOrWhiteSpace($MirrorUri)) {
-            [void]$lines.Add("  primary:")
-            [void]$lines.Add("    - arches: [default]")
-            [void]$lines.Add("      uri: $MirrorUri")
+            foreach ($line in @(Get-AptMirrorYaml -Entry $Entry -MirrorUri $MirrorUri)) {
+                [void]$lines.Add("  " + $line)
+            }
         }
         # Bounded timeouts, so an unreachable mirror costs minutes rather than most
         # of an hour. Read out of the image itself: package_update_upgrade_install is
@@ -5574,8 +5626,25 @@ function Get-BakeUserData {
     }
     # One write_files key for however many of the file features are ticked - a second
     # one would be a duplicate mapping key, which is a YAML error rather than a merge.
-    if ($wantAliases -or $wantPrompt -or $wantFastfetch) {
+    $wantMirrorDropIn = $familyProfile.UsesAptModule -and -not [string]::IsNullOrWhiteSpace($MirrorUri)
+    if ($wantAliases -or $wantPrompt -or $wantFastfetch -or $wantMirrorDropIn) {
         [void]$lines.Add("write_files:")
+    }
+    if ($wantMirrorDropIn) {
+        # The mirror, for every VM built from this gold. cloud.cfg.d is system config,
+        # read on every boot and left alone by `cloud-init clean`, so the apt module on
+        # a VM's first boot regenerates the sources from the same primary and security
+        # the bake used instead of from the image defaults. The bake's own run is
+        # unaffected: write_files is an init-stage module, and by then this boot's
+        # config has already been read.
+        [void]$lines.Add("  - path: /etc/cloud/cloud.cfg.d/90-hv-studio-apt.cfg")
+        [void]$lines.Add("    permissions: '0644'")
+        [void]$lines.Add("    content: |")
+        [void]$lines.Add("      # Baked by HyperV-VM-Studio: the package mirror picked for this gold.")
+        [void]$lines.Add("      apt:")
+        foreach ($line in @(Get-AptMirrorYaml -Entry $Entry -MirrorUri $MirrorUri)) {
+            [void]$lines.Add("        " + $line)
+        }
     }
     if ($wantAliases) {
         # profile.d covers an SSH session, which is a login shell, and every user that
@@ -6160,6 +6229,22 @@ function Invoke-LinuxBakeBoot {
         }
         catch {
             Write-Log "Bake transcript: $($_.Exception.Message)" -Tag "Debug"
+        }
+
+        # A failed package-manager step does not stop cloud-init: it logs the error and
+        # carries on, so BAKE-OK still prints and the VM still powers off. That is how
+        # a Debian 13 gold shipped with no security updates - `apt-get update` exited
+        # 100 on the security suite, the upgrade ran on the lists it had, and the host
+        # called it a success. cloud-init's distro layer is the one that runs apt and
+        # dnf, so an ERROR from it means the gold is not as current as it claims.
+        $packageErrors = @()
+        foreach ($match in ([regex]::Matches($transcript, "distros\[ERROR\]:\s*([^\r\n]+)"))) {
+            $packageErrors += $match.Groups[1].Value.Trim()
+        }
+        if ($packageErrors.Count -gt 0) {
+            foreach ($packageError in $packageErrors) { Write-Log "Bake: $packageError" -Tag "Error" }
+            Write-Log "The package manager failed during the bake - the gold may be missing updates. See '$logPath'" -Tag "Error"
+            return $false
         }
 
         if ($transcript -match "BAKE-OK") {
