@@ -831,6 +831,7 @@ Guest: `C:\ProgramData\VmDeployLogs\GuestProvision.log`, same format.
 | `No gold image for imageId=…` | Build that edition with `New-Vhdx.ps1`; check `vhdx\` |
 | `More than one gold image for imageId=…` | Interactive: pick in the language card. Unattended: `-GoldLanguage` or set the studio locale |
 | Linux bake log: `BAKE-PKG <name> MISSING` | The gold came out without that package — usually a mirror the bake VM could not reach. Check the bake switch and addressing, then bake again |
+| Linux bake: `The package manager failed during the bake` | apt or dnf errored, so the gold may be missing updates. The `distros[ERROR]` line above it says which step; usually a mirror the bake VM could not reach. Fix the network or pick another mirror, then bake again |
 | Linux VM `did not power off` | cloud-init is still working or failed. Log in on the Hyper-V console and read `/var/log/cloud-init-output.log`; the seed stays attached until you remove it |
 | Linux domain user: `no such user` after a join | `systemctl is-active sssd` — the join is only usable once sssd runs |
 | Preflight: switch missing | Create the vSwitch; the name in Networks must match exactly |
