@@ -5068,15 +5068,21 @@ function Get-LinuxGoldFeatureCatalog {
             # 13 VM on 2026-09-24. The motd-news and chmod half is Ubuntu's and stays
             # Ubuntu's.
             #
-            # Nowhere else. Fedora and Arch print nothing on an SSH login. Rocky prints
-            # cockpit's "Activate the web console" line, which says where the
-            # machine's web UI is, and "Last login" - nothing worth a tick to remove.
+            # Rocky too, for the console more than for SSH: cockpit's "Activate the
+            # web console" line and "Last login" also land on the Hyper-V Manager
+            # console after every login. util-linux login finds the .hushlogin,
+            # skips its own motd and lastlog, and opens the PAM session with
+            # PAM_SILENT, which pam_motd honours - so the same file quiets the console
+            # there. The cockpit line printed above the login prompt comes from
+            # /etc/issue.d, which no .hushlogin can reach, and stays.
+            #
+            # Fedora and Arch are left off: they print nothing to quiet.
             Id        = "quietmotd"
             Label     = "Quiet SSH login"
             DefaultOn = $false
             Distro    = ""
-            Family    = "debian"
-            ImageIds  = @()
+            Family    = ""
+            ImageIds  = @("ubuntu2604", "ubuntu2404", "debian13", "debian12", "rocky10", "rocky9")
             Packages  = @()
         }
     )

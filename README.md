@@ -273,7 +273,7 @@ host keys — which is the Linux half of what sysprep does for Windows.
 | Shell aliases | `ll`, `la`, `..`, `cd..` and coloured `ls` / `grep` |
 | Coloured prompt | Path and a `>` that turns red after a failed command |
 | fastfetch at login | A system summary every time a shell opens. Not on Debian 12 — no official package exists for it |
-| Quiet SSH login | No banner, no adverts, no "Last login" line. Ubuntu and Debian only — the others print little or nothing |
+| Quiet SSH login | No banner, no adverts, no "Last login" line, over SSH and on the console. Ubuntu, Debian and Rocky — Fedora and Arch print nothing to quiet |
 
 Gold names follow the Windows pattern: `hv-enus-ubuntu2604.vhdx`.
 
