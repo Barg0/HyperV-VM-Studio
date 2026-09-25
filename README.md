@@ -250,7 +250,7 @@ own cloud image instead of an ISO:
 |--------------|----------|
 | Ubuntu | 26.04 LTS, 24.04 LTS |
 | Debian | 13 (Trixie), 12 (Bookworm) |
-| Fedora | 43, 42 |
+| Fedora | 43 |
 | Rocky Linux | 10, 9 |
 | Arch Linux | rolling |
 
@@ -263,17 +263,21 @@ cloud image lacks on Hyper-V: the Azure-tuned kernel on Ubuntu, the Hyper-V inte
 daemons everywhere else. Pending updates are applied in the same boot, so a VM built from the
 gold does not start with a backlog. The menus also ask for the language, regional format,
 keyboard and time zone, the package mirror on Ubuntu and Debian, and any extra packages every
-VM should carry. The bake then erases its own identity — cloud-init state, machine-id, SSH
+VM should carry. Language, format, keyboard and time zone are applied **in the bake** and stay
+with the gold: a VM keeps them whether Build-Vms or Azure Local provisions it, and changing them
+means baking again. The bake then erases its own identity — cloud-init state, machine-id, SSH
 host keys — which is the Linux half of what sysprep does for Windows.
 
-**Optional** — four ticks, all off by default, baked into the gold:
+**Optional** — six ticks, all off by default, baked into the gold:
 
 | Option | What you get |
 |--------|--------------|
 | Shell aliases | `ll`, `la`, `..`, `cd..` and coloured `ls` / `grep` |
 | Coloured prompt | Path and a `>` that turns red after a failed command |
-| fastfetch at login | A system summary every time a shell opens. Not on Debian 12 — no official package exists for it |
+| fastfetch at login | A system summary every time a shell opens. Debian 12 has no package for it, so it comes from fastfetch's GitHub release there and stays at the baked version until the next bake |
 | Quiet SSH login | No banner, no adverts, no "Last login" line, over SSH and on the console. Ubuntu, Debian and Rocky — Fedora and Arch print nothing to quiet |
+| yay (AUR helper) | Arch only. `yay` built from the AUR (`yay-bin`), plus `git` and `base-devel` so it can build AUR packages |
+| Pac-Man progress bar and colour | Arch only. `ILoveCandy` and `Color` in `pacman.conf` — coloured output, and the download bar becomes Pac-Man eating dots |
 
 Gold names follow the Windows pattern: `hv-enus-ubuntu2604.vhdx`.
 
@@ -701,7 +705,7 @@ nothing to click.
 **A Linux VM** gets a cloud-init seed instead of an answer file: a small disk labelled
 `CIDATA` carrying the user, the password, the host name and the network settings. The build
 starts the VM for its first boot and waits for it to power off — cloud-init does that once it
-is done. In that boot the guest sets its locale, joins the domain, onboards to Arc, removes
+is done. In that boot the guest joins the domain, onboards to Arc, removes
 the kernel the gold was baked on (Ubuntu), and finally deletes its own copies of the seed. The host
 then detaches and deletes the seed disk, which holds the password in clear. A VM that never
 powers off keeps its seed attached, so it can still be looked at.

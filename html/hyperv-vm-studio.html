@@ -763,7 +763,9 @@
   .chip-x:hover { background: var(--bg-hover); color: var(--danger); }
   .chip-add { display: flex; align-items: center; gap: 6px; }
   .chip-add > input { flex: 1; min-width: 0; }
-  .chip-add > .btn.icon { width: 32px; height: 32px; flex-shrink: 0; }
+  /* The + glyph is Deploy orange, which follows the theme; the button itself stays
+     neutral like every other boxed icon. */
+  .chip-add > .btn.icon { width: 32px; height: 32px; flex-shrink: 0; color: var(--secret-glyph); }
 
   .pill.tag {
     font-size: 10px; font-weight: 700; letter-spacing: .3px; text-transform: uppercase;
@@ -2540,26 +2542,6 @@ const IMAGE_CATALOG = [
     defaults: { useDifferencingDisk: false, enableSecureBoot: true, enableVtpm: false, startAfterCreate: true, memoryGB: 2, cpuCount: 2 }
   },
   {
-    id: "fedora42",
-    /* Azure Arc does not support Fedora, and this is Microsoft's answer rather than a
-       guess: the installer from aka.ms/azcmagent stops with "unsupported Linux
-       distribution: Fedora Linux", so azcmagent is never on the disk and the connect
-       that follows fails on a path that does not exist. A VM here can be ticked into
-       an Arc principal and would simply never arrive in the portal, which is the
-       worst of the three possible outcomes. */
-    noAzureArc: true,
-    label: "Fedora 42",
-    icon: "os-server-panes.svg",
-    kind: "linux",
-    osFamily: "linux",
-    distro: "fedora",
-    edition: "",
-    experience: "",
-    noServerRoles: true,
-    secureBootTemplate: "MicrosoftUEFICertificateAuthority",
-    defaults: { useDifferencingDisk: false, enableSecureBoot: true, enableVtpm: false, startAfterCreate: true, memoryGB: 2, cpuCount: 2 }
-  },
-  {
     id: "rocky10",
     label: "Rocky Linux 10",
     icon: "os-server-panes.svg",
@@ -2636,7 +2618,6 @@ const LINUX_BAKED_PACKAGES = {
   debian13:   ["hyperv-daemons", "kbd", "console-setup", "keyboard-configuration"],
   debian12:   ["hyperv-daemons", "kbd", "console-setup", "keyboard-configuration"],
   fedora43:   ["hyperv-daemons"],
-  fedora42:   ["hyperv-daemons"],
   rocky10:    ["hyperv-daemons"],
   rocky9:     ["hyperv-daemons"],
   arch:       ["hyperv"]
@@ -6679,10 +6660,10 @@ function renderGeneral() {
       <label class="field"><span>Default SSH authorized key</span>
         <div class="edit-field">
           <input data-d="sshAuthorizedKey" data-name-input="sshkey:gs" class="keep-border" value="${esc(d.sshAuthorizedKey || "")}" placeholder="ssh-ed25519 AAAAC3Nza... user@host" spellcheck="false"${state.nameEdit["sshkey:gs"] ? "" : " readonly"}>
-          <button class="btn icon" type="button" data-name-edit="sshkey:gs"
-            title="${state.nameEdit["sshkey:gs"] ? "Done" : "Edit the key"}" aria-label="${state.nameEdit["sshkey:gs"] ? "Done" : "Edit the key"}">${state.nameEdit["sshkey:gs"] ? checkIcon() : pencilIcon()}</button>
           <button class="btn icon" type="button" data-gen-ssh="gs"
             title="Generate an Ed25519 key pair" aria-label="Generate an SSH key pair">${regenIcon()}</button>
+          <button class="btn icon" type="button" data-name-edit="sshkey:gs"
+            title="${state.nameEdit["sshkey:gs"] ? "Done" : "Edit the key"}" aria-label="${state.nameEdit["sshkey:gs"] ? "Done" : "Edit the key"}">${state.nameEdit["sshkey:gs"] ? checkIcon() : pencilIcon()}</button>
           <button class="btn icon" type="button" data-dl-ssh="gs"${sshPrivateKeys.gs ? "" : " disabled"}
             title="${sshPrivateKeys.gs ? "Download the private key" : "Generate a key pair first"}" aria-label="Download the private key">${downloadIcon()}</button>
         </div>
@@ -7750,10 +7731,10 @@ function renderServerCard(s) {
                 const keyUnlocked = !!state.nameEdit[`sshkey:${s._id}`];
                 return `<div class="edit-field">
                 <input data-s="${esc(s._id)}" data-k="sshAuthorizedKey" data-name-input="sshkey:${esc(s._id)}" class="keep-border" value="${esc(s.sshAuthorizedKey || "")}" placeholder="ssh-ed25519 AAAAC3Nza... user@host" spellcheck="false"${keyUnlocked ? "" : " readonly"}>
-                <button class="btn icon" type="button" data-name-edit="sshkey:${esc(s._id)}"
-                  title="${keyUnlocked ? "Done" : "Edit the key"}" aria-label="${keyUnlocked ? "Done" : "Edit the key"}">${keyUnlocked ? checkIcon() : pencilIcon()}</button>
                 <button class="btn icon" type="button" data-gen-ssh="${esc(s._id)}"
                   title="Generate an Ed25519 key pair" aria-label="Generate an SSH key pair">${regenIcon()}</button>
+                <button class="btn icon" type="button" data-name-edit="sshkey:${esc(s._id)}"
+                  title="${keyUnlocked ? "Done" : "Edit the key"}" aria-label="${keyUnlocked ? "Done" : "Edit the key"}">${keyUnlocked ? checkIcon() : pencilIcon()}</button>
                 <button class="btn icon" type="button" data-dl-ssh="${esc(s._id)}"${sshPrivateKeys[s._id] ? "" : " disabled"}
                   title="${sshPrivateKeys[s._id] ? "Download the private key" : "Generate a key pair first"}" aria-label="Download the private key">${downloadIcon()}</button>
               </div>
