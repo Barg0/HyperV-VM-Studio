@@ -992,7 +992,7 @@ function Get-LinuxGoldIds {
     # New-Vhdx.ps1. Their only job here is to let a Linux id past the Windows rules
     # table; everything after that is the ordinary three-segment lookup.
     return @("ubuntu2604", "ubuntu2404", "debian13", "debian12",
-             "fedora43", "fedora42", "rocky10", "rocky9", "arch")
+             "fedora43", "rocky10", "rocky9", "arch")
 }
 
 function Test-IsLinuxImageId {
@@ -3378,32 +3378,6 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%~dp0GuestProvision\Gue
 # image pins cloud-init to the Azure datasource and would want an ovf-env.xml and a
 # wire server that a lab does not have.
 
-function Get-LinuxLocaleName {
-    # de-DE -> de_DE.UTF-8. A copy of the function in New-Vhdx.ps1: neither script
-    # dot-sources the other, which is why both already carry their own Write-Log.
-    param([string]$LocaleTag)
-
-    if ([string]::IsNullOrWhiteSpace($LocaleTag)) { return "en_US.UTF-8" }
-    return ($LocaleTag -replace "-", "_") + ".UTF-8"
-}
-
-function Get-LinuxKeymap {
-    # de-DE -> de, en-GB -> gb. Also a copy from New-Vhdx.ps1; keep the two in step.
-    param([string]$LocaleTag)
-
-    $overrides = @{
-        "en-US" = "us"; "en-GB" = "gb"; "ja-JP" = "jp"; "pt-BR" = "br"
-        "zh-CN" = "cn"; "zh-TW" = "tw"; "ko-KR" = "kr"; "cs-CZ" = "cz"
-        "da-DK" = "dk"; "el-GR" = "gr"; "sv-SE" = "se"; "uk-UA" = "ua"
-        "he-IL" = "il"; "sl-SI" = "si"; "et-EE" = "ee"
-    }
-    if ($overrides.ContainsKey($LocaleTag)) { return $overrides[$LocaleTag] }
-
-    $parts = $LocaleTag -split "-"
-    if ($parts.Count -ge 2) { return $parts[$parts.Count - 1].ToLowerInvariant() }
-    return "us"
-}
-
 function Test-IsLinuxServer {
     # A row is Linux because the studio said so. The gold's sidecar manifest says the
     # same thing, but the row is what this script was handed and it is checked first.
@@ -3709,6 +3683,21 @@ function Get-LinuxDomainJoinCommands {
     if (-not [string]::IsNullOrWhiteSpace($ouPath)) {
         $joinArgs += " --computer-ou=" + (ConvertTo-ShellSingleQuoted -Value $ouPath)
     }
+    # The clock first. A VM starts two hours in the future: the Hyper-V RTC runs on
+    # the host's local time, Linux reads it as UTC, and Hyper-V time synchronisation
+    # is off by default here, so only NTP puts it right. Fedora started its join at
+    # about nine seconds, before chrony had stepped the clock; the TGT still came back
+    # (the client allows for skew on that one), then adcli's service ticket for LDAP
+    # failed with the misleading "Cannot contact any KDC for realm". The same join by
+    # hand a few minutes later went through. Rocky 10 joined only because chrony had
+    # stepped at 18 s and the join ran at 22 s.
+    #
+    # timedatectl's NTPSynchronized is the kernel's sync flag, which chrony and
+    # systemd-timesyncd both set, so one wait covers every family. The source it
+    # waits on is the domain itself (the `ntp:` key in Get-CloudInitUserData).
+    # Bounded: a DC that does not answer NTP gets a join attempt after 90 s instead
+    # of a VM that never finishes.
+    [void]$commands.Add('i=0; until [ "$(timedatectl show -p NTPSynchronized --value 2>/dev/null)" = yes ] || [ $i -ge 90 ]; do sleep 1; i=$((i+1)); done; echo "TIME-SYNC $(timedatectl show -p NTPSynchronized --value 2>/dev/null) after ${i}s"')
     $join = "printf '%s' " + (ConvertTo-ShellSingleQuoted -Value $joinPassword) +
             " | realm join $joinArgs " + (ConvertTo-ShellSingleQuoted -Value $domain) +
             " && echo DOMAIN-JOIN-OK || echo DOMAIN-JOIN-FAILED"
@@ -3721,8 +3710,17 @@ function Get-LinuxDomainJoinCommands {
     # 13 VM: enable --now, and the same lookup comes back with the full group set.
     #
     # Not for the RHEL family: realmd starts sssd there itself, and those joins work.
+    #
+    # The responder sockets go off in the same breath. Debian and Ubuntu ship them
+    # enabled, and realmd writes `services = nss, pam` into sssd.conf - the two ways
+    # of starting a responder conflict, and sssd settles it by failing the socket
+    # units on every boot ("configured to be socket-activated but it's still
+    # mentioned in the services' line"). Harmless, and it is still three failed units
+    # in `systemctl --failed` on a VM that works; disabling the sockets is the fix
+    # sssd's own message asks for.
     if (([string]$Family).Trim().ToLowerInvariant() -eq "debian") {
         [void]$commands.Add("systemctl enable --now sssd || true")
+        [void]$commands.Add("systemctl disable sssd-nss.socket sssd-pam.socket sssd-pam-priv.socket sssd-pac.socket 2>/dev/null; systemctl reset-failed 2>/dev/null; true")
     }
 
     # A home directory on first login.
@@ -3814,77 +3812,6 @@ function Get-LinuxDomainJoinCommands {
     return $commands.ToArray()
 }
 
-function Get-LinuxLocaleCommands {
-    <#
-        The shell that makes the FORMAT locale exist and points the LC_* variables at
-        it. Two families, two different answers, and neither works on the other:
-
-        Debian and Ubuntu carry `locales`, so locale-gen generates whatever is asked
-        for with no network, and update-locale writes /etc/default/locale. The RHEL
-        family has neither command. Its locales come pre-generated inside
-        glibc-langpack-<lang> - which the gold installed during its bake, because
-        there is no way to make one afterwards - and localectl writes /etc/locale.conf.
-
-        localectl needs systemd-localed, which is socket-activated and will start on
-        demand; the fallback appends the same assignments to /etc/locale.conf, which
-        is the file localectl would have written. Belt and braces for one line, and
-        the line is what every LC_* on the machine depends on.
-
-        An empty Family is a gold built before the sidecar recorded one, and every
-        one of those was Debian.
-    #>
-    param([string]$Family, [string]$Locale)
-
-    $commands = New-Object System.Collections.Generic.List[string]
-    if ([string]::IsNullOrWhiteSpace($Locale)) { return $commands.ToArray() }
-
-    $formatVariables = @("LC_TIME","LC_NUMERIC","LC_MONETARY","LC_PAPER","LC_MEASUREMENT",
-                         "LC_ADDRESS","LC_TELEPHONE","LC_NAME","LC_IDENTIFICATION")
-    $assignments = ($formatVariables | ForEach-Object { "$_=$Locale" }) -join " "
-    # The same assignments one per line, for the fallback that writes the file the
-    # way localectl would have.
-    $appends = ($formatVariables | ForEach-Object { "$_=$Locale" }) -join "\n"
-
-    if (([string]$Family).Trim().ToLowerInvariant() -eq "arch") {
-        # Arch has locale-gen but no update-locale, and its /etc/locale.gen is a list
-        # of locales to generate rather than a config file - so the format locale is
-        # APPENDED to it. It has to be: cloud-init's own locale module ran earlier in
-        # this boot and overwrote that file with the LANG locale alone, so anything
-        # written before then is gone, and anything not in the file is not generated.
-        # localectl then writes /etc/locale.conf, the same file the RHEL branch ends at.
-        [void]$commands.Add("grep -q '^$Locale ' /etc/locale.gen || printf '%s UTF-8\n' '$Locale' >> /etc/locale.gen; locale-gen")
-        [void]$commands.Add("localectl set-locale $assignments || printf '%b\n' '$appends' >> /etc/locale.conf")
-        return $commands.ToArray()
-    }
-
-    if (([string]$Family).Trim().ToLowerInvariant() -eq "rhel") {
-        # The langpack first, and this is a correction: the comment above used to say
-        # the gold had already installed it, which is only true of the gold's OWN
-        # language. A gold baked in en-US and a VM asked for de_DE formats is the
-        # ordinary case in this lab, and there the locale simply is not on the disk.
-        #
-        # What that looked like on a Rocky 9 VM: "Failed to issue method call: Locale
-        # de_DE.UTF-8 not installed, refusing" from systemd-localed, the fallback then
-        # writing the LC_* lines into /etc/locale.conf anyway, and every SSH login
-        # afterwards greeted by "setlocale: LC_TIME: cannot change locale
-        # (de_DE.UTF-8): No such file or directory".
-        #
-        # Guarded by rpm -q so a VM whose gold does carry the pack costs nothing, and
-        # `|| true` because a lab without a route to a mirror should end up with the
-        # fallback file rather than a failed boot stage.
-        $languageCode = ([string]$Locale -split "[_.@]")[0]
-        if (-not [string]::IsNullOrWhiteSpace($languageCode)) {
-            [void]$commands.Add("rpm -q glibc-langpack-$languageCode >/dev/null 2>&1 || dnf install -y glibc-langpack-$languageCode || true")
-        }
-        [void]$commands.Add("localectl set-locale $assignments || printf '%b\n' '$appends' >> /etc/locale.conf")
-        return $commands.ToArray()
-    }
-
-    [void]$commands.Add("locale-gen $Locale || true")
-    [void]$commands.Add("update-locale $assignments")
-    return $commands.ToArray()
-}
-
 function Get-CloudInitUserData {
     <#
         The Linux answer file.
@@ -3904,10 +3831,6 @@ function Get-CloudInitUserData {
         [object]$Server,
         [object]$Defaults,
         [string]$HostName,
-        [string]$Language,
-        [string]$Locale,
-        [string]$Keymap,
-        [string]$TimeZone,
         [string]$Family,
         # Distro as well as Family, because they answer different questions: Fedora and
         # Rocky share the rhel family and package manager, and exactly one of them has
@@ -4006,17 +3929,59 @@ function Get-CloudInitUserData {
     [void]$lines.Add("#cloud-config")
     [void]$lines.Add("hostname: $HostName")
     [void]$lines.Add("preserve_hostname: false")
-    # cloud-init's `locale` module writes LANG, and on glibc LANG decides what the
-    # system SAYS - messages, logs, man pages - as well as how it formats. That is one
-    # setting for two questions, and the answers differ: German dates with English error
-    # messages is the normal case. So the module gets the LANGUAGE, and the format
-    # locale is applied further down through the LC_* family, which LANG does not touch.
-    if (-not [string]::IsNullOrWhiteSpace($Language)) { [void]$lines.Add("locale: $Language") }
-    if (-not [string]::IsNullOrWhiteSpace($TimeZone)) { [void]$lines.Add("timezone: $TimeZone") }
-    if (-not [string]::IsNullOrWhiteSpace($Keymap)) {
-        [void]$lines.Add("keyboard:")
-        [void]$lines.Add("  layout: $Keymap")
+    if ($null -ne $domainJoin) {
+        # A joined VM's name has to resolve on the machine itself. sssd's AD backend
+        # looks the host name up while it starts, and on the RHEL family nsswitch asks
+        # DNS before myhostname - so the bare name went to the domain controller, came
+        # back SERVFAIL six seconds later, and the backend missed sssd's startup
+        # deadline. Rocky 10 joined and then had no sssd at all. Debian asks myhostname
+        # first and never noticed.
+        #
+        # fqdn plus manage_etc_hosts puts the name in /etc/hosts before the join runs,
+        # which answers the lookup from `files`, and gives realm join the FQDN the RHEL
+        # documentation asks for.
+        #
+        # prefer_fqdn_over_hostname makes the FQDN the host name itself, on Debian as
+        # well - where cloud-init otherwise keeps the short one. sssd registers the
+        # VM in AD DNS under its host name, and a short one went out as
+        # `lnx-debian13-01.` with no zone: "response to SOA query was unsuccessful",
+        # and no A record. With the FQDN the same VM registered on the next restart.
+        $joinDomain = ([string]$domainJoin.domain).Trim()
+        if (-not [string]::IsNullOrWhiteSpace($joinDomain)) {
+            [void]$lines.Add("fqdn: $HostName.$joinDomain")
+            [void]$lines.Add("prefer_fqdn_over_hostname: true")
+            [void]$lines.Add("manage_etc_hosts: true")
+            # Time from the domain, the way a Windows member takes it: the chain is
+            # internet -> firewall -> DC -> members, and Kerberos only needs the member
+            # to agree with the DC, which it cannot fail to when the DC is its source.
+            # The domain name rather than one DC's address: in AD it resolves to every
+            # DC, so a second one joins the list by itself. The image's internet pools
+            # are replaced, not added to - a lab without a route out still gets time.
+            #
+            # cloud-init's ntp module, present on all eight images, writes the config
+            # for whichever client is installed (chrony on the RHEL family and Ubuntu
+            # 26.04, systemd-timesyncd on the rest). It runs in the config stage, so the
+            # clock is already syncing against the DC when the join below waits for it.
+            [void]$lines.Add("ntp:")
+            [void]$lines.Add("  enabled: true")
+            [void]$lines.Add("  servers: ['$joinDomain']")
+            # Fedora's cloud-init restarts chrony.service after writing chrony.conf, and
+            # Fedora calls the unit chronyd: "Unit chrony.service not found", the module
+            # fails, and chrony runs on with the old pools while the right config sits
+            # unread on disk. Tested on a Fedora 43 VM: with the name given here the
+            # module restarts chronyd and it syncs from the DC. Rocky's cloud-init has
+            # the name right already, and on Ubuntu the unit really is chrony.
+            if (([string]$Distro).Trim().ToLowerInvariant() -eq "fedora") {
+                [void]$lines.Add("  config:")
+                [void]$lines.Add("    service_name: chronyd")
+            }
+        }
     }
+    # No locale, time zone or keyboard here, and no locale commands further down. The
+    # gold carries all four: New-Vhdx.ps1 applies them in the bake and drops a
+    # cloud.cfg.d file that switches cloud-init's locale module off, so a VM keeps
+    # exactly what the gold was baked with - the same whether Build-Vms.ps1 or Azure
+    # Local provisions it. See .claude/debian-locale-research.md.
 
     [void]$lines.Add("users:")
     [void]$lines.Add("  - name: $userName")
@@ -4053,19 +4018,9 @@ function Get-CloudInitUserData {
         foreach ($package in $packages) { [void]$lines.Add("  - " + (ConvertTo-YamlSingleQuoted -Value $package)) }
     }
 
-    # The LC_* format family. cloud-init has no module for the language/format split, so
-    # this is runcmd: make the format locale exist (it is not the one the locale module
-    # just generated) and point the nine format variables at it. LC_MESSAGES is
-    # deliberately absent - leaving it unset is what keeps messages on LANG.
-    #
     # One runcmd block, whatever fills it - cloud-init takes the key once and a second
     # `runcmd:` in the same document silently replaces the first.
     $runCommands = New-Object System.Collections.Generic.List[string]
-    if (-not [string]::IsNullOrWhiteSpace($Locale) -and $Locale -ne $Language) {
-        foreach ($command in @(Get-LinuxLocaleCommands -Family $Family -Locale $Locale)) {
-            [void]$runCommands.Add($command)
-        }
-    }
 
     # Last, and after the packages that cloud-init installs earlier in this same file:
     # realm join cannot run until realmd exists, and the locale work above has no
@@ -4089,9 +4044,27 @@ function Get-CloudInitUserData {
     # not autoremove the kernel it is running on. This first boot is on the azure
     # kernel, so here the old one is just packages nothing needs and a plain autoremove
     # takes it. On Debian it finds nothing and costs a second.
+    #
+    # On Ubuntu the generic kernel needs naming as well. The bake purges the virtual
+    # metapackages, but apt's own kernel rule keeps the two newest kernels installed,
+    # and with azure 7.0.0-1014 on top the generic 7.0.0-34 is the runner-up - so
+    # autoremove left it on every VM. Only while running on azure: a VM that booted
+    # generic because its azure install failed keeps the kernel it is running on.
+    if (([string]$Distro).Trim().ToLowerInvariant() -eq "ubuntu") {
+        [void]$runCommands.Add('case "$(uname -r)" in *-azure) p=$(dpkg-query -W -f=''${Package}\n'' ''linux-*'' 2>/dev/null | grep -E ''^linux-(image|modules|modules-extra|headers|tools)-[0-9].*-generic$|^linux-(image|headers|tools)-generic$''); [ -n "$p" ] && DEBIAN_FRONTEND=noninteractive apt-get -y purge $p ;; esac; true')
+    }
     if (([string]$Family).Trim().ToLowerInvariant() -eq "debian") {
         [void]$runCommands.Add("DEBIAN_FRONTEND=noninteractive apt-get -y --purge autoremove")
     }
+
+    # The cloud images boot with console=ttyS0, so systemd starts a getty on the
+    # serial port - and a VM built here has no COM port connected. agetty fails to
+    # read the terminal, exits, and is restarted every ten seconds for the life of the
+    # machine: "failed to get terminal attributes: Input/output error", six lines a
+    # minute in the journal of every distribution except Rocky 9. Nothing here uses
+    # the serial console after the bake, so the getty is masked; unmask it on a VM
+    # that gets a COM port attached for debugging.
+    [void]$runCommands.Add("systemctl mask --now serial-getty@ttyS0.service 2>/dev/null; true")
 
     # LAST, and the reason it exists: the seed disk is detached and deleted after this
     # boot, but cloud-init has already copied everything it was given onto the guest's
@@ -4184,8 +4157,12 @@ function Get-CloudInitNetworkConfig {
     $gateway = ([string]$Server.defaultGateway).Trim()
 
     $dns = @()
-    foreach ($server in @($Server.dnsServers)) {
-        $trimmed = ([string]$server).Trim()
+    # $dnsServer, not $server: PowerShell names are case-insensitive, so a loop
+    # variable called $server IS the $Server parameter, and after the loop the row
+    # was gone - replaced by the last DNS address, which is how the search domain
+    # below never found the row's domain join.
+    foreach ($dnsServer in @($Server.dnsServers)) {
+        $trimmed = ([string]$dnsServer).Trim()
         if (-not [string]::IsNullOrWhiteSpace($trimmed)) { $dns += $trimmed }
     }
 
@@ -4231,6 +4208,17 @@ function Get-CloudInitNetworkConfig {
     if ($dns.Count -gt 0) {
         [void]$lines.Add("    nameservers:")
         [void]$lines.Add("      addresses: [" + (($dns | ForEach-Object { "'$_'" }) -join ", ") + "]")
+        # A joined VM searches its own domain. Without one resolved writes `search .`
+        # into resolv.conf, and sssd 2.8 on Debian 12 - whose resolver reads that file
+        # directly - then failed to look up the VM's own name before registering it in
+        # DNS: "resolver returned: [8]: Misformatted domain name", no A record, and no
+        # retry for a day. It is also simply what a domain member is expected to have.
+        $searchDomain = ""
+        $joinForSearch = Resolve-DomainJoinForServer -Server $Server
+        if ($null -ne $joinForSearch) { $searchDomain = ([string]$joinForSearch.domain).Trim() }
+        if (-not [string]::IsNullOrWhiteSpace($searchDomain)) {
+            [void]$lines.Add("      search: ['$searchDomain']")
+        }
     }
 
     return ($lines -join "`n") + "`n"
@@ -4715,10 +4703,8 @@ function Set-LinuxProvisioning {
         The Linux replacement for Set-OfflineUnattendFile: renders the seed, writes the
         ISO beside the VM's own files and attaches it.
 
-        Region settings come from the gold's sidecar manifest when the config does not
-        override them - the same rule the Windows path uses, for the same reason: the
-        gold was baked with a locale and a machine built from it should not silently
-        disagree with it.
+        Region settings are not part of it. The gold was baked with its language,
+        format locale, keyboard and time zone, and a VM keeps them.
     #>
     param(
         [Parameter(Mandatory = $true)][object]$Server,
@@ -4730,15 +4716,9 @@ function Set-LinuxProvisioning {
         [string]$NicMacAddress
     )
 
-    $language = ""
-    $locale = ""
-    $keymap = ""
-    $timeZone = ""
     # The package family the gold was built from. New-Vhdx.ps1 records it in the
     # sidecar because the seed cannot tell a Rocky gold from a Debian one by looking
-    # at the disk, and the two generate a locale in different ways. Empty means a
-    # gold from before the field existed, and Get-LinuxLocaleCommands reads that as
-    # the Debian family - which is what every gold built before it was.
+    # at the disk, and the domain join and package steps differ between them.
     $family = ""
     # Empty for a gold built before the sidecar recorded a distro; every check on
     # it asks "is this one particular distribution", so empty simply answers no.
@@ -4749,10 +4729,6 @@ function Set-LinuxProvisioning {
         if (Test-Path -LiteralPath $manifestPath) {
             try {
                 $manifest = Get-Content -LiteralPath $manifestPath -Raw -Encoding UTF8 | ConvertFrom-Json
-                if ($manifest.language)       { $language = Get-LinuxLocaleName -LocaleTag ([string]$manifest.language) }
-                if ($manifest.locale)         { $locale   = Get-LinuxLocaleName -LocaleTag ([string]$manifest.locale) }
-                if ($manifest.keyboardLayout) { $keymap   = Get-LinuxKeymap     -LocaleTag ([string]$manifest.keyboardLayout) }
-                if ($manifest.timeZone)       { $timeZone = [string]$manifest.timeZone }
                 if ($manifest.family)         { $family   = [string]$manifest.family }
                 if ($manifest.distro)         { $distro   = [string]$manifest.distro }
             }
@@ -4762,13 +4738,8 @@ function Set-LinuxProvisioning {
         }
     }
 
-    # A gold built before language became its own field has a locale and no language.
-    # Falling back to the locale reproduces the old behaviour rather than silently
-    # switching that machine to English.
-    if ([string]::IsNullOrWhiteSpace($language)) { $language = $locale }
-
     $userData = Get-CloudInitUserData -Server $Server -Defaults $Defaults -HostName $HostName `
-        -Language $language -Locale $locale -Keymap $keymap -TimeZone $timeZone -Family $family -Distro $distro
+        -Family $family -Distro $distro
     $metaData = Get-CloudInitMetaData -HostName $HostName
     $networkConfig = Get-CloudInitNetworkConfig -Server $Server -MacAddress $NicMacAddress
 

@@ -43,7 +43,6 @@ part is edited by hand.
 | `ubuntu-26.04-server-cloudimg-amd64.img` | cloud-images.ubuntu.com, qcow2 |
 | `debian-12-genericcloud-amd64.qcow2` | cloud.debian.org, qcow2 |
 | `debian-13-genericcloud-amd64.qcow2` | cloud.debian.org, qcow2 |
-| `Fedora-Cloud-Base-Generic-42-1.1.x86_64.qcow2` | download.fedoraproject.org, qcow2 |
 | `Fedora-Cloud-Base-Generic-43-1.6.x86_64.qcow2` | download.fedoraproject.org, qcow2 |
 | `Rocky-9-GenericCloud-Base.latest.x86_64.qcow2` | dl.rockylinux.org, qcow2 |
 | `Rocky-10-GenericCloud-Base.latest.x86_64.qcow2` | dl.rockylinux.org, qcow2 |
