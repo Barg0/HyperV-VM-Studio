@@ -1337,8 +1337,13 @@ function Write-DownloadProgressLine {
 }
 
 # ---------------------------[ Placement ]---------------------------
-# How long a graceful shutdown may take before the VM is skipped rather than forced.
-$script:shutdownTimeoutSeconds = 300
+# How long a shutdown may take before the VM is skipped. Longer than Hyper-V's own
+# window on purpose: with -Force, Hyper-V gives the guest five minutes and then shuts it
+# down itself (Stop-VM docs) - wait exactly those five minutes and a VM goes Off a moment
+# after the script has already given up on it, and is never started again.
+$script:shutdownTimeoutSeconds = 360
+# The Guest Service Shutdown integration component, by id - its Name is localized.
+$script:shutdownServiceId = "9F8233AC-BE49-4C79-8EE3-E7E1985B2077"
 
 function Get-PlacementRoots {
     # The two roots every VM belongs under: the parameters when given, else the
@@ -1506,24 +1511,54 @@ function Test-FreeSpaceForMoves {
 function Stop-VmGracefully {
     # A guest shutdown through the integration service, waited for. Never a turn off:
     # a VM that will not shut down cleanly is one to look at, not one to move.
+    #
+    # The service is checked first, because Stop-VM -Force does not fail when nobody
+    # answers - it powers the VM off. Tried on HV-01: a VM whose shutdown service said
+    # "No Contact" (no OS, sitting in firmware) was Off within a second, no error. The
+    # same holds for a Linux guest without hv_utils, a VM at a boot menu or installer,
+    # or a hung guest. So the request is only made to a VM whose service is up.
+    # -Force stays: a job cannot answer the "unsaved data / locked" prompt.
     param([object]$Vm)
+
+    $service = @(Get-VMIntegrationService -VM $Vm -ErrorAction SilentlyContinue |
+                 Where-Object { [string]$_.Id -like "*$($script:shutdownServiceId)*" }) | Select-Object -First 1
+    if ($null -eq $service -or -not $service.Enabled -or [string]$service.PrimaryOperationalStatus -ne "Ok") {
+        $why = if ($null -eq $service) { "no shutdown integration service" }
+               elseif (-not $service.Enabled) { "its shutdown integration service is disabled" }
+               else { "its shutdown integration service is not answering ($($service.PrimaryStatusDescription))" }
+        Write-Log "'$($Vm.Name)' skipped - $why, and a shutdown request would power it off. Shut it down yourself, or use -Live" -Tag "Error"
+        return $false
+    }
 
     Write-Log "Shutting down '$($Vm.Name)'" -Tag "Run"
     try {
-        Stop-VM -VM $Vm -Force -ErrorAction Stop -AsJob | Out-Null
+        $job = Stop-VM -VM $Vm -Force -AsJob -ErrorAction Stop
     }
     catch {
         Write-Log "Shutdown of '$($Vm.Name)' could not be requested: $($_.Exception.Message)" -Tag "Error"
         return $false
     }
-    $deadline = (Get-Date).AddSeconds($script:shutdownTimeoutSeconds)
-    while ((Get-Date) -lt $deadline) {
-        $state = [string](Get-VM -Id $Vm.Id).State
-        if ($state -eq "Off") { return $true }
-        Start-Sleep -Seconds 2
+    try {
+        $deadline = (Get-Date).AddSeconds($script:shutdownTimeoutSeconds)
+        while ((Get-Date) -lt $deadline) {
+            if ([string](Get-VM -Id $Vm.Id).State -eq "Off") { return $true }
+            if ($job.State -eq "Failed") {
+                $null = Receive-Job -Job $job -ErrorAction SilentlyContinue -ErrorVariable jobErrors 2>$null
+                $text = if ($jobErrors) { $jobErrors[0].Exception.Message } else { [string]$job.ChildJobs[0].JobStateInfo.Reason }
+                Write-Log "Shutdown of '$($Vm.Name)' failed: $text" -Tag "Error"
+                return $false
+            }
+            Start-Sleep -Seconds 2
+        }
+        # One last look: the deadline sits past Hyper-V's five minutes, so a guest it
+        # had to shut down itself is Off by now and is treated like any other.
+        if ([string](Get-VM -Id $Vm.Id).State -eq "Off") { return $true }
+        Write-Log "'$($Vm.Name)' is not off after $($script:shutdownTimeoutSeconds)s - skipped, not forced" -Tag "Error"
+        return $false
     }
-    Write-Log "'$($Vm.Name)' is not off after $($script:shutdownTimeoutSeconds)s - skipped, not forced" -Tag "Error"
-    return $false
+    finally {
+        Remove-Job -Job $job -Force -ErrorAction SilentlyContinue
+    }
 }
 
 function Move-VmIntoPlace {

@@ -4985,6 +4985,10 @@ function isAdDomainController(server) {
    server, built-in Administrator included. Every other client stays locked off. */
 function supportsBuiltInAdminOnly(server) {
   const img = findImage(server && server.imageId);
+  /* Linux has no built-in Administrator: the VM's one account is the local user
+     cloud-init creates. Left on from a Windows image, the flag dropped localUserName
+     from the export and Build-Vms.ps1 fell back to a user called "admin". */
+  if (isLinuxImage(img)) return false;
   if (img.kind !== "client") return true;
   return img.id === "w11-enterprise-ms";
 }
@@ -9833,8 +9837,14 @@ const ovExpanded = Object.create(null);
 let ovCompact = false;
 let ovFilter = "";
 
+/* The name the VM registers in DNS: the domain it joins. The fixed FQDN in General
+   Settings only names Hyper-V objects and folders (Get-ServerNamingSuffix), so it is
+   used only for a domain controller that builds its domain rather than joining one. */
 function ovFqdn(s) {
-  const suffix = namingSuffixForServer(s);
+  const joined = effectiveDomainJoinAccount(s);
+  const suffix = joined
+    ? String(joined.domain || "").trim().replace(/\.+$/, "").toLowerCase()
+    : namingSuffixForServer(s);
   const name = String(s.name || "").trim() || "vm";
   return suffix ? name + "." + suffix : name;
 }
@@ -9864,11 +9874,29 @@ function ovConnectCommands(s) {
     const key = String(s.sshAuthorizedKey || "").trim() ? ` -i ~/.ssh/${sshKeyFileName(s)}` : "";
     return [{ primary: true, icon: "ssh.svg", label: "SSH", cmd: `ssh${key} ${ovSignInUser(s) || "root"}@${host}` }];
   }
-  return [
-    { primary: true, icon: "rdp.svg", label: "RDP", rdp: true },
-    // Same rule as the .rdp file: a domain VM takes whoever you are signed in as.
-    { icon: "powershell.svg", label: "PowerShell", cmd: `Enter-PSSession -ComputerName ${host}${ovInDomain(s) ? "" : " -Credential " + ovCredential(s)}` }
-  ];
+  const cmds = [{ primary: true, icon: "rdp.svg", label: "RDP", rdp: true }];
+  /* No PowerShell on Windows client images: WinRM is off there by default and nothing
+     in the build turns it on, so the command could only fail. */
+  if (findImage(s.imageId).kind === "client") return cmds;
+  /* Always with -Credential. Without it WinRM signs in as whoever runs the command,
+     which only works from a PC joined to the lab's domain - elsewhere it fails on
+     Kerberos instead of asking for a password. A workgroup VM is reached by IP, and
+     WinRM only authenticates to an address it trusts, so the TrustedHosts entry comes
+     first (once per admin PC; -Concatenate keeps the entries already there). */
+  const ps = ovInDomain(s)
+    ? `Enter-PSSession -ComputerName ${host} -Credential ${ovDomainCredential(s)}`
+    : `Set-Item WSMan:\\localhost\\Client\\TrustedHosts -Value ${host} -Concatenate -Force; Enter-PSSession -ComputerName ${host} -Credential ${ovCredential(s)}`;
+  cmds.push({ icon: "powershell.svg", label: "PowerShell", cmd: ps });
+  return cmds;
+}
+/* A domain account to sign in with: the join account's user when the studio knows one,
+   in its own domain's UPN form so it cannot be read as a local user. */
+function ovDomainCredential(s) {
+  const acc = effectiveDomainJoinAccount(s);
+  const dom = acc ? String(acc.domain || "").trim() : namingSuffixForServer(s);
+  const raw = acc ? String(acc.joinUser || "").trim() : "";
+  const user = raw.replace(/^.*\\/, "").replace(/@.*$/, "") || "Administrator";
+  return dom ? user + "@" + dom : user;
 }
 /* A .rdp file rather than an mstsc command line: it opens on double-click, carries the
    user name so only the password is asked for, and can be kept next to the lab's notes.

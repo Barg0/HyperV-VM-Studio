@@ -65,8 +65,11 @@ delete and exits with code 1.
 checkpoints) in `<VM path>\<name>\`, every disk in `<VHD path>\<name>\`, with the host's
 Hyper-V defaults as the paths. This finds every VM that does not match and moves it into
 place with `Move-VMStorage`. By default a running VM is shut down first — a graceful guest
-shutdown, never a turn off; a VM that is not off within five minutes is skipped — and
-started again once its files are in place, so the disks move cold. `-Live` (or "Move live"
+shutdown, never a turn off. A VM whose shutdown integration service is not answering
+(no Hyper-V daemons in a Linux guest, a boot menu, a hung guest) is skipped, because
+Hyper-V would power it off rather than shut it down; one that is not off within six
+minutes is skipped too. Once its files are in place it is started again, so the disks
+move cold. `-Live` (or "Move live"
 in the menu) keeps it running instead, the same live storage migration Hyper-V Manager's
 "Move..." does. Folders left empty behind are removed; host default folders and drive
 roots never are.
