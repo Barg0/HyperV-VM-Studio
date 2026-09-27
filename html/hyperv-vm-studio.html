@@ -864,6 +864,22 @@
   .keymap { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 8px 16px; }
   .keymap div { font-size: 12px; color: var(--fg-muted); display: flex; align-items: baseline; gap: 8px; }
 
+  /* Overview's SSH key how-to: two platforms side by side, each command block copyable. */
+  .ssh-howto { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 18px; }
+  .ssh-os { display: flex; align-items: center; gap: 8px; font-weight: 600; margin-bottom: 8px; }
+  .ssh-os img { width: 16px; height: 16px; }
+  .ssh-os .hint { font-weight: 400; }
+  .ssh-os.ssh-sub { font-weight: 500; font-size: 12px; color: var(--fg-muted); margin-top: 12px; }
+  .cmd-block { position: relative; margin-bottom: 8px; }
+  /* The PowerShell viewer's editor palette, so every command in the studio reads alike. */
+  .cmd-block pre {
+    margin: 0; padding: 12px 48px 12px 14px; overflow-x: auto; font-family: var(--mono); font-size: 12.5px; line-height: 1.6;
+    background: var(--ps-editor-bg); color: var(--ps-fg);
+    border: 1px solid var(--ps-gutter-border); border-radius: var(--radius-lg);
+  }
+  .cmd-block .btn.icon { position: absolute; top: 7px; right: 7px; background: transparent; border-color: transparent; color: var(--ps-gutter-fg); }
+  .cmd-block .btn.icon:hover { background: color-mix(in srgb, var(--ps-fg) 10%, transparent); color: var(--ps-fg); }
+  @media (max-width: 1000px) { .ssh-howto { grid-template-columns: 1fr; } }
   .tip-box {
     display: flex; gap: 10px; align-items: flex-start; font-size: 12px; line-height: 1.6;
     background: var(--accent-soft); border: 1px solid color-mix(in srgb, var(--accent) 35%, var(--border));
@@ -921,6 +937,15 @@
     background: var(--bg);
   }
   .pw-row:hover { border-color: color-mix(in srgb, var(--accent) 35%, var(--border)); }
+  /* The row a VM overview card sent you to: two soft pulses of the accent, then gone. */
+  .pw-row.pw-flash { animation: pw-flash 1.2s ease-out; }
+  @keyframes pw-flash {
+    0%, 50%  { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 16%, var(--bg)); box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 35%, transparent); }
+    25%, 100% { border-color: var(--border); background: var(--bg); box-shadow: none; }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .pw-row.pw-flash { animation: none; border-color: var(--accent); }
+  }
   .pw-row > .pw-ico { display: flex; align-items: center; justify-content: center; }
   .pw-row > .pw-ico img { width: 20px; height: 20px; }
   .pw-identity { min-width: 0; }
@@ -944,10 +969,149 @@
   /* The user name carries its own Copy so the account is as reachable as the secret. */
   .pw-usercell { display: flex; align-items: center; gap: 6px; min-width: 0; }
   .pw-usercell .btn.icon { flex-shrink: 0; }
+  /* SSH keys: the same row as a password, so the two lists read as one table. The key
+     field is not a secret and not an error when empty - a Linux VM without a key still
+     has its console password - so it never takes the red missing border. */
+  .pw-section { font-size: 15px; font-weight: 600; margin: 22px 0 10px; display: flex; align-items: center; gap: 8px; }
+  .pw-section img { width: 18px; height: 18px; }
+  .pw-field.pw-pubkey { font-weight: 400; color: var(--fg-muted); text-overflow: ellipsis; }
   @media (max-width: 1000px) {
     .pw-row { grid-template-columns: 22px minmax(0, 1fr) auto; }
     .pw-usercell { grid-column: 2 / 3; grid-row: 2; }
     .pw-field:not(.pw-user) { grid-column: 3 / -1; grid-row: 2; }
+  }
+
+  /* VM overview blade: one card per VM. --tone is the machine's own band colour - the
+     header wash, the glyph tile and the address all take it, so a card reads as Linux
+     or Windows before a word of it is read. */
+  .ov-pointer { display: flex; align-items: center; gap: 12px; }
+  .ov-pointer > img { width: 22px; height: 22px; }
+  .ov-pointer > div { flex: 1; min-width: 0; }
+  .ov-pointer .hint { margin-top: 2px; }
+  .ov-list { display: flex; flex-direction: column; gap: 16px; }
+  .ov-list.compact { display: grid; grid-template-columns: repeat(auto-fill, minmax(620px, 1fr)); gap: 14px; }
+  .ov-vm {
+    background: var(--bg-elevated); border: 1px solid var(--border); border-radius: var(--radius-lg);
+    box-shadow: var(--shadow); overflow: hidden; min-width: 0;
+  }
+  .ov-vm[hidden] { display: none; }
+  .ov-vm:hover { border-color: color-mix(in srgb, var(--tone) 30%, var(--border)); }
+  /* Same header as every collapsible card in the studio: chevron on the left, the whole
+     bar toggles. Compact mode has nothing to fold, so it drops both. */
+  .ov-head {
+    display: grid; grid-template-columns: auto auto minmax(0, 1fr) auto; gap: 14px; align-items: center;
+    padding: 16px 18px; border-bottom: 1px solid var(--divider); background: var(--bg-subtle);
+  }
+  .ov-head[data-ov-collapse] { cursor: pointer; user-select: none; }
+  .ov-head[data-ov-collapse]:hover { background: var(--bg-hover); }
+  .ov-vm.collapsed .ov-head { border-bottom: 1px solid var(--divider); }
+  .ov-badge {
+    width: 48px; height: 48px; border-radius: var(--radius-lg); display: grid; place-items: center;
+    background: color-mix(in srgb, var(--tone) 14%, var(--bg)); border: 1px solid color-mix(in srgb, var(--tone) 38%, var(--border));
+  }
+  .ov-badge img { width: 28px; height: 28px; }
+  .ov-id { min-width: 0; }
+  .ov-title { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+  /* Role, status and workgroup pills sit in one row, so they share one box: same
+     height, same type, whatever class they come from. */
+  .ov-title .pill {
+    height: 24px; padding: 0 10px; font-size: 11px; font-weight: 700; letter-spacing: .4px;
+    text-transform: uppercase; line-height: 1;
+  }
+  .ov-title .pill img { width: 13px; height: 13px; }
+  /* The plain pill (Workgroup) has no hue of its own; a stronger edge keeps its box as
+     visible as the tinted ones beside it. */
+  .ov-title .pill:not(.role):not(.status) { border-color: var(--border-strong); }
+  .ov-title .pill.status.info { color: var(--accent); background: color-mix(in srgb, var(--accent) 14%, transparent); }
+  .ov-name { font-size: 20px; font-weight: 600; margin-right: 2px; }
+  .ov-os { display: flex; align-items: center; gap: 7px; color: var(--fg-muted); margin-top: 5px; font-size: 12.5px;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .ov-os img { width: 14px; height: 14px; flex-shrink: 0; }
+  .ov-sep { opacity: .5; }
+  .ov-connect { display: flex; gap: 8px; align-items: center; justify-content: flex-end; flex-wrap: wrap; }
+  .ov-vm:not(.collapsed) .ov-chev { transform: rotate(90deg); }
+  /* The reach strip and the details share one four-column grid, so every divider runs
+     straight down the card - and the label column is fixed, so values line up too. */
+  .ov-reach { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); }
+  .ov-reach > div { padding: 12px 18px 13px; min-width: 0; border-left: 1px solid var(--divider); }
+  .ov-reach > div:first-child { border-left: none; }
+  .ov-label { display: flex; align-items: center; gap: 6px; font-size: 10.5px; font-weight: 700; letter-spacing: .5px;
+    text-transform: uppercase; color: var(--fg-muted); margin-bottom: 6px; }
+  .ov-label img { width: 13px; height: 13px; }
+  .ov-val { font-family: var(--mono); font-size: 15px; font-weight: 600; min-width: 0; }
+  .ov-val.ov-ip { font-size: 19px; color: var(--tone); }
+  .ov-pre { color: var(--fg-muted); font-weight: 400; font-size: 14px; }
+  .ov-val.ov-dhcp { font-family: var(--font); color: var(--warn); }
+  .ov-sub { font-size: 11.5px; color: var(--fg-muted); margin-top: 4px; font-family: var(--mono);
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  /* Small enough to sit where a sub-line would, so the four reach cells keep one height. */
+  .ov-pw { height: 24px; padding: 0 9px; font-size: 11.5px; gap: 6px; margin-top: 5px; }
+  /* The arrow takes the Deploy band - the colour of the Passwords blade it leads to. */
+  .ov-pw svg { width: 13px; height: 13px; color: var(--secret-glyph); }
+  /* Copy on click: reads as plain text until hovered. */
+  .ov-cv { display: inline-flex; align-items: center; gap: 6px; max-width: 100%; min-width: 0; cursor: pointer;
+    border-radius: var(--radius); padding: 1px 5px; margin: -1px -5px; }
+  .ov-cv > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+  .ov-cv svg { width: 13px; height: 13px; opacity: 0; color: var(--fg-muted); flex-shrink: 0; transition: opacity .1s; }
+  .ov-cv:hover { background: var(--bg-hover); }
+  .ov-cv:hover svg { opacity: 1; }
+  .ov-cv.copied svg { color: var(--success); opacity: 1; }
+  .ov-details { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); border-top: 1px solid var(--divider); }
+  .ov-sec { padding: 14px 18px 16px; border-left: 1px solid var(--divider); min-width: 0; }
+  .ov-sec:first-child { border-left: none; }
+  .ov-sec-h { display: flex; align-items: center; gap: 8px; font-size: 12px; font-weight: 700; margin-bottom: 10px; }
+  .ov-sec-h img { width: 16px; height: 16px; }
+  .ov-kv { display: grid; grid-template-columns: 108px minmax(0, 1fr); gap: 6px 12px; font-size: 12px; align-items: baseline; }
+  .ov-kv dt { color: var(--fg-muted); white-space: nowrap; }
+  .ov-kv dd { font-family: var(--mono); min-width: 0; overflow-wrap: anywhere; }
+  .ov-kv dd.txt { font-family: var(--font); }
+  .ov-kv code { font-size: 12px; }
+  .ov-nic2 { margin-top: 10px; padding-top: 10px; border-top: 1px dashed var(--divider); }
+  .ov-muted { color: var(--fg-muted); }
+  .ov-off { color: var(--fg-muted); font-family: var(--font); font-style: italic; }
+  .ov-yes { color: var(--success-text); }
+  .ov-ticks { display: inline-flex; gap: 5px; flex-wrap: wrap; }
+  .ov-ticks span { font-family: var(--font); font-size: 11px; padding: 1px 6px; border-radius: var(--radius-lg);
+    border: 1px solid var(--border); color: var(--fg-muted); }
+  .ov-ticks span.on { color: var(--success-text); border-color: color-mix(in srgb, var(--success) 40%, var(--border)); }
+  .ov-disk { display: flex; flex-direction: column; gap: 2px; }
+  .ov-disk .ov-muted { font-size: 11px; }
+  .ov-features { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; padding: 11px 18px;
+    border-top: 1px solid var(--divider); background: var(--bg-subtle); }
+  .ov-flabel { font-size: 10.5px; font-weight: 700; letter-spacing: .5px; text-transform: uppercase; color: var(--fg-muted); margin-right: 4px; }
+  .ov-vm.collapsed .ov-details, .ov-vm.collapsed .ov-features,
+  .ov-list.compact .ov-details, .ov-list.compact .ov-features, .ov-list.compact .ov-chev { display: none; }
+  .ov-list.compact .ov-head { grid-template-columns: auto minmax(0, 1fr) auto; }
+  .ov-list.compact .ov-reach { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .ov-list.compact .ov-reach > div:nth-child(3) { border-left: none; }
+  .ov-list.compact .ov-reach > div:nth-child(n+3) { border-top: 1px solid var(--divider); }
+  .ov-search {
+    height: 32px; width: 230px; padding: 0 10px 0 30px; border: 1px solid var(--input-border); border-radius: var(--radius);
+    background: var(--bg-elevated) no-repeat 9px center / 14px; color: var(--fg); outline: none;
+  }
+  .ov-search:focus { border-color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent); }
+  .ov-seg { display: inline-flex; }
+  .ov-seg .btn { border-radius: 0; }
+  .ov-seg .btn + .btn { margin-left: -1px; }
+  .ov-seg .btn:first-child { border-radius: var(--radius) 0 0 var(--radius); }
+  .ov-seg .btn:last-child { border-radius: 0 var(--radius) var(--radius) 0; }
+  .ov-seg .btn.on { background: var(--accent-soft); border-color: var(--accent-border); position: relative; }
+  @media (max-width: 1350px) {
+    .ov-details, .ov-reach { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .ov-sec:nth-child(3), .ov-reach > div:nth-child(3) { border-left: none; }
+    .ov-sec:nth-child(n+3), .ov-reach > div:nth-child(n+3) { border-top: 1px solid var(--divider); }
+  }
+  @media (max-width: 1000px) {
+    .ov-head { grid-template-columns: auto auto minmax(0, 1fr); }
+    .ov-connect { grid-column: 1 / -1; justify-content: flex-start; }
+    .ov-list.compact { grid-template-columns: 1fr; }
+    .ov-list.compact .ov-head { grid-template-columns: auto minmax(0, 1fr); }
+  }
+  @media (max-width: 700px) {
+    .ov-details, .ov-reach, .ov-list.compact .ov-reach { grid-template-columns: 1fr; }
+    .ov-sec, .ov-reach > div { border-left: none !important; }
+    .ov-sec + .ov-sec, .ov-reach > div + div { border-top: 1px solid var(--divider); }
+    .ov-search { width: 100%; }
   }
 
   .issue-list { display: flex; flex-direction: column; gap: 8px; }
@@ -969,12 +1133,23 @@
     background: color-mix(in srgb, var(--warn) 15%, transparent); border: 1px solid var(--warn);
     padding: 10px 12px; border-radius: var(--radius); margin-bottom: 12px;
   }
+  /* Floats clear of the page scrollbar, with a status stripe on the left: success green,
+     or danger red for an error. --tone carries the one colour both the stripe and the
+     glyph take. */
   .toast {
-    position: fixed; right: 16px; bottom: 16px; background: var(--bg-elevated); border: 1px solid var(--border);
-    padding: 10px 14px; border-radius: var(--radius); box-shadow: var(--shadow); display: none; z-index: 50;
+    --tone: var(--success);
+    position: fixed; right: 32px; bottom: 28px; z-index: var(--z-toast); max-width: min(460px, calc(100vw - 48px));
+    display: none; align-items: center; gap: 10px;
+    padding: 11px 18px 11px 14px; background: var(--bg-elevated);
+    border: 1px solid var(--border); border-left: 3px solid var(--tone); border-radius: var(--radius-lg);
+    box-shadow: var(--shadow-2);
   }
-  .toast.show { display: block; }
-  .toast.err { border-color: var(--danger); }
+  .toast.show { display: flex; animation: toast-in .18s ease-out; }
+  .toast.err { --tone: var(--danger); }
+  .toast svg { width: 16px; height: 16px; flex-shrink: 0; color: var(--tone); }
+  .toast span { min-width: 0; overflow-wrap: anywhere; line-height: 1.4; }
+  @keyframes toast-in { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+  @media (prefers-reduced-motion: reduce) { .toast.show { animation: none; } }
   /* Theme picker (Alacritty schemes — same as Ad Toolkit) */
   .theme-anchor { position: relative; }
   .theme-popover {
@@ -1495,7 +1670,7 @@
   <nav class="nav" id="nav"></nav>
   <main class="content" id="main"></main>
 </div>
-<div class="toast" id="toast"></div>
+<div class="toast" id="toast" role="status" aria-live="polite"></div>
 
 <div class="overlay" id="stateOverlay">
   <div class="modal">
@@ -1731,10 +1906,23 @@ const ICON_TEMPLATES = (() => {
   return out;
 })();
 
-/* Passwords is reached from Deploy, and a band follows the nav group an icon is reached
-   from, not what it depicts — so the secret glyph takes deploy, like Review and Export
-   beside it. Shipped as ident, which left one violet row in an orange group. */
-ICON_TEMPLATES["secret.svg"].band = "deploy";
+/* Deploy is the one nav group banded by SUBJECT, the way the sibling windows-feature-
+   toolbox bands its whole set: four blades on the group's orange read as one wall of
+   colour. So Passwords is an ident-violet key, Review a studio-grey magnifier, VM overview
+   a host-blue server rack and only Export - the actual hand-off - keeps Deploy orange. */
+ICON_TEMPLATES["search.svg"].band = "studio";
+/* SSH: a bare terminal, full-bleed, nothing but the prompt - no title bar, so it is not
+   PowerShell's window at a glance. Big seams, because it mostly lives on an accent
+   button, knocked out (see tintIconKnockout). */
+ICON_TEMPLATES["ssh.svg"] = { band: "host", markup:
+  '<g fill="@H"><rect x="1.6" y="2.2" width="14.8" height="13.6" rx="2"/></g>' +
+  S.replace('stroke-width="1.2"', 'stroke-width="1.7"') + '<path d="M5 6.4l2.8 2.6L5 11.6M9.6 12.2h3.6"/></g>' };
+/* RDP: a screen with a second, smaller desktop inside it - the remote one. The general
+   monitor glyph puts its screen high over a thin stand and sits visibly above a
+   button's text; this one centres its weight on the 18-unit box, stand included. */
+ICON_TEMPLATES["rdp.svg"] = { band: "host", markup:
+  '<g fill="@H"><rect x="1.6" y="2.8" width="14.8" height="10.2" rx="1.4"/><rect x="5.4" y="13.8" width="7.2" height="1.8" rx=".9"/></g>' +
+  S.replace('stroke-width="1.2"', 'stroke-width="1.5"') + '<rect x="4.6" y="5.6" width="8.8" height="4.6" rx=".6"/></g>' };
 
 /* Image-picker OS markers. Drawn from what the machine IS, not from a vendor mark: the
    server is a rack of two node units, the client is a monitor on its stand. Bands carry
@@ -1750,6 +1938,9 @@ const OS_RACK =
   S + '<path d="M4.2 5.4h4.4M4.2 12.6h4.4"/><path d="M13.4 5.4h.01M13.4 12.6h.01"/></g>';
 ICON_TEMPLATES["azure-local.svg"] = { band: "ident", markup: OS_RACK };
 ICON_TEMPLATES["os-server-panes.svg"] = { band: "work", markup: OS_RACK };
+/* VM overview takes the same rack - the blade is every machine at a glance - on the host
+   blue, so it is not mistaken for a green server image in the list beside it. */
+ICON_TEMPLATES["vm-overview.svg"] = { band: "host", markup: OS_RACK };
 /* No seam on this one: the neck and base already read as a monitor, and a screen rect
    inside the panel only crowded it at 12px. The band still carries the colour. */
 ICON_TEMPLATES["os-client-panes.svg"] = { band: "host", markup:
@@ -1841,6 +2032,20 @@ function tintIconOnAccent(name, theme) {
   return (_iconCache[key] = "data:image/svg+xml," + encodeURIComponent(svg));
 }
 
+/* On an accent button, but with the seams cut back out in the accent itself. The plain
+   on-accent tint paints seams the same colour as the silhouette, which is right for a
+   solid mark like export and turns a glyph whose meaning IS its seams - a prompt, a
+   screen - into a blank tile. */
+function tintIconKnockout(name, theme) {
+  const def = ICON_TEMPLATES[name] || ICON_TEMPLATES["vm.svg"];
+  const key = theme.id + "|knockout|" + name;
+  if (_iconCache[key]) return _iconCache[key];
+  const svg = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 18 18">' +
+    def.markup.split("@H").join(theme.accentFg).split("@S").join(theme.accent)
+      .replace(/@B:[a-zA-Z]+/g, theme.accentFg) + "</svg>";
+  return (_iconCache[key] = "data:image/svg+xml," + encodeURIComponent(svg));
+}
+
 /* For a destructive control: the glyph carries the theme's danger hue instead of its
    band, seams still pulled toward the background so it reads as one mark at 16px. */
 function tintIconDanger(name, theme) {
@@ -1879,6 +2084,9 @@ function iconSrc(name) {
 }
 function iconSrcOnAccent(name) {
   return tintIconOnAccent(name, currentTheme());
+}
+function iconSrcKnockout(name) {
+  return tintIconKnockout(name, currentTheme());
 }
 function iconSrcDanger(name) {
   return tintIconDanger(name, currentTheme());
@@ -1932,8 +2140,9 @@ const BLADES = [
   { id: "cluster",    group: "Clustering", label: "Failover Cluster",    icon: "virtual-clusters.svg", desc: "The host failover cluster — name it once, spread the VMs across your CSVs, pick which ones get added." },
   { id: "domainjoin", group: "Identity",   label: "Domain Join",         icon: "identity.svg", desc: "Join accounts defined once, then attached to VMs — one per tier or OU, with a target OU per machine." },
   { id: "azurearc",   group: "Identity",   label: "Azure Arc",           icon: "arc.svg",      desc: "Arc landing zones — subscription, tenant, resource group, region, credentials." },
-  { id: "review",     group: "Deploy",     label: "Review and validate", icon: "search.svg",   desc: "Full summary of everything configured plus every offline consistency check." },
-  { id: "passwords",  group: "Deploy",     label: "Passwords",           icon: "secret.svg",     desc: "The local account passwords this studio generates, in one place — reveal, copy, regenerate." },
+  { id: "review",     group: "Deploy",     label: "Review and validate", icon: "search.svg",   desc: "Every offline consistency check, plus the lab-wide summary: files, networks, identity, cluster." },
+  { id: "vmoverview", group: "Deploy",     label: "VM overview",         icon: "vm-overview.svg", desc: "Every VM's FQDN, address, sign-in and connect commands, with the rest of its settings underneath." },
+  { id: "passwords",  group: "Deploy",     label: "Passwords",           icon: "key.svg",     desc: "The local account passwords this studio generates, in one place — reveal, copy, regenerate." },
   { id: "export",     group: "Deploy",     label: "Export",              icon: "export.svg",   desc: "Download config.json and drop it next to Build-Vms.ps1." }
 ];
 
@@ -2508,6 +2717,11 @@ const IMAGE_CATALOG = [
   },
   {
     id: "debian12",
+    /* Arc is offered on Debian 13 only. Microsoft's supported-OS table ends Arc support
+       for Debian 12 in November 2026, and Debian itself moved 12 to LTS on 2026-07-11;
+       a lab VM built today would outlive the agent's support within weeks. */
+    noAzureArc: true,
+    noAzureArcReason: "Azure Arc support for Debian 12 ends November 2026 - use Debian 13 for Arc",
     label: "Debian 12 (Bookworm)",
     icon: "os-server-panes.svg",
     kind: "linux",
@@ -4523,9 +4737,6 @@ const state = {
     locale: LOCALE_DEFAULT,
     keyboardLayout: LOCALE_DEFAULT,
     passwordLength: 32,
-    /* One public key for every Linux VM, overridable per machine. Public key only -
-       nothing secret belongs in a config.json that gets passed around. */
-    sshAuthorizedKey: "",
     imageProfiles: defaultImageProfiles()
   },
   domainJoinAccounts: [],
@@ -4571,7 +4782,10 @@ function esc(s) {
 }
 function toast(msg, err) {
   const t = document.getElementById("toast");
-  t.textContent = msg;
+  const glyph = err
+    ? '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 1.8l6.4 11.4H1.6L8 1.8z"/><path d="M8 6.4v3.2M8 11.4v.1"/></svg>'
+    : '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="8" cy="8" r="6.4"/><path d="M5.2 8.2l1.9 1.9 3.7-3.9"/></svg>';
+  t.innerHTML = glyph + `<span>${esc(msg)}</span>`;
   t.className = "toast show" + (err ? " err" : "");
   clearTimeout(toast._t);
   toast._t = setTimeout(() => t.classList.remove("show"), 2800);
@@ -5364,7 +5578,7 @@ function buildConfig() {
        the disk, and to pick the third-party UEFI CA Secure Boot template. */
     if (isLinuxServer(s)) {
       row.osFamily = "linux";
-      const sshKey = String(s.sshAuthorizedKey || "").trim() || String(state.defaults.sshAuthorizedKey || "").trim();
+      const sshKey = String(s.sshAuthorizedKey || "").trim();
       if (sshKey) row.sshAuthorizedKey = sshKey;
       const pkgs = linuxPackageList(s);
       if (pkgs.length) row.packages = pkgs;
@@ -5706,9 +5920,6 @@ function decodeState(text) {
     locale: LOCALE_DEFAULT,
     keyboardLayout: LOCALE_DEFAULT,
     passwordLength: 32,
-    /* One public key for every Linux VM, overridable per machine. Public key only -
-       nothing secret belongs in a config.json that gets passed around. */
-    sshAuthorizedKey: "",
     imageProfiles: defaultImageProfiles()
   }, parsed.defaults || {});
   delete state.defaults.azureArc;
@@ -5810,11 +6021,14 @@ function linuxPackageList(s) {
 }
 
 /* The private half of a generated key, kept in memory and nowhere else - keyed by
-   "gs" for the defaults card or the VM's id. Deliberately NOT in state: the save
+   the VM's id. Keys are per VM only; there is no shared default. Deliberately NOT in state: the save
    token is a string people paste into chats and tickets, and a private key that
    travels that way is a key that has to be replaced. The consequence is stated on
    the card - download it now, or generate another one. */
 const sshPrivateKeys = {};
+/* Which of those have been downloaded since they were generated - same lifetime, same
+   keying. It is what turns the Passwords blade's key column into a to-do list. */
+const sshKeysDownloaded = {};
 
 function sshUint32(n) {
   return new Uint8Array([(n >>> 24) & 255, (n >>> 16) & 255, (n >>> 8) & 255, n & 255]);
@@ -5899,16 +6113,74 @@ function downloadTextFile(name, text, mime) {
   a.click();
   URL.revokeObjectURL(a.href);
 }
+/* A store-only ZIP, built here because one click may only start one download - a
+   browser asked for six files at once blocks five of them or asks first. No
+   compression: a key is a few hundred bytes. Entries are marked "made by Unix" with
+   mode 0600, so unzip hands back files ssh will accept without a chmod. */
+const ZIP_CRC_TABLE = (() => {
+  const table = new Uint32Array(256);
+  for (let n = 0; n < 256; n++) {
+    let c = n;
+    for (let k = 0; k < 8; k++) c = (c & 1) ? (0xEDB88320 ^ (c >>> 1)) : (c >>> 1);
+    table[n] = c >>> 0;
+  }
+  return table;
+})();
+function zipCrc32(bytes) {
+  let c = 0xFFFFFFFF;
+  for (let i = 0; i < bytes.length; i++) c = ZIP_CRC_TABLE[(c ^ bytes[i]) & 255] ^ (c >>> 8);
+  return (c ^ 0xFFFFFFFF) >>> 0;
+}
+function buildZip(files) {
+  const enc = new TextEncoder();
+  const now = new Date();
+  const dosTime = (now.getHours() << 11) | (now.getMinutes() << 5) | (now.getSeconds() >> 1);
+  const dosDate = ((now.getFullYear() - 1980) << 9) | ((now.getMonth() + 1) << 5) | now.getDate();
+  const parts = [], central = [];
+  let offset = 0;
+  files.forEach(f => {
+    const name = enc.encode(f.name);
+    const data = enc.encode(f.text);
+    const crc = zipCrc32(data);
+    const local = new DataView(new ArrayBuffer(30));
+    local.setUint32(0, 0x04034b50, true); local.setUint16(4, 20, true); local.setUint16(6, 0x0800, true);
+    local.setUint16(8, 0, true); local.setUint16(10, dosTime, true); local.setUint16(12, dosDate, true);
+    local.setUint32(14, crc, true); local.setUint32(18, data.length, true); local.setUint32(22, data.length, true);
+    local.setUint16(26, name.length, true); local.setUint16(28, 0, true);
+    parts.push(new Uint8Array(local.buffer), name, data);
+    const cd = new DataView(new ArrayBuffer(46));
+    cd.setUint32(0, 0x02014b50, true); cd.setUint16(4, (3 << 8) | 20, true); cd.setUint16(6, 20, true);
+    cd.setUint16(8, 0x0800, true); cd.setUint16(10, 0, true); cd.setUint16(12, dosTime, true); cd.setUint16(14, dosDate, true);
+    cd.setUint32(16, crc, true); cd.setUint32(20, data.length, true); cd.setUint32(24, data.length, true);
+    cd.setUint16(28, name.length, true); cd.setUint16(30, 0, true); cd.setUint16(32, 0, true);
+    cd.setUint16(34, 0, true); cd.setUint16(36, 0, true); cd.setUint32(38, (0o100600 << 16) >>> 0, true);
+    cd.setUint32(42, offset, true);
+    central.push(new Uint8Array(cd.buffer), name);
+    offset += 30 + name.length + data.length;
+  });
+  const cdSize = central.reduce((n, a) => n + a.length, 0);
+  const end = new DataView(new ArrayBuffer(22));
+  end.setUint32(0, 0x06054b50, true); end.setUint16(8, files.length, true); end.setUint16(10, files.length, true);
+  end.setUint32(12, cdSize, true); end.setUint32(16, offset, true);
+  return new Blob([...parts, ...central, new Uint8Array(end.buffer)], { type: "application/zip" });
+}
+function downloadBlob(name, blob) {
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = name;
+  a.click();
+  URL.revokeObjectURL(a.href);
+}
+
 /* The comment is what shows up in authorized_keys and in `ssh-add -l`, so it says
    which VM the key was cut for rather than which browser cut it. */
 function sshKeyComment(s) {
-  if (!s) return "hyperv-vm-studio";
   const user = String(s.localUserName || "").trim() || "root";
   const host = String(s.name || "").trim() || "vm";
   return user + "@" + host;
 }
 function sshKeyFileName(s) {
-  const host = s ? (String(s.name || "").trim() || "vm") : "default";
+  const host = String(s.name || "").trim() || "vm";
   return host + "_id_ed25519";
 }
 function downloadIcon() {
@@ -6483,15 +6755,17 @@ function renderOverview() {
         `)}
 
         ${overviewStep(8, "search.svg", "Check your work", "Before you export", `
-          <p>Review and validate lists every setting the export will contain and runs every check that is possible without
+          <p>Review and validate lists the lab-wide settings the export will contain and runs every check that is possible without
           touching the host: duplicate names and IP addresses, addresses outside their subnet, missing passwords, domain or Arc
           references pointing at nothing, clustered VMs on storage worth a second look, features whose offline source is not
           configured.</p>
-          <p>Errors have to go. Warnings are judgement calls — read them and decide. The Passwords blade is where you can read
+          <p>Errors have to go. Warnings are judgement calls — read them and decide. VM overview is each machine on one card —
+          FQDN, address, sign-in and a ready-to-use RDP or SSH connection — and the Passwords blade is where you can read
           back every generated password before it is written into the file.</p>
           <div class="row">
             <button class="btn" type="button" data-goto="review"><img src="${iconSrc("search.svg")}" alt=""> Open Review and validate</button>
-            <button class="btn" type="button" data-goto="passwords"><img src="${iconSrc("secret.svg")}" alt=""> Open Passwords</button>
+            <button class="btn" type="button" data-goto="vmoverview"><img src="${iconSrc("vm-overview.svg")}" alt=""> Open VM overview</button>
+            <button class="btn" type="button" data-goto="passwords"><img src="${iconSrc("key.svg")}" alt=""> Open Passwords</button>
           </div>
         `)}
 
@@ -6542,6 +6816,8 @@ function renderOverview() {
       </div>
     `, "", false)}
 
+    ${gsCard("ov-ssh", "keys.svg", "Using the SSH keys", "Lock the key file down, then connect - Linux, macOS, Windows", renderSshKeyHowto(), "", false)}
+
     ${gsCard("ov-keys", "powershell.svg", "Driving the PowerShell menus", "Both scripts, same keys", `
       <div class="keymap">
         <div><kbd>↑</kbd> <kbd>↓</kbd><span>Move between entries</span></div>
@@ -6563,6 +6839,90 @@ function renderOverview() {
       <div class="warn-box" style="margin:12px 0 0">Passwords, domain join credentials and Arc secrets sit in plain text inside
       the state token and inside <code>config.json</code>. Protect or delete both once you are done.</div>
     `, "", false)}`;
+}
+
+/* How to use a downloaded key, per client OS. OpenSSH refuses a private key anyone else
+   can read ("UNPROTECTED PRIVATE KEY FILE! ... This private key will be ignored."), and a
+   browser download lands with the Downloads folder's permissions, so the first step on
+   every platform is taking the file back to its owner. A fixed example, never the loaded
+   config: this is documentation, and a real domain or user name has no business in it.
+   The VM overview's SSH button carries the real line for each VM. */
+function renderSshKeyHowto() {
+  const file = "lnx-01_id_ed25519";
+  const target = "labadmin@lnx-01.lab.example.invalid";
+  const unix = [
+    "mkdir -p ~/.ssh && chmod 700 ~/.ssh",
+    `mv ~/Downloads/${file} ~/.ssh/`,
+    `chmod 600 ~/.ssh/${file}`,
+    `ssh -i ~/.ssh/${file} ${target}`
+  ].join("\n");
+  const unixZip = [
+    "unzip ~/Downloads/ssh-keys.zip -d ~/.ssh",
+    "chmod 600 ~/.ssh/*_id_ed25519"
+  ].join("\n");
+  const win = [
+    `$key = "$env:USERPROFILE\\.ssh\\${file}"`,
+    `New-Item -ItemType Directory -Force "$env:USERPROFILE\\.ssh" | Out-Null`,
+    `Move-Item "$env:USERPROFILE\\Downloads\\${file}" $key`,
+    `icacls $key /inheritance:r /grant:r "$($env:USERDOMAIN)\\$($env:USERNAME):F"`,
+    `ssh -i $key ${target}`
+  ].join("\n");
+  const winZip = [
+    `Expand-Archive "$env:USERPROFILE\\Downloads\\ssh-keys.zip" "$env:USERPROFILE\\.ssh" -Force`,
+    `Get-ChildItem "$env:USERPROFILE\\.ssh\\*_id_ed25519" | ForEach-Object {`,
+    `    icacls $_.FullName /inheritance:r /grant:r "$($env:USERDOMAIN)\\$($env:USERNAME):F"`,
+    `}`
+  ].join("\n");
+  const block = (text, lang) => `
+    <div class="cmd-block"><pre>${lang === "ps" ? highlightPowerShell(text) : highlightShell(text)}</pre>
+      <button class="btn icon" type="button" data-ov-copy="${esc(text)}" title="Copy" aria-label="Copy commands">${copyIcon()}</button></div>`;
+  return `
+    <p class="hint" style="font-size:12.5px;margin:0 0 12px">Generate a key pair on a Linux VM's card, then download it from the
+    card or from Passwords - one <code>&lt;vm&gt;_id_ed25519</code> file, or every key at once in <code>ssh-keys.zip</code>.
+    OpenSSH ignores a private key that anyone but you can read, and a fresh download is readable by more than you, so lock
+    it down first.</p>
+    <div class="ssh-howto">
+      <div>
+        <div class="ssh-os"><img src="${iconSrcBand("vm.svg", "linux")}" alt="">Linux and macOS <span class="hint">Terminal</span></div>
+        ${block(unix, "sh")}
+        <div class="ssh-os ssh-sub">From <code>ssh-keys.zip</code></div>
+        ${block(unixZip, "sh")}
+        <p class="hint">The zip already marks every key 600, so <code>unzip</code> keeps them private; the chmod covers an
+        archive tool that drops the mode (macOS Archive Utility can).</p>
+      </div>
+      <div>
+        <div class="ssh-os"><img src="${iconSrc("os-client.svg")}" alt="">Windows <span class="hint">PowerShell, built-in OpenSSH client</span></div>
+        ${block(win, "ps")}
+        <div class="ssh-os ssh-sub">From <code>ssh-keys.zip</code></div>
+        ${block(winZip, "ps")}
+        <p class="hint"><code>/inheritance:r</code> drops the rights the file picked up from its folder;
+        <code>/grant:r</code> leaves you as the only account on it. Windows OpenSSH also accepts Administrators and SYSTEM.</p>
+      </div>
+    </div>
+    <div class="tip-box" style="margin-top:12px"><img src="${iconSrc("help.svg")}" alt="">
+      <div>Seeing <code>Permissions 0644 for '…' are too open</code> or <code>bad permissions</code>? That is this step, not
+      the VM. The VM overview's SSH button copies the same <code>ssh -i</code> line for each Linux VM.</div>
+    </div>`;
+}
+
+/* Just enough of a shell tokenizer for the one-line commands this studio prints, in the
+   same editor palette as the PowerShell viewer: the command word, its flags, numbers,
+   operators, and paths or user@host targets as the string colour. */
+function highlightShell(code) {
+  return String(code || "").split("\n").map(line => {
+    let commandNext = true;
+    return line.split(/(\s+)/).map(tok => {
+      if (!tok || /^\s+$/.test(tok)) return tok;
+      let cls;
+      if (tok === "&&" || tok === "|" || tok === ";") { commandNext = true; cls = "ps-operator"; }
+      else if (commandNext) { commandNext = false; cls = "ps-cmdlet"; }
+      else if (/^-/.test(tok)) cls = "ps-param";
+      else if (/^\d+$/.test(tok)) cls = "ps-number";
+      else if (/[\/~@*]/.test(tok)) cls = "ps-string";
+      else cls = "ps-ident";
+      return `<span class="ps-tok ${cls}">${esc(tok)}</span>`;
+    }).join("");
+  }).join("\n");
 }
 
 function gs(key, defaultOpen) { return (state.expanded[key] === undefined ? !!defaultOpen : !!state.expanded[key]); }
@@ -6656,21 +7016,6 @@ function renderGeneral() {
         </select>`)}
       </div>`, "", true)}
 
-    ${gsCard("gs-sshkey", "secret.svg", "Linux SSH key", (String(d.sshAuthorizedKey || "").trim() ? "set" : "none"), `
-      <label class="field"><span>Default SSH authorized key</span>
-        <div class="edit-field">
-          <input data-d="sshAuthorizedKey" data-name-input="sshkey:gs" class="keep-border" value="${esc(d.sshAuthorizedKey || "")}" placeholder="ssh-ed25519 AAAAC3Nza... user@host" spellcheck="false"${state.nameEdit["sshkey:gs"] ? "" : " readonly"}>
-          <button class="btn icon" type="button" data-gen-ssh="gs"
-            title="Generate an Ed25519 key pair" aria-label="Generate an SSH key pair">${regenIcon()}</button>
-          <button class="btn icon" type="button" data-name-edit="sshkey:gs"
-            title="${state.nameEdit["sshkey:gs"] ? "Done" : "Edit the key"}" aria-label="${state.nameEdit["sshkey:gs"] ? "Done" : "Edit the key"}">${state.nameEdit["sshkey:gs"] ? checkIcon() : pencilIcon()}</button>
-          <button class="btn icon" type="button" data-dl-ssh="gs"${sshPrivateKeys.gs ? "" : " disabled"}
-            title="${sshPrivateKeys.gs ? "Download the private key" : "Generate a key pair first"}" aria-label="Download the private key">${downloadIcon()}</button>
-        </div>
-        <span class="hint">Public key only. Every Linux VM inherits this unless its own card overrides it. A Linux VM with no key anywhere can only be reached with its password, at the Hyper-V console.${sshPrivateKeys.gs
-          ? " <strong>The private key is held in this tab and in no save token</strong> — download it before you leave the page."
-          : ""}</span>
-      </label>`)}
     ${gsCard("gs-paths", "storage.svg", "Paths", "Gold VHDX, VM/VHD paths, SxS source", `
       <div class="grid-2" style="align-items:start">
         ${field(fieldLabel("vm.svg", "VM path"), pathField("vmPath", d.vmPath, "blank = Hyper-V host default", `class="keep-border ${inv("d:vmPath")}"${invAria("d:vmPath")}`))}
@@ -7738,7 +8083,7 @@ function renderServerCard(s) {
                 <button class="btn icon" type="button" data-dl-ssh="${esc(s._id)}"${sshPrivateKeys[s._id] ? "" : " disabled"}
                   title="${sshPrivateKeys[s._id] ? "Download the private key" : "Generate a key pair first"}" aria-label="Download the private key">${downloadIcon()}</button>
               </div>
-              <span class="hint">Public key only. Blank falls back to the key in General Settings; with neither, the password is the only way in.${sshPrivateKeys[s._id]
+              <span class="hint">Public key only, for this VM alone. Blank means the password is the only way in, at the Hyper-V console.${sshPrivateKeys[s._id]
                 ? " <strong>The private key is held in this tab and in no save token</strong> — download it before you leave the page."
                 : ""}</span>`;
               })())}
@@ -8556,7 +8901,7 @@ function vmPlacementSummary(s) {
 }
 
 /* The whole lab's on-disk layout, told machine by machine in the same flat language as
-   the per-VM summary. Shared VHD Sets get their own block, because they belong to
+   the VM overview cards. Shared VHD Sets get their own block, because they belong to
    several machines and would otherwise be printed under each of them. */
 function renderLabelledPlacement(servers) {
   if (!servers.length) return `<p class="hint">No virtual machines yet.</p>`;
@@ -8590,8 +8935,9 @@ function renderLabelledPlacement(servers) {
 
 
 /* ---------------------------[ Blade: Review and validate ]---------------------------
-   Read-only summary of everything the studio will write into config.json, plus every
-   consistency check that can run without touching the Hyper-V host. Nothing here mutates
+   Read-only summary of the lab-wide settings the studio will write into config.json, plus
+   every consistency check that can run without touching the Hyper-V host. The per-VM
+   summary lives on the VM overview blade. Nothing here mutates
    state — it mirrors Build-Vms.ps1 expectations so problems surface before the export. */
 
 const SVG_ALERT = '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M8 1.8l6.4 11.4H1.6L8 1.8z"/><path d="M8 6.4v3.2M8 11.4v.1"/></svg>';
@@ -8867,7 +9213,7 @@ function validate() {
     const unsupported = serversForArcPrincipal(p.id || p._id)
       .filter(x => imageRefusesAzureArc(findImage(x.imageId)));
     if (unsupported.length) {
-      warn(`Arc principal ${label} is attached to ${unsupported.map(x => x.name).join(", ")}, which Azure Arc has no agent for — those VMs are exported without an Arc block and will not onboard.`, "Azure Arc");
+      warn(`Arc principal ${label} is attached to ${unsupported.map(x => x.name).join(", ")}, which Azure Arc does not support — those VMs are exported without an Arc block and will not onboard.`, "Azure Arc");
     }
   });
 
@@ -9151,88 +9497,6 @@ function reviewClusterRows() {
     </div>` : "");
 }
 
-function reviewServerRows(s) {
-  const img = findImage(s.imageId);
-  const net = findServerNetwork(s);
-  const dj = effectiveDomainJoinAccount(s);
-  const arc = effectiveAzureArcPrincipal(s);
-  const domain = namingSuffixForServer(s);
-  const nm = namingDefaults();
-  const dns = (s.dnsServers || []).filter(x => String(x || "").trim());
-  const disks = s.additionalDisks || [];
-  const sets = state.vhdSets.filter(v => (v.attachTo || []).some(n => String(n).toLowerCase() === String(s.name || "").toLowerCase()));
-  const integ = Object.assign(defaultIntegrationServices(), s.integrationServices || {});
-  const integOn = Object.keys(integ).filter(k => integ[k]);
-
-  return kvGrid(
-    kvRow("VM name", (nm.vmNameIncludeFqdn && domain) ? `${s.name}.${domain}` : s.name) +
-    kvRow("Image", img.label) +
-    kvRow("Experience", img.experience === "Core" ? "Server Core" : (img.kind === "client" ? "Client" : "Desktop Experience")) +
-    (s.imageSource === "custom" && s.imageHint ? kvRow("Image file hint", s.imageHint) : "") +
-    kvRow("vCPU / memory", `${Number(s.cpuCount) || 0} vCPU · ${Number(s.memoryGB) || 0} GB`) +
-    kvRow("VM path", serverUsesCustomPaths(s) && String(s.vmPath || "").trim()
-      ? `${String(s.vmPath).trim()} (per VM)`
-      : (state.defaults.vmPath || "Hyper-V host default")) +
-    kvRow("VHD path", serverUsesCustomPaths(s) && String(s.vhdPath || "").trim()
-      ? `${String(s.vhdPath).trim()} (per VM)`
-      : (state.defaults.vhdPath || state.defaults.vmPath || "Hyper-V host default")) +
-    kvRow("OS disk", effectiveOsDiskFileName(s) + (s.useDifferencingDisk ? " (differencing)" : " (full copy)") + (hasCustomOsDiskName(s) ? " · renamed" : "")) +
-    kvRow("Nested virtualization", yesNo(!!s.nestedVirtualization)) +
-    kvRow("Secure Boot / vTPM", `${yesNo(effectiveSecureBoot(s))} / ${yesNo(s.enableVtpm)}`) +
-    kvRow("Start after create", yesNo(s.startAfterCreate)) +
-    kvRow("Automatic start action", autoStartActionLabel(s)) +
-    kvRow("Network adapter", effectiveNicName(s, 0)) +
-    kvRow("vSwitch", s.switchName) +
-    kvRow("Network", net ? `${networkName(net)} · ${networkCidr(net)}` : "Not bound to a studio network") +
-    kvRow("VLAN", (s.vlanId === "" || s.vlanId == null) ? "Untagged" : String(s.vlanId)) +
-    kvRow("IP address", s.ipAddress ? s.ipAddress : "DHCP") +
-    kvRow("Default gateway", s.defaultGateway) +
-    kvRow("DNS servers", dns.join(", ")) +
-    kvRow("Additional adapters", (s.nics || []).length
-      ? (s.nics || []).map((nic, i) => {
-          const nicIp = String(nic.ipAddress || "").trim();
-          return `${effectiveNicName(s, i + 1)}: ${nic.switchName || "no switch"}${(nic.vlanId === "" || nic.vlanId == null) ? "" : ` · VLAN ${nic.vlanId}`} · ${nicIp ? `${nicIp}/${Number(nic.prefixLength) || 24}` : "DHCP"}`;
-        }).join(" · ")
-      : "") +
-    kvRow("Local account", isBuiltInAdminOnly(s) ? "Built-in Administrator only" : s.localUserName) +
-    kvRow("Local password", s.localUserPassword ? "Set" : "") +
-    kvRow("Domain join", dj ? `${dj.domain} as ${dj.joinUser}` : "Off") +
-    (dj && s.domainJoin.ouPath ? kvRow("Target OU", s.domainJoin.ouPath) : "") +
-    (dj ? kvRow("Join timing", effectiveDomainJoinMode(s) === "deferred" ? "After first boot (scheduled task)" : "During specialize (unattend)") : "") +
-    kvRow("Azure Arc", arc ? `${arc.resourceGroup} · ${azureRegionLabel(arc.location)} · ${arc.authMode === "hostContext" ? "host context" : "service principal"}` : "Off") +
-    kvRow("Failover cluster", (state.defaults.cluster && state.defaults.cluster.enabled)
-      ? (clusterIncludesServer(s)
-          ? `Added to ${state.defaults.cluster.name || "the cluster this host belongs to"}`
-          : "Standalone — not added")
-      : "Off") +
-    kvRow("Management tools", yesNo(s.includeManagementTools !== false)) +
-    (supportsAppCompatFod(s) ? kvRow("Server Core App Compat FOD", yesNo(s.appCompatFod)) : "") +
-    (supportsAppRemoval(s.imageId) ? kvRow("Remove built-in apps", !s.removeBuiltInApps ? "No"
-      : (appRemovalCount(s) === APP_REMOVAL_CATALOG.length ? "Yes — all " + APP_REMOVAL_CATALOG.length
-        : "Yes — " + appRemovalCount(s) + " of " + APP_REMOVAL_CATALOG.length)) : "") +
-    kvRow("Data disks", disks.length ? disks.map((disk, i) => {
-      const fs = diskFileSystem(disk);
-      const volume = fs === "None" ? "raw, not formatted" : `${fs} "${effectiveDataDiskLabel(disk, i)}"`;
-      return `${dataDiskTag(s, i, disk)} ${Number(disk.sizeGB) || 0} GB ${disk.type === "Dynamic" ? "Dynamic" : "Fixed"} · ${volume} · ${effectiveDataDiskFileName(s, disk, i)}`;
-    }).join(" · ") : "") +
-    kvRow("VHD Sets", sets.length ? sets.map(v => `${Number(v.sizeGB) || 0} GB ${v.type === "Dynamic" ? "Dynamic" : "Fixed"} shared with ${(v.attachTo || []).filter(n => String(n).toLowerCase() !== String(s.name || "").toLowerCase()).join(", ") || "nobody"}`).join(" · ") : "") +
-    kvRow("Integration services", integOn.length ? integOn.join(", ") : "All disabled")
-  );
-}
-
-function reviewServerChips(s) {
-  const img = findImage(s.imageId);
-  const items = img.kind === "client"
-    ? [
-        ...(s.clientFeatures || []).filter(Boolean).map(id => ({ label: clientFeatureLabel(id), icon: clientFeatureGlyph(id) })),
-        ...(s.rsatCapabilities || []).filter(Boolean).map(id => ({ label: rsatCapabilityLabel(id), icon: rsatCapabilityGlyph(id) }))
-      ]
-    : (s.windowsFeatures || []).filter(Boolean).map(id => ({ label: windowsFeatureLabel(id), icon: windowsFeatureGlyph(id) }));
-  if (!items.length) return `<p class="hint" style="margin-top:10px">No ${img.kind === "client" ? "Windows features or RSAT capabilities" : "roles or features"} selected.</p>`;
-  return `<div class="chips" style="margin:12px 0 0">${items.map(x =>
-    `<span class="pill"><img src="${iconSrc(x.icon)}" alt="">${esc(x.label)}</span>`).join("")}</div>`;
-}
-
 function renderReview() {
   const issues = validate();
   const errors = issues.filter(i => i.level === "error");
@@ -9244,7 +9508,6 @@ function renderReview() {
   const totalMem = state.servers.reduce((n, s) => n + (Number(s.memoryGB) || 0), 0);
   const dataGb = state.servers.reduce((n, s) => n + (s.additionalDisks || []).reduce((m, d) => m + (Number(d.sizeGB) || 0), 0), 0);
   const setGb = state.vhdSets.reduce((n, v) => n + (Number(v.sizeGB) || 0), 0);
-  const openVms = state.servers.length <= 5;
 
   return `
     <div class="blade-toolbar">
@@ -9273,28 +9536,26 @@ function renderReview() {
         : `<p class="hint">Nothing to flag. The configuration is internally consistent — it still has to survive the real checks on the Hyper-V host.</p>`}
     `, "", true)}
 
-    ${state.servers.map(s => gsCard(
-      `rev-vm-${s._id}`,
-      iconSrcBand("vm.svg", serverGlyphBand(s)),
-      esc(serverDisplayName(s)),
-      `${findImage(s.imageId).label} · ${s.ipAddress || "DHCP"}`,
-      reviewServerRows(s) + reviewServerChips(s),
-      "",
-      openVms
-    )).join("")}
+    ${state.servers.length ? `
+      <div class="card ov-pointer">
+        <img src="${iconSrc("vm-overview.svg")}" alt="">
+        <div><strong>${state.servers.length} virtual machine(s)</strong>
+          <div class="hint">Each VM's address, FQDN, sign-in, hardware, storage and identity is on the VM overview blade.</div></div>
+        <button class="btn" type="button" data-goto="vmoverview"><img src="${iconSrc("vm-overview.svg")}" alt=""> Open VM overview</button>
+      </div>` : ""}
 
     ${gsCard("rev-files", "storage.svg", "Files and folders", "Everything Build-Vms.ps1 writes to disk", `
       <p class="hint" style="margin:0 0 10px">Every path across all ${state.servers.length} virtual machine(s), including per-VM path overrides and shared VHD Sets.</p>
       ${renderLabelledPlacement(state.servers)}
-    `, "", true)}
+    `, "", false)}
 
-    ${gsCard("rev-general", "settings.svg", "General Settings", "Paths, naming, locale", reviewGeneralRows(), "", true)}
+    ${gsCard("rev-general", "settings.svg", "General Settings", "Paths, naming, locale", reviewGeneralRows(), "", false)}
 
     ${gsCard("rev-cluster", "virtual-clusters.svg", "Failover Cluster",
       (state.defaults.cluster && state.defaults.cluster.enabled)
         ? `${serversForCluster().length} of ${state.servers.length} VM(s) clustered`
         : "Off",
-      reviewClusterRows(), "", true)}
+      reviewClusterRows(), "", false)}
 
     ${gsCard("rev-networks", "vnet.svg", "Networks", `${state.networks.length} defined`,
       state.networks.length
@@ -9306,7 +9567,7 @@ function renderReview() {
             kvRow("DNS servers", (n.dnsServers || []).filter(x => String(x || "").trim()).join(", ")) +
             kvRow("Attached VMs", serversForNetwork(n.id).map(serverDisplayName).join(", "))
           )).join("")
-        : `<p class="hint">No networks defined — VMs carry their own IP settings.</p>`, "", true)}
+        : `<p class="hint">No networks defined — VMs carry their own IP settings.</p>`, "", false)}
 
     ${gsCard("rev-identity", "identity.svg", "Domain Join", `${state.domainJoinAccounts.length} account(s)`,
       state.domainJoinAccounts.length
@@ -9316,7 +9577,7 @@ function renderReview() {
             kvRow("Password", a.joinPassword ? "Set" : "") +
             kvRow("Used by", (domainJoinAllVmsAccount() ? "Every VM in this config" : serversForDomainJoinAccount(a.id).map(serverDisplayName).join(", ")))
           )).join("")
-        : `<p class="hint">No Domain Join accounts — every VM stays in a workgroup.</p>`, "", true)}
+        : `<p class="hint">No Domain Join accounts — every VM stays in a workgroup.</p>`, "", false)}
 
     ${gsCard("rev-arc", "arc.svg", "Azure Arc", `${state.azureArcPrincipals.length} principal(s)`,
       state.azureArcPrincipals.length
@@ -9329,7 +9590,7 @@ function renderReview() {
             (p.authMode === "hostContext" ? "" : kvRow("Application ID", p.servicePrincipalAppId) + kvRow("Secret", p.servicePrincipalSecret ? "Set" : "")) +
             kvRow("Used by", (azureArcAllVmsPrincipal() ? "Every VM in this config" : serversForArcPrincipal(p.id).map(serverDisplayName).join(", ")))
           )).join("")
-        : `<p class="hint">No Arc principals — nothing gets onboarded to Azure Arc.</p>`, "", true)}
+        : `<p class="hint">No Arc principals — nothing gets onboarded to Azure Arc.</p>`, "", false)}
 
     ${gsCard("rev-vhdsets", "disk-pool.svg", "VHD Sets", `${state.vhdSets.length} shared disk(s)`,
       (cfg.vhdSets || []).length
@@ -9339,7 +9600,7 @@ function renderReview() {
             kvRow("Attached to", (v.attachTo || []).join(", ")) +
             kvRow("Path override", v.path)
           )).join("")
-        : `<p class="hint">No VHD Sets defined.</p>`, "", true)}`;
+        : `<p class="hint">No VHD Sets defined.</p>`, "", false)}`;
 }
 
 /* ---------------------------[ Blade: Passwords ]---------------------------
@@ -9369,7 +9630,7 @@ function credentialRows() {
 function renderPasswordRow(r) {
   const shown = !!passwordsVisible[r.id];
   return `
-    <div class="pw-row">
+    <div class="pw-row" data-pw-row="${esc(r.id)}">
       <div class="pw-ico"><img src="${String(r.icon).startsWith("data:") ? r.icon : iconSrc(r.icon)}" alt=""></div>
       <div class="pw-identity">
         <div class="pw-owner" title="${esc(r.owner)}">${esc(r.owner)}</div>
@@ -9396,15 +9657,65 @@ function renderPasswordRow(r) {
     </div>`;
 }
 
+/* One row per Linux VM. Keys are per VM only, so a row is a VM and its key and nothing
+   is shared between rows. The private half is only ever in sshPrivateKeys - this tab -
+   so the state pill reads as a to-do: a generated key not yet downloaded is the one
+   thing on this card a reload can take away. */
+function sshKeyRows() {
+  return state.servers.filter(isLinuxServer).map(s => ({
+    id: s._id,
+    icon: iconSrcBand("vm.svg", serverGlyphBand(s)),
+    owner: serverDisplayName(s),
+    file: sshKeyFileName(s),
+    pub: String(s.sshAuthorizedKey || "").trim(),
+    priv: !!sshPrivateKeys[s._id],
+    saved: !!sshKeysDownloaded[s._id]
+  }));
+}
+
+function renderSshKeyRow(r) {
+  const stateBit = r.priv && !r.saved
+    ? `<span class="pill status warn" title="The private key is only in this tab - download it before you leave the page">Not downloaded</span>`
+    : r.priv
+      ? `<span class="pill status on" title="Saved as ${esc(r.file)} - download it again any time while this tab is open">Downloaded</span>`
+    : r.pub
+      ? `<span class="pill" title="Pasted in, or generated before the page was reloaded - the private half is not in this tab">Public key only</span>`
+      : `<span class="pill" title="No key - the password at the Hyper-V console is the only way in">No key</span>`;
+  return `
+    <div class="pw-row">
+      <div class="pw-ico"><img src="${String(r.icon).startsWith("data:") ? r.icon : iconSrc(r.icon)}" alt=""></div>
+      <div class="pw-identity">
+        <div class="pw-owner" title="${esc(r.owner)}">${esc(r.owner)}</div>
+      </div>
+      <div class="pw-usercell">${stateBit}</div>
+      <input class="pw-field pw-pubkey" id="sshpub-${esc(r.id)}" type="text" value="${esc(r.pub)}"
+             placeholder="none - password only" readonly tabindex="-1" spellcheck="false" autocomplete="off"
+             title="${esc(r.pub)}" aria-label="SSH public key for ${esc(r.owner)}">
+      <div class="pw-actions">
+        <button class="btn icon" type="button" data-sshpub-copy="${esc(r.id)}"${r.pub ? "" : " disabled"}
+          title="Copy public key" aria-label="Copy SSH public key for ${esc(r.owner)}">${copyIcon()}</button>
+        <button class="btn icon" type="button" data-gen-ssh="${esc(r.id)}"
+          title="Generate a new key pair" aria-label="Generate a new SSH key pair for ${esc(r.owner)}">${regenIcon()}</button>
+        <button class="btn icon" type="button" data-dl-ssh="${esc(r.id)}"${r.priv ? "" : " disabled"}
+          title="${r.priv ? "Download the private key" : "No private key in this tab - generate a new pair first"}"
+          aria-label="Download the SSH private key for ${esc(r.owner)}">${downloadIcon()}</button>
+      </div>
+    </div>`;
+}
+
 function renderPasswords() {
   const rows = credentialRows();
   const missing = rows.filter(r => !r.value).length;
   const anyHidden = rows.some(r => r.value && !passwordsVisible[r.id]);
+  const sshRows = sshKeyRows();
+  const sshPending = sshRows.filter(r => r.priv && !r.saved).length;
 
   return `
     <div class="blade-toolbar">
-      <div class="page-title"><img src="${iconSrc("secret.svg")}"> Passwords</div>
+      <div class="page-title"><img src="${iconSrc("key.svg")}"> Passwords</div>
       <div class="row">
+        <button class="btn" type="button" id="sshDownloadAll"${sshRows.some(r => r.priv) ? "" : " disabled"}
+          title="${sshRows.some(r => r.priv) ? "Every private key this tab holds, in one ssh-keys.zip" : "No private key in this tab - generate a pair first"}">${downloadIcon()} Download SSH keys</button>
         <button class="btn" type="button" id="pwToggleAll"${rows.length ? "" : " disabled"}>${anyHidden ? eyeIcon() + " Reveal all" : eyeOffIcon() + " Hide all"}</button>
         <button class="btn primary" type="button" data-goto="export"><img src="${iconSrcOnAccent("export.svg")}"> Go to Export</button>
       </div>
@@ -9412,6 +9723,7 @@ function renderPasswords() {
     <div class="chips">
       <span class="pill">${rows.length} account(s)</span>
       <span class="pill status ${missing ? "off" : "on"}">${missing} without a password</span>
+      ${sshRows.length ? `<span class="pill">${sshRows.filter(r => r.pub).length} of ${sshRows.length} Linux VM(s) with an SSH key</span>` : ""}
     </div>
 
     <div class="warn-box">These are the real passwords. They are written into <code>config.json</code> in plain text, so keep it
@@ -9423,7 +9735,289 @@ function renderPasswords() {
          <p class="hint" style="margin-top:14px">Generated passwords are ${passwordLength()} characters (set in General Settings) with
          upper case, lower case, a number and a special character, and no ambiguous <code>I/l/1</code> or <code>O/0</code>. Editing a
          name or password is still done on the Virtual machines blade — this page only reads them back.</p>`
-      : `<div class="card"><p class="hint" style="margin:0">No virtual machines yet. Add one and its local account appears here with a generated password.</p></div>`}`;
+      : `<div class="card"><p class="hint" style="margin:0">No virtual machines yet. Add one and its local account appears here with a generated password.</p></div>`}
+
+    ${sshRows.length ? `
+      <div class="pw-section"><img src="${iconSrc("keys.svg")}" alt=""> SSH keys</div>
+      ${sshPending ? `<div class="warn-box">${sshPending} private key(s) not downloaded yet. They are held in this tab and nowhere else — not in
+      <code>config.json</code>, not in a save token — so after a reload only the public halves remain.</div>` : ""}
+      <div class="card"><div class="pw-list">${sshRows.map(renderSshKeyRow).join("")}</div></div>
+      <p class="hint" style="margin-top:14px">Ed25519, one pair per VM. Only the public key goes into <code>config.json</code>.
+      Generating a new pair replaces the VM's key; the downloaded file is <code>&lt;vm&gt;_id_ed25519</code> — <code>chmod 600</code> it.</p>` : ""}`;
+}
+
+/* ---------------------------[ Blade: VM overview ]---------------------------
+   Everything about a VM you go looking for once it is built - its name on the network,
+   its address, how to sign in, how to connect - in one card per machine, with the rest
+   of what the Review blade used to list per VM folded underneath. Read-only: every value
+   copies on click, and editing stays on the Virtual machines blade. */
+
+/* View state only - not in state, not in the save token, gone on reload. Cards start
+   folded to header and reach strip; this holds the ones opened since. */
+const ovExpanded = Object.create(null);
+let ovCompact = false;
+let ovFilter = "";
+
+function ovFqdn(s) {
+  const suffix = namingSuffixForServer(s);
+  const name = String(s.name || "").trim() || "vm";
+  return suffix ? name + "." + suffix : name;
+}
+/* In a domain's DNS: joined to one, or the controller that serves it. Only then does the
+   FQDN resolve - a fixed FQDN on a workgroup VM is a name nobody registered. */
+function ovInDomain(s) {
+  return !!effectiveDomainJoinAccount(s) || (isAdDomainController(s) && !!namingSuffixForServer(s));
+}
+/* What a connect command should aim at: the FQDN when the VM is in a domain's DNS, else
+   its static address, else the bare name. */
+function ovHost(s) {
+  if (ovInDomain(s)) return ovFqdn(s);
+  return String(s.ipAddress || "").trim() || String(s.name || "").trim() || "vm";
+}
+function ovSignInUser(s) {
+  return isBuiltInAdminOnly(s) ? "Administrator" : (String(s.localUserName || "").trim() || "");
+}
+/* Only asked for a workgroup VM (see ovInDomain): the local account the studio created,
+   qualified with the machine so it cannot be read as a domain user. */
+function ovCredential(s) {
+  const user = ovSignInUser(s) || "Administrator";
+  return (String(s.name || "").trim() || "vm") + "\\" + user;
+}
+function ovConnectCommands(s) {
+  const host = ovHost(s);
+  if (isLinuxServer(s)) {
+    const key = String(s.sshAuthorizedKey || "").trim() ? ` -i ~/.ssh/${sshKeyFileName(s)}` : "";
+    return [{ primary: true, icon: "ssh.svg", label: "SSH", cmd: `ssh${key} ${ovSignInUser(s) || "root"}@${host}` }];
+  }
+  return [
+    { primary: true, icon: "rdp.svg", label: "RDP", rdp: true },
+    // Same rule as the .rdp file: a domain VM takes whoever you are signed in as.
+    { icon: "powershell.svg", label: "PowerShell", cmd: `Enter-PSSession -ComputerName ${host}${ovInDomain(s) ? "" : " -Credential " + ovCredential(s)}` }
+  ];
+}
+/* A .rdp file rather than an mstsc command line: it opens on double-click, carries the
+   user name so only the password is asked for, and can be kept next to the lab's notes.
+   CRLF because mstsc is the one reading it. */
+/* Named after the FQDN when the VM is in a domain, so a folder of .rdp files from two
+   labs never has two "files-01.rdp" in it; a workgroup VM keeps its short name, and the
+   file inside points at its IP. */
+function ovRdpFileName(s) {
+  return (ovInDomain(s) ? ovFqdn(s) : (String(s.name || "").trim() || "vm")) + ".rdp";
+}
+/* The user name is only filled in for a workgroup VM, where the local account is the
+   only way in. In a domain you sign in as yourself, and a pre-filled local account is
+   one more thing to overwrite at the prompt. */
+function ovRdpFile(s) {
+  return [
+    `full address:s:${ovHost(s)}`,
+    ...(ovInDomain(s) ? [] : [`username:s:${ovCredential(s)}`]),
+    "prompt for credentials:i:1",
+    "screen mode id:i:1",
+    "dynamic resolution:i:1",
+    "smart sizing:i:1",
+    "authentication level:i:2"
+  ].join("\r\n") + "\r\n";
+}
+function ovCopy(value, shown) {
+  const v = String(value == null ? "" : value);
+  return `<span class="ov-cv" data-ov-copy="${esc(v)}" title="Copy ${esc(v)}"><span>${shown != null ? shown : esc(v)}</span>${copyIcon()}</span>`;
+}
+function ovOff(text) { return `<span class="ov-off">${esc(text)}</span>`; }
+function ovTick(on, label) { return `<span class="${on ? "on" : ""}">${esc(label)}</span>`; }
+function ovVlan(v) { return (v === "" || v == null) ? ovOff("untagged") : esc(String(v)); }
+
+function ovStatusPills(s) {
+  const out = [];
+  const dj = effectiveDomainJoinAccount(s);
+  if (isAdDomainController(s)) out.push(`<span class="pill status info"><img src="${iconSrc("domain-controller.svg")}" alt="">Domain controller</span>`);
+  if (dj) out.push(`<span class="pill status on" title="${esc(dj.domain)} as ${esc(dj.joinUser)}"><img src="${iconSrc("identity.svg")}" alt="">Domain joined</span>`);
+  // Workgroup is a Windows notion; a Linux VM that joins nothing just says nothing.
+  else if (!isAdDomainController(s) && !isLinuxServer(s)) out.push(`<span class="pill">Workgroup</span>`);
+  if (effectiveAzureArcPrincipal(s)) out.push(`<span class="pill status on"><img src="${iconSrc("arc.svg")}" alt="">Azure Arc</span>`);
+  if (clusterIncludesServer(s)) out.push(`<span class="pill status on"><img src="${iconSrc("virtual-clusters.svg")}" alt="">HA</span>`);
+  if (isLinuxServer(s)) {
+    if (!String(s.sshAuthorizedKey || "").trim()) out.push(`<span class="pill status warn">No SSH key</span>`);
+    else if (sshPrivateKeys[s._id] && !sshKeysDownloaded[s._id]) out.push(`<span class="pill status warn">Key not downloaded</span>`);
+  }
+  return out.join("");
+}
+
+function ovNicRows(name, sw, net, vlan) {
+  return `
+    <dt>Adapter</dt><dd>${esc(name)}</dd>
+    <dt>vSwitch</dt><dd>${sw ? esc(sw) : ovOff("none")}</dd>
+    <dt>Network</dt><dd class="txt">${net ? `${esc(networkName(net))} <span class="ov-muted">${esc(networkCidr(net))}</span>` : ovOff("not bound")}</dd>
+    <dt>VLAN</dt><dd>${ovVlan(vlan)}</dd>`;
+}
+
+function ovFeaturePills(s) {
+  if (isLinuxServer(s)) {
+    const pkgs = linuxPackageList(s);
+    return { label: "Packages", html: pkgs.length
+      ? pkgs.map(p => `<span class="pill"><img src="${iconSrc("extensions.svg")}" alt="">${esc(p)}</span>`).join("")
+      : `<span class="hint">No extra packages</span>` };
+  }
+  const img = findImage(s.imageId);
+  const items = img.kind === "client"
+    ? [
+        ...(s.clientFeatures || []).filter(Boolean).map(id => ({ label: clientFeatureLabel(id), icon: clientFeatureGlyph(id) })),
+        ...(s.rsatCapabilities || []).filter(Boolean).map(id => ({ label: rsatCapabilityLabel(id), icon: rsatCapabilityGlyph(id) }))
+      ]
+    : (s.windowsFeatures || []).filter(Boolean).map(id => ({ label: windowsFeatureLabel(id), icon: windowsFeatureGlyph(id) }));
+  return { label: img.kind === "client" ? "Features &amp; RSAT" : "Roles &amp; features", html: items.length
+    ? items.map(x => `<span class="pill"><img src="${iconSrc(x.icon)}" alt="">${esc(x.label)}</span>`).join("")
+    : `<span class="hint">None selected</span>` };
+}
+
+function ovSearchText(s) {
+  const img = findImage(s.imageId);
+  return [s.name, ovFqdn(s), s.ipAddress, img.label, s.switchName, ovSignInUser(s),
+    ...(s.nics || []).map(n => n.ipAddress)].filter(Boolean).join(" ").toLowerCase();
+}
+
+function renderOverviewCard(s) {
+  const img = findImage(s.imageId);
+  const band = serverGlyphBand(s);
+  const linux = isLinuxServer(s);
+  const net = findServerNetwork(s);
+  const dj = effectiveDomainJoinAccount(s);
+  const arc = effectiveAzureArcPrincipal(s);
+  const nm = namingDefaults();
+  const domain = namingSuffixForServer(s);
+  const hyperVName = (nm.vmNameIncludeFqdn && domain) ? `${s.name}.${domain}` : s.name;
+  const ip = String(s.ipAddress || "").trim();
+  const prefix = Number(s.prefixLength) || 24;
+  const gw = String(s.defaultGateway || "").trim();
+  const dns = (s.dnsServers || []).map(x => String(x || "").trim()).filter(Boolean);
+  const user = ovSignInUser(s);
+  const disks = s.additionalDisks || [];
+  const sets = state.vhdSets.filter(v => (v.attachTo || []).some(n => String(n).toLowerCase() === String(s.name || "").toLowerCase()));
+  const integ = Object.assign(defaultIntegrationServices(), s.integrationServices || {});
+  const integOn = Object.keys(integ).filter(k => integ[k]);
+  const pillClass = img.kind === "core" ? "core" : img.kind === "client" ? "client" : img.kind === "linux" ? "linux" : "desktop";
+  const features = ovFeaturePills(s);
+  const cmds = ovConnectCommands(s);
+  const collapsed = !ovExpanded[s._id];
+  const hidden = ovFilter && !ovSearchText(s).includes(ovFilter);
+
+  return `
+  <article class="ov-vm${collapsed ? " collapsed" : ""}" data-ov-vm="${esc(s._id)}" style="--tone:${MEMBER_PICKER_BAND_VAR[band] || "var(--role-server)"}"${hidden ? " hidden" : ""}>
+    <header class="ov-head"${ovCompact ? "" : ` data-ov-collapse="${esc(s._id)}" title="${collapsed ? "Show details" : "Hide details"}"`}>
+      <span class="card-chevron ov-chev">${chevron()}</span>
+      <div class="ov-badge"><img src="${iconSrcBand("vm.svg", band)}" alt=""></div>
+      <div class="ov-id">
+        <div class="ov-title"><span class="ov-name">${esc(serverDisplayName(s))}</span><span class="pill role ${pillClass}">${esc(img.kind)}</span>${ovStatusPills(s)}</div>
+        <div class="ov-os"><img src="${imageIconSrc(img)}" alt="">${esc(img.label)}<span class="ov-sep">·</span>${Number(s.cpuCount) || 0} vCPU · ${Number(s.memoryGB) || 0} GB</div>
+      </div>
+      <div class="ov-connect">
+        ${cmds.map(c => `<button class="btn${c.primary ? " primary" : ""}" type="button" ${c.rdp
+          ? `data-ov-rdp="${esc(s._id)}" title="Download ${esc(ovRdpFileName(s))}"`
+          : `data-ov-copy="${esc(c.cmd)}" title="Copy: ${esc(c.cmd)}"`}>
+          <img src="${c.primary ? iconSrcKnockout(c.icon) : iconSrc(c.icon)}" alt=""> ${c.label}</button>`).join("")}
+      </div>
+    </header>
+
+    <section class="ov-reach">
+      <div><div class="ov-label"><img src="${iconSrc("dns.svg")}" alt="">FQDN</div>
+        <div class="ov-val">${ovCopy(ovFqdn(s))}</div>
+        <div class="ov-sub">${domain ? (isAdDomainController(s) ? "domain controller for " + esc(domain) : dj ? "registered in DNS on domain join" : "fixed FQDN from General Settings") : isAdDomainController(s) ? "no suffix · set a fixed FQDN in General Settings" : "no domain · name resolves locally only"}</div></div>
+      <div><div class="ov-label"><img src="${iconSrc("static-ip.svg")}" alt="">IPv4</div>
+        ${ip
+          ? `<div class="ov-val ov-ip">${ovCopy(ip, `${esc(ip)}<span class="ov-pre">/${prefix}</span>`)}</div>
+             <div class="ov-sub">${esc(effectiveNicName(s, 0))} · ${net ? "from " + esc(networkName(net)) : "static"}</div>`
+          : `<div class="ov-val ov-dhcp">DHCP</div><div class="ov-sub">read it off Hyper-V Manager after first boot</div>`}</div>
+      <div><div class="ov-label"><img src="${iconSrc("gateway.svg")}" alt="">Gateway · DNS</div>
+        <div class="ov-val">${gw ? ovCopy(gw) : ovOff(ip ? "none" : "from DHCP")}</div>
+        <div class="ov-sub">dns ${dns.length ? esc(dns.join(", ")) : (ip ? "none" : "from DHCP")}</div></div>
+      <div><div class="ov-label"><img src="${iconSrc("users.svg")}" alt="">Sign in</div>
+        <div class="ov-val">${user ? ovCopy(user) : ovOff("not set")}</div>
+        <button class="btn ov-pw" type="button" data-ov-pw="${esc(s._id)}" title="Reveal or copy it on the Passwords blade">Password <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2.5 8h10.5M9 4l4 4-4 4"/></svg></button></div>
+    </section>
+
+    <section class="ov-details">
+      <div class="ov-sec"><div class="ov-sec-h"><img src="${iconSrc("vnet.svg")}" alt="">Network</div>
+        <dl class="ov-kv">${ovNicRows(effectiveNicName(s, 0), s.switchName, net, s.vlanId)}</dl>
+        ${(s.nics || []).map((nic, i) => {
+          const nicIp = String(nic.ipAddress || "").trim();
+          return `<dl class="ov-kv ov-nic2">
+            <dt>IPv4</dt><dd>${nicIp ? ovCopy(nicIp + "/" + (Number(nic.prefixLength) || 24)) : ovOff("DHCP")}</dd>
+            ${ovNicRows(effectiveNicName(s, i + 1), nic.switchName, findNicNetwork(nic), nic.vlanId)}</dl>`;
+        }).join("")}
+      </div>
+      <div class="ov-sec"><div class="ov-sec-h"><img src="${iconSrc("cpu.svg")}" alt="">Compute</div>
+        <dl class="ov-kv">
+          <dt>vCPU</dt><dd>${Number(s.cpuCount) || 0}</dd>
+          <dt>RAM</dt><dd>${Number(s.memoryGB) || 0} GB</dd>
+          <dt>Security</dt><dd><span class="ov-ticks">${ovTick(effectiveSecureBoot(s), "Secure Boot")}${ovTick(s.enableVtpm, "vTPM")}${ovTick(s.nestedVirtualization, "Nested")}</span></dd>
+          <dt>Host start</dt><dd class="txt">${esc(autoStartActionLabel(s))}</dd>
+          <dt>After create</dt><dd class="txt">${s.startAfterCreate ? `<span class="ov-yes">Starts</span>` : ovOff("stays off")}</dd>
+          <dt>Integration</dt><dd class="txt">${integOn.length ? esc(integOn.join(", ")) : ovOff("all disabled")}</dd>
+        </dl></div>
+      <div class="ov-sec"><div class="ov-sec-h"><img src="${iconSrc("storage.svg")}" alt="">Storage</div>
+        <dl class="ov-kv">
+          <dt>OS disk</dt><dd><div class="ov-disk">${ovCopy(effectiveOsDiskFileName(s))}<span class="ov-muted">${s.useDifferencingDisk ? "differencing on the gold" : "full copy"}${hasCustomOsDiskName(s) ? " · renamed" : ""}</span></div></dd>
+          <dt>Data disks</dt><dd>${disks.length ? disks.map((disk, i) => {
+            const fs = diskFileSystem(disk);
+            return `<div class="ov-disk"><span>${esc(dataDiskTag(s, i, disk))} ${Number(disk.sizeGB) || 0} GB ${disk.type === "Dynamic" ? "dynamic" : "fixed"}</span>
+              <span class="ov-muted">${fs === "None" ? "raw, not formatted" : `${esc(fs)} "${esc(effectiveDataDiskLabel(disk, i))}"`}</span></div>`;
+          }).join("") : ovOff("none")}</dd>
+          <dt>VHD Sets</dt><dd class="txt">${sets.length ? sets.map(v => `${Number(v.sizeGB) || 0} GB shared with ${esc((v.attachTo || []).filter(n => String(n).toLowerCase() !== String(s.name || "").toLowerCase()).join(", ") || "nobody")}`).join("<br>") : ovOff("none")}</dd>
+          <dt>VM path</dt><dd>${esc(serverUsesCustomPaths(s) && String(s.vmPath || "").trim() ? String(s.vmPath).trim() : (state.defaults.vmPath || "host default"))}</dd>
+          <dt>VHD path</dt><dd>${esc(serverUsesCustomPaths(s) && String(s.vhdPath || "").trim() ? String(s.vhdPath).trim() : (state.defaults.vhdPath || state.defaults.vmPath || "host default"))}</dd>
+        </dl></div>
+      <div class="ov-sec"><div class="ov-sec-h"><img src="${iconSrc("identity.svg")}" alt="">Identity &amp; management</div>
+        <dl class="ov-kv">
+          ${hyperVName !== s.name ? `<dt>Hyper-V name</dt><dd>${ovCopy(hyperVName)}</dd>` : ""}
+          <dt>Domain</dt><dd class="txt">${dj ? `<code>${esc(dj.domain)}</code> <span class="ov-muted">as ${esc(dj.joinUser)}</span>` : (isAdDomainController(s) ? "Domain controller" : ovOff(linux ? "not joined" : "workgroup"))}</dd>
+          ${dj && s.domainJoin && s.domainJoin.ouPath ? `<dt>Target OU</dt><dd>${ovCopy(s.domainJoin.ouPath)}</dd>` : ""}
+          ${dj ? `<dt>Join timing</dt><dd class="txt">${linux ? "cloud-init at first boot" : effectiveDomainJoinMode(s) === "deferred" ? "After first boot (scheduled task)" : "During specialize (unattend)"}</dd>` : ""}
+          <dt>Azure Arc</dt><dd class="txt">${arc ? `${esc(arc.resourceGroup)} <span class="ov-muted">· ${esc(azureRegionLabel(arc.location))} · ${arc.authMode === "hostContext" ? "host context" : "service principal"}</span>` : ovOff("off")}</dd>
+          <dt>Cluster</dt><dd class="txt">${(state.defaults.cluster && state.defaults.cluster.enabled)
+            ? (clusterIncludesServer(s) ? "Added to " + esc(state.defaults.cluster.name || "the host's cluster") : ovOff("standalone"))
+            : ovOff("off")}</dd>
+          ${supportsAppCompatFod(s) ? `<dt>App Compat FOD</dt><dd class="txt">${s.appCompatFod ? "Yes" : ovOff("no")}</dd>` : ""}
+          ${supportsAppRemoval(s.imageId) ? `<dt>Built-in apps</dt><dd class="txt">${!s.removeBuiltInApps ? ovOff("kept")
+            : appRemovalCount(s) === APP_REMOVAL_CATALOG.length ? "All " + APP_REMOVAL_CATALOG.length + " removed" : appRemovalCount(s) + " of " + APP_REMOVAL_CATALOG.length + " removed"}</dd>` : ""}
+          ${s.imageSource === "custom" && s.imageHint ? `<dt>Image file</dt><dd>${esc(s.imageHint)}</dd>` : ""}
+        </dl></div>
+    </section>
+
+    <section class="ov-features"><span class="ov-flabel">${features.label}</span>${features.html}</section>
+  </article>`;
+}
+
+function renderVmOverview() {
+  const servers = state.servers;
+  const linux = servers.filter(isLinuxServer).length;
+  const statics = servers.filter(s => String(s.ipAddress || "").trim()).length;
+  const cpu = servers.reduce((n, s) => n + (Number(s.cpuCount) || 0), 0);
+  const mem = servers.reduce((n, s) => n + (Number(s.memoryGB) || 0), 0);
+  const domains = [...new Set(servers.map(namingSuffixForServer).filter(Boolean))];
+
+  return `
+    <div class="blade-toolbar">
+      <div class="page-title"><img src="${iconSrc("vm-overview.svg")}"> VM overview</div>
+      <div class="row">
+        <input class="ov-search" id="ovFilter" type="search" value="${esc(ovFilter)}" placeholder="Filter by name, IP, OS…"
+               spellcheck="false" autocomplete="off" aria-label="Filter virtual machines" style="background-image:url('${iconSrc("search.svg")}')">
+        <div class="ov-seg" role="group" aria-label="Card density">
+          <button class="btn${ovCompact ? "" : " on"}" type="button" data-ov-mode="full">Detailed</button><button class="btn${ovCompact ? " on" : ""}" type="button" data-ov-mode="compact">Compact</button>
+        </div>
+        <button class="btn primary" type="button" data-goto="export"><img src="${iconSrcOnAccent("export.svg")}"> Go to Export</button>
+      </div>
+    </div>
+    <div class="chips">
+      <span class="pill">${servers.length} VM(s)</span>
+      ${servers.length - linux ? `<span class="pill"><img src="${iconSrcBand("vm.svg", "work")}" alt="">${servers.length - linux} Windows</span>` : ""}
+      ${linux ? `<span class="pill"><img src="${iconSrcBand("vm.svg", "linux")}" alt="">${linux} Linux</span>` : ""}
+      <span class="pill"><img src="${iconSrc("static-ip.svg")}" alt="">${statics} static · ${servers.length - statics} DHCP</span>
+      ${domains.map(d => `<span class="pill"><img src="${iconSrc("active-directory.svg")}" alt=""><code>${esc(d)}</code></span>`).join("")}
+      <span class="pill"><img src="${iconSrc("cpu.svg")}" alt="">${cpu} vCPU · ${mem} GB</span>
+    </div>
+    ${servers.length
+      ? `<div class="ov-list${ovCompact ? " compact" : ""}">${servers.map(renderOverviewCard).join("")}</div>
+         <p class="hint ov-nomatch" style="margin-top:14px"${servers.some(s => !ovFilter || ovSearchText(s).includes(ovFilter)) ? " hidden" : ""}>No VM matches the filter.</p>`
+      : `<div class="card"><p class="hint" style="margin:0">No virtual machines yet. Add one on the Virtual machines blade and it shows up here.</p></div>`}`;
 }
 
 /* Minimal JSON tokeniser for the export preview. Quotes must survive escaping for the
@@ -9525,6 +10119,7 @@ function renderBlade() {
   else if (state.blade === "vhdsets") main.innerHTML = renderVhdSets();
   else if (state.blade === "review") main.innerHTML = renderReview();
   else if (state.blade === "passwords") main.innerHTML = renderPasswords();
+  else if (state.blade === "vmoverview") main.innerHTML = renderVmOverview();
   else main.innerHTML = renderExport();
 }
 
@@ -9722,12 +10317,12 @@ document.getElementById("main").addEventListener("click", e => {
   if (genSsh) {
     e.stopPropagation();
     const scope = genSsh.getAttribute("data-gen-ssh");
-    const target = scope === "gs" ? null : state.servers.find(x => x._id === scope);
-    if (scope !== "gs" && !target) return;
+    const target = state.servers.find(x => x._id === scope);
+    if (!target) return;
     generateSshKeyPair(sshKeyComment(target)).then(pair => {
       sshPrivateKeys[scope] = pair.privateKey;
-      if (target) target.sshAuthorizedKey = pair.publicKey;
-      else state.defaults.sshAuthorizedKey = pair.publicKey;
+      delete sshKeysDownloaded[scope];
+      target.sshAuthorizedKey = pair.publicKey;
       render();
       toast("Ed25519 key pair generated - download the private key");
     }).catch(err => toast(err.message || "Key generation failed", true));
@@ -9739,11 +10334,14 @@ document.getElementById("main").addEventListener("click", e => {
     const scope = dlSsh.getAttribute("data-dl-ssh");
     const key = sshPrivateKeys[scope];
     if (!key) { toast("Generate a key pair first", true); return; }
-    const target = scope === "gs" ? null : state.servers.find(x => x._id === scope);
+    const target = state.servers.find(x => x._id === scope);
+    if (!target) return;
     const name = sshKeyFileName(target);
     // octet-stream, not text/plain: the name has no extension, and a browser
     // handed text/plain saves it as <name>.txt - a key file ssh -i then cannot find.
     downloadTextFile(name, key, "application/octet-stream");
+    sshKeysDownloaded[scope] = true;
+    render();
     toast(name + " downloaded - chmod 600 it");
     return;
   }
@@ -10378,11 +10976,73 @@ document.getElementById("main").addEventListener("click", e => {
     if (input && input.value) navigator.clipboard.writeText(input.value).then(() => toast("User name copied"));
     return;
   }
+  const sshPubCopy = e.target.closest("[data-sshpub-copy]");
+  if (sshPubCopy) {
+    const input = document.getElementById("sshpub-" + sshPubCopy.getAttribute("data-sshpub-copy"));
+    if (input && input.value) navigator.clipboard.writeText(input.value).then(() => toast("Public key copied"));
+    return;
+  }
   const pwCopy = e.target.closest("[data-pw-copy]");
   if (pwCopy) {
     // Straight off the input, so a masked row copies just as well as a revealed one.
     const input = document.getElementById("pw-" + pwCopy.getAttribute("data-pw-copy"));
     if (input && input.value) navigator.clipboard.writeText(input.value).then(() => toast("Password copied"));
+    return;
+  }
+  const ovCopyEl = e.target.closest("[data-ov-copy]");
+  if (ovCopyEl) {
+    const text = ovCopyEl.getAttribute("data-ov-copy");
+    navigator.clipboard.writeText(text).then(() => {
+      ovCopyEl.classList.add("copied");
+      setTimeout(() => ovCopyEl.classList.remove("copied"), 900);
+      toast("Copied " + (text.length > 60 ? text.slice(0, 57) + "..." : text));
+    });
+    return;
+  }
+  const ovRdp = e.target.closest("[data-ov-rdp]");
+  if (ovRdp) {
+    const s = state.servers.find(x => x._id === ovRdp.getAttribute("data-ov-rdp"));
+    if (!s) return;
+    downloadTextFile(ovRdpFileName(s), ovRdpFile(s), "application/x-rdp");
+    toast(ovRdpFileName(s) + " downloaded");
+    return;
+  }
+  /* Arriving from a VM card: land on that VM's password row and flash it, so the eye
+     does not have to hunt down a list of twenty. */
+  const ovPw = e.target.closest("[data-ov-pw]");
+  if (ovPw) {
+    const sid = ovPw.getAttribute("data-ov-pw");
+    state.blade = "passwords";
+    render();
+    const row = document.querySelector(`[data-pw-row="${CSS.escape(sid)}"]`);
+    if (row) {
+      row.scrollIntoView({ block: "center" });
+      row.classList.add("pw-flash");
+      // A timer, not animationend: with reduced motion there is no animation to end.
+      setTimeout(() => row.classList.remove("pw-flash"), 1300);
+    }
+    return;
+  }
+  const ovCollapse = e.target.closest("[data-ov-collapse]");
+  if (ovCollapse) {
+    const sid = ovCollapse.getAttribute("data-ov-collapse");
+    ovExpanded[sid] = !ovExpanded[sid];
+    render();
+    return;
+  }
+  const ovMode = e.target.closest("[data-ov-mode]");
+  if (ovMode) {
+    ovCompact = ovMode.getAttribute("data-ov-mode") === "compact";
+    render();
+    return;
+  }
+  if (e.target.closest("#sshDownloadAll")) {
+    const held = state.servers.filter(s => sshPrivateKeys[s._id]);
+    if (!held.length) { toast("Generate a key pair first", true); return; }
+    downloadBlob("ssh-keys.zip", buildZip(held.map(s => ({ name: sshKeyFileName(s), text: sshPrivateKeys[s._id] }))));
+    held.forEach(s => { sshKeysDownloaded[s._id] = true; });
+    render();
+    toast(`ssh-keys.zip downloaded - ${held.length} key(s)`);
     return;
   }
   if (e.target.closest("#pwToggleAll")) {
@@ -10418,6 +11078,20 @@ document.getElementById("main").addEventListener("keydown", e => {
 });
 
 document.getElementById("main").addEventListener("input", e => {
+  /* Filtered in place rather than re-rendered, so typing never fights the caret. */
+  if (e.target.id === "ovFilter") {
+    ovFilter = e.target.value.trim().toLowerCase();
+    let any = false;
+    document.querySelectorAll("[data-ov-vm]").forEach(card => {
+      const s = state.servers.find(x => x._id === card.getAttribute("data-ov-vm"));
+      const show = !ovFilter || (s && ovSearchText(s).includes(ovFilter));
+      card.hidden = !show;
+      any = any || show;
+    });
+    const none = document.querySelector(".ov-nomatch");
+    if (none) none.hidden = any;
+    return;
+  }
   const dKey = e.target.getAttribute("data-d");
   if (dKey) { state.defaults[dKey] = e.target.value; return; }
 
@@ -11457,7 +12131,7 @@ function memberPickerVeto(ctx, server) {
     return imageRefusesDomainJoin(img) ? "realmd and adcli are not packaged for " + (img.label || "this distribution") : "";
   }
   if (ctx.mode !== "azureArc") return "";
-  if (imageRefusesAzureArc(img)) return "Azure Arc has no agent for " + (img.label || "this distribution");
+  if (imageRefusesAzureArc(img)) return img.noAzureArcReason || ("Azure Arc has no agent for " + (img.label || "this distribution"));
   const a = state.azureArcPrincipals.find(x => x._id === ctx.targetId);
   if (a && a.authMode === "hostContext" && isLinuxServer(server)) return "Host context cannot onboard a Linux VM";
   return "";

@@ -3843,9 +3843,6 @@ function Get-CloudInitUserData {
     $password = [string]$Server.localUserPassword
 
     $sshKey = ([string]$Server.sshAuthorizedKey).Trim()
-    if ([string]::IsNullOrWhiteSpace($sshKey) -and $Defaults) {
-        $sshKey = ([string]$Defaults.sshAuthorizedKey).Trim()
-    }
 
     # The join is a property of the row, resolved by the studio's export into a plain
     # domainJoin block - the same one the Windows path reads. mode "deferred" is
@@ -3886,6 +3883,13 @@ function Get-CloudInitUserData {
     if ($null -ne $arcConfig -and $arcDistro -in @("fedora", "arch")) {
         $arcDistroName = if ($arcDistro -eq "arch") { "Arch Linux" } else { "Fedora" }
         Write-Log "Azure Arc for '$HostName' skipped - Azure Arc has no agent for $arcDistroName" -Tag "Warn"
+        $arcConfig = $null
+    }
+    # Debian 12 by image id, since the sidecar's distro says only "debian": Microsoft
+    # ends Arc support for it in November 2026, so the studio offers Arc on Debian 13
+    # only. Same backstop as above, for a hand-edited config.
+    if ($null -ne $arcConfig -and ([string]$Server.imageId).Trim().ToLowerInvariant() -eq "debian12") {
+        Write-Log "Azure Arc for '$HostName' skipped - Arc support for Debian 12 ends November 2026, use Debian 13" -Tag "Warn"
         $arcConfig = $null
     }
     if ($null -ne $arcConfig -and ([string]$arcConfig.authMode) -ne "servicePrincipal") {
@@ -6040,6 +6044,10 @@ function New-ProvisionedVm {
         [switch]$DisksAlreadyPrepared
     )
 
+    # Per-VM wall clock for the closing "Provisioned" line, in the same format as the
+    # run's own Runtime line.
+    $vmClock = [System.Diagnostics.Stopwatch]::StartNew()
+
     $ctx = Get-ProvisionVmContext -Server $Server -Defaults $Defaults -GoldImages $GoldImages
     if ($ctx.HyperVName -ne $ctx.ComputerName) {
         Write-Log "'$($ctx.ComputerName)' -> '$($ctx.HyperVName)' <- '$($ctx.GoldPath)'" -Tag "Info"
@@ -6319,7 +6327,8 @@ function New-ProvisionedVm {
         Write-Log "VM '$hyperVName' created (not started)" -Tag "Info"
     }
 
-    Write-Log "Provisioned '$hyperVName'" -Tag "Ok"
+    $vmClock.Stop()
+    Write-Log "Provisioned '$hyperVName' in $($vmClock.Elapsed.ToString('hh\:mm\:ss\.ff'))" -Tag "Ok"
 }
 
 # ---------------------------[ Console Menu ]---------------------------
