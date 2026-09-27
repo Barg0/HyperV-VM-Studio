@@ -6192,6 +6192,23 @@ function Get-BakeUserData {
     foreach ($command in @($familyProfile.CleanupCommands)) {
         [void]$lines.Add("  - [ sh, -c, '" + $command + "' ]")
     }
+    # Debian 13's systemd 257 ships systemd-ssh-generator, which looks for an AF_VSOCK
+    # CID to offer SSH over vsock. Debian's cloud kernel has no vsock transport here,
+    # so the generator fails on every boot ("Failed to query local AF_VSOCK CID") and
+    # lands in the error journal; masking it removes a feature this machine cannot use.
+    if (([string]$Entry.Distro) -eq "debian") {
+        [void]$lines.Add("  - [ sh, -c, '[ -e /usr/lib/systemd/system-generators/systemd-ssh-generator ] && mkdir -p /etc/systemd/system-generators && ln -sf /dev/null /etc/systemd/system-generators/systemd-ssh-generator; true' ]")
+    }
+    # fwupd asks systemd-modules-load for i2c_dev on every boot, and Oracle's UEK
+    # ships that module only in kernel-uek-modules-extra, which the template does not
+    # carry - "Failed to find module 'i2c_dev'" in the error journal of every boot.
+    # Firmware updates through fwupd do not apply to a VM, so the request is masked, and
+    # only where the module really is missing; a kernel that has it keeps the file.
+    # One line per boot remains, from the initrd: Oracle's dracut copies every
+    # /usr/lib/modules-load.d/*.conf into the initramfs whatever /etc says (a rebuild
+    # after the mask was tried on 2026-09-27 and changed nothing). Silencing that too
+    # would mean dropping systemd-modules-load from the initramfs - not for one notice.
+    [void]$lines.Add("  - [ sh, -c, '[ -e /usr/lib/modules-load.d/fwupd-i2c.conf ] && ! modinfo i2c_dev >/dev/null 2>&1 && ln -sf /dev/null /etc/modules-load.d/fwupd-i2c.conf; true' ]")
     # Ubuntu: the azure kernel only. The cloud image marks linux-virtual as manually
     # installed, so the generic kernel stayed beside azure on every VM, and every
     # kernel update was downloaded and installed twice. Purging the three virtual

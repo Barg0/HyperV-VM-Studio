@@ -3713,11 +3713,29 @@ function Get-LinuxDomainJoinCommands {
     # waits on is the domain itself (the `ntp:` key in Get-CloudInitUserData).
     # Bounded: a DC that does not answer NTP gets a join attempt after 90 s instead
     # of a VM that never finishes.
+    # Debian and Ubuntu: the sssd responder sockets off BEFORE the join, not after it.
+    # realm join starts sssd, and with the sockets still enabled the socket units fail
+    # on the spot ("configured to be socket-activated but it's still mentioned in the
+    # services' line") - three errors in the provisioning boot's journal on every VM.
+    if (([string]$Family).Trim().ToLowerInvariant() -eq "debian") {
+        [void]$commands.Add("systemctl disable --now sssd-nss.socket sssd-pam.socket sssd-pam-priv.socket sssd-pac.socket 2>/dev/null; true")
+    }
     [void]$commands.Add('i=0; until [ "$(timedatectl show -p NTPSynchronized --value 2>/dev/null)" = yes ] || [ $i -ge 90 ]; do sleep 1; i=$((i+1)); done; echo "TIME-SYNC $(timedatectl show -p NTPSynchronized --value 2>/dev/null) after ${i}s"')
     $join = "printf '%s' " + (ConvertTo-ShellSingleQuoted -Value $joinPassword) +
             " | realm join $joinArgs " + (ConvertTo-ShellSingleQuoted -Value $domain) +
             " && echo DOMAIN-JOIN-OK || echo DOMAIN-JOIN-FAILED"
     [void]$commands.Add($join)
+
+    # The sudo search base, stated. Left unset, sssd 2.9+ logs "ldap_sudo_search_base is
+    # not set. SSSD will search the entire directory tree" at error level on every boot
+    # (RHEL family, Fedora, openSUSE). The domain's own DN is exactly the scope sssd was
+    # already using, so nothing changes but the log. Tried on Rocky 10 (sssd 2.12):
+    # the base alone silences it; `sudo_provider = none` does NOT, and together with
+    # the base it brings the warning back. Debian and Ubuntu never log it.
+    $sudoBase = (($domain.TrimEnd(".") -split "\.") | ForEach-Object { "DC=$_" }) -join ","
+    if (([string]$Family).Trim().ToLowerInvariant() -in @("rhel", "suse")) {
+        [void]$commands.Add("grep -q '^ldap_sudo_search_base' /etc/sssd/sssd.conf 2>/dev/null || sed -i '/^\[domain\//a ldap_sudo_search_base = $sudoBase' /etc/sssd/sssd.conf; systemctl restart sssd 2>/dev/null; true")
+    }
 
     # Debian leaves sssd installed and stopped. realmd writes /etc/sssd/sssd.conf and
     # walks away; the unit ships disabled, so a VM that joined perfectly still resolves
@@ -3736,7 +3754,6 @@ function Get-LinuxDomainJoinCommands {
     # sssd's own message asks for.
     if (([string]$Family).Trim().ToLowerInvariant() -eq "debian") {
         [void]$commands.Add("systemctl enable --now sssd || true")
-        [void]$commands.Add("systemctl disable sssd-nss.socket sssd-pam.socket sssd-pam-priv.socket sssd-pac.socket 2>/dev/null; systemctl reset-failed 2>/dev/null; true")
     }
     # openSUSE ships sssd.service disabled as well (preset disabled on Leap 16.0), and
     # its responder sockets disabled already, so only the service needs enabling.
@@ -7915,7 +7932,13 @@ function Resolve-ConfigSourcePaths {
 
     $vmPath = [string]$Source.Defaults.vmPath
     if ([string]::IsNullOrWhiteSpace($vmPath)) { $vmPath = $FallbackVmPath }
+    # Blank vhdPath takes the HOST's VHD default first, the same as vmPath takes the
+    # host's VM default - not the VM path. Falling straight to $vmPath put every disk
+    # under D:\vms\<vm>\ on a host whose default is D:\vhd\, while the summary screen,
+    # which reads the resolved host default, said D:\vhd\. Only a host with no VHD
+    # default of its own falls back to the VM path.
     $vhdPath = [string]$Source.Defaults.vhdPath
+    if ([string]::IsNullOrWhiteSpace($vhdPath)) { $vhdPath = $FallbackVhdPath }
     if ([string]::IsNullOrWhiteSpace($vhdPath)) { $vhdPath = $vmPath }
 
     $Source.Defaults | Add-Member -NotePropertyName "vmPath" -NotePropertyValue $vmPath -Force
