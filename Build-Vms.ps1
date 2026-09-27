@@ -3722,32 +3722,39 @@ function Get-LinuxDomainJoinCommands {
     }
     [void]$commands.Add('i=0; until [ "$(timedatectl show -p NTPSynchronized --value 2>/dev/null)" = yes ] || [ $i -ge 90 ]; do sleep 1; i=$((i+1)); done; echo "TIME-SYNC $(timedatectl show -p NTPSynchronized --value 2>/dev/null) after ${i}s"')
 
-    # The sudo search base, stated - and BEFORE the join. Left unset, sssd 2.9+ logs
-    # "ldap_sudo_search_base is not set. SSSD will search the entire directory tree" at
-    # error level on every start (RHEL family, Fedora, openSUSE; Debian and Ubuntu never
-    # log it). The domain's own DN is exactly the scope sssd was already using, so
-    # nothing changes but the log. Tried on Rocky 10 (sssd 2.12): the base alone
-    # silences it; `sudo_provider = none` does NOT, and with the base it brings the
-    # warning back.
+    # sssd's sudo provider, off - and BEFORE the join. Nothing on these VMs asks sssd
+    # for sudo rules: no nsswitch.conf here has a `sudoers:` line (checked on all 12
+    # joined families, 2026-09-27), realm writes `services = nss, pam`, and the domain
+    # grant is the local /etc/sudoers.d/90-domain-sudo below. Left on, the provider
+    # still pulls sudoRole objects from the whole directory - CVE-2026-14474: anyone
+    # who can write any subtree can plant a sudo rule - and sssd 2.9+ says so at alert
+    # level on every start. Upstream's own advice for a host that does not use it is
+    # `sudo_provider = none`, which disables the provider outright (sssd commit
+    # 972f78e1bb, RHEL-192062).
+    #
+    # An earlier version set ldap_sudo_search_base to the domain's root DN instead.
+    # That kept the whole-tree search and only removed the warning - a mute, not a fix.
+    # sssd builds without 972f78e1bb (2.12.0 on Rocky/Alma/Oracle 10, Fedora 43) still
+    # print the alert with the provider off; it goes once those packages carry the fix,
+    # and it is left visible until then.
     #
     # A conf.d drop-in rather than an edit of sssd.conf: realm join writes sssd.conf and
-    # starts sssd in the same breath, so an edit afterwards always left the warning
-    # once in the provisioning boot. sssd merges conf.d into the domain section of the
-    # file realm writes (checked on Rocky 10 and Leap 16: no warning with the drop-in,
-    # the warning back without it). 0600 root, as sssd requires of its config.
+    # starts sssd in the same breath, so it has to be in place first. sssd merges
+    # conf.d into the domain section of the file realm writes. 0600 root, as sssd
+    # requires of its config (2.10+ regroups it to sssd itself on start). The drop-in
+    # also satisfies sssd.service's ConditionDirectoryNotEmpty, so a failed join takes
+    # it away again - see the join line.
     $domainSection = ([string]$domain).Trim().TrimEnd(".").ToLowerInvariant()
-    $sudoBase = (($domainSection -split "\.") | ForEach-Object { "DC=$_" }) -join ","
-    if (([string]$Family).Trim().ToLowerInvariant() -in @("rhel", "suse")) {
-        # printf's own \n, not a newline in the string: the command ends up in a YAML
-        # double-quoted scalar, which folds a literal line break into a space.
-        [void]$commands.Add("mkdir -p /etc/sssd/conf.d && printf '[domain/%s]\nldap_sudo_search_base = %s\n' " +
-                            (ConvertTo-ShellSingleQuoted -Value $domainSection) + " " + (ConvertTo-ShellSingleQuoted -Value $sudoBase) +
-                            " > /etc/sssd/conf.d/90-hv-studio-sudo.conf && chmod 0600 /etc/sssd/conf.d/90-hv-studio-sudo.conf")
-    }
+    $sudoDropIn = "/etc/sssd/conf.d/90-hv-studio-sudo.conf"
+    # printf's own \n, not a newline in the string: the command ends up in a YAML
+    # double-quoted scalar, which folds a literal line break into a space.
+    [void]$commands.Add("mkdir -p /etc/sssd/conf.d && printf '[domain/%s]\nsudo_provider = none\n' " +
+                        (ConvertTo-ShellSingleQuoted -Value $domainSection) +
+                        " > $sudoDropIn && chmod 0600 $sudoDropIn")
 
     $join = "printf '%s' " + (ConvertTo-ShellSingleQuoted -Value $joinPassword) +
             " | realm join $joinArgs " + (ConvertTo-ShellSingleQuoted -Value $domain) +
-            " && echo DOMAIN-JOIN-OK || echo DOMAIN-JOIN-FAILED"
+            " && echo DOMAIN-JOIN-OK || { echo DOMAIN-JOIN-FAILED; rm -f $sudoDropIn; }"
     [void]$commands.Add($join)
 
 
@@ -4042,9 +4049,10 @@ function Get-CloudInitUserData {
             # DC, so a second one joins the list by itself. The image's internet pools
             # are replaced, not added to - a lab without a route out still gets time.
             #
-            # cloud-init's ntp module, present on all eight images, writes the config
-            # for whichever client is installed (chrony on the RHEL family and Ubuntu
-            # 26.04, systemd-timesyncd on the rest). It runs in the config stage, so the
+            # cloud-init's ntp module writes the config for whichever client is
+            # installed (chrony on the RHEL family and Ubuntu 26.04, systemd-timesyncd
+            # on the rest). It is on every gold - New-Vhdx.ps1 adds it where an image
+            # leaves it out (Oracle Linux 9). It runs in the config stage, so the
             # clock is already syncing against the DC when the join below waits for it.
             [void]$lines.Add("ntp:")
             [void]$lines.Add("  enabled: true")

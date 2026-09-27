@@ -5875,8 +5875,24 @@ function Get-BakeUserData {
     if (-not [string]::IsNullOrWhiteSpace($TimeZone)) { [void]$lines.Add("timezone: $TimeZone") }
 
     $wantMirrorDropIn = $familyProfile.UsesAptModule -and -not [string]::IsNullOrWhiteSpace($MirrorUri)
-    if ($wantAliases -or $wantPrompt -or $wantFastfetch -or $wantMirrorDropIn -or $wantRegion) {
+    $wantGrubDropIn = ([string]$familyProfile.Family) -eq "debian"
+    if ($wantAliases -or $wantPrompt -or $wantFastfetch -or $wantMirrorDropIn -or $wantRegion -or $wantGrubDropIn) {
         [void]$lines.Add("write_files:")
+    }
+    if ($wantGrubDropIn) {
+        # The kernel command line for Debian and Ubuntu - see the BAKE-CMDLINE step for
+        # why it is a drop-in there. Sourced by grub-mkconfig after /etc/default/grub,
+        # so it takes the serial console out of whatever the package set.
+        [void]$lines.Add("  - path: /etc/default/grub.d/99-hv-studio-console.cfg")
+        [void]$lines.Add("    permissions: '0644'")
+        [void]$lines.Add("    content: |")
+        [void]$lines.Add("      # Baked by HyperV-VM-Studio: a VM without a COM port gets no serial console.")
+        [void]$lines.Add('      GRUB_CMDLINE_LINUX="$(echo "$GRUB_CMDLINE_LINUX" | sed -E "s/ ?(console|earlyprintk)=ttyS0[^ ]*//g")"')
+        [void]$lines.Add('      GRUB_CMDLINE_LINUX_DEFAULT="$(echo "$GRUB_CMDLINE_LINUX_DEFAULT" | sed -E "s/ ?(console|earlyprintk)=ttyS0[^ ]*//g")"')
+        if (([string]$Entry.Distro) -ne "ubuntu") {
+            [void]$lines.Add("      # quiet, as on an installed system (the cloud image drops it).")
+            [void]$lines.Add('      case " $GRUB_CMDLINE_LINUX_DEFAULT $GRUB_CMDLINE_LINUX " in *" quiet "*) ;; *) GRUB_CMDLINE_LINUX_DEFAULT="$GRUB_CMDLINE_LINUX_DEFAULT quiet" ;; esac')
+        }
     }
     if ($wantRegion) {
         # cloud-init's locale module, switched off for good. With no `locale:` key it
@@ -6278,17 +6294,27 @@ function Get-BakeUserData {
     # line from these same files. The bake itself is unaffected: this boot's command
     # line is already set, and BAKE-OK is written to ttyS0 directly. A VM that gets a
     # COM port for debugging needs console=ttyS0 added back.
+    #
+    # Debian and Ubuntu get a grub.d drop-in instead of edits (write_files, above): on
+    # Debian /etc/default/grub is a conffile of grub-cloud-amd64, and an edited conffile
+    # turns the package's next update into a dpkg prompt that unattended-upgrades will
+    # not answer. Their grub-mkconfig sources /etc/default/grub.d/*.cfg after it, so the
+    # drop-in filters whatever the package sets. Everywhere else the files are edited:
+    # RHEL's are not package files, and Arch and openSUSE keep an edited one and put
+    # the packaged version beside it (.pacnew / .rpmnew) without asking.
     $wantQuiet = ([string]$Entry.Distro) -ne "ubuntu"
+    $grubDropIn = ([string]$familyProfile.Family) -eq "debian"
+    $cmdlineFiles = if ($grubDropIn) { "/etc/kernel/cmdline" } else { "/etc/default/grub /etc/default/grub.d/*.cfg /etc/kernel/cmdline" }
     $cmdline = @(
-        'f=""; for x in /etc/default/grub /etc/default/grub.d/*.cfg /etc/kernel/cmdline; do [ -f "$x" ] && f="$f $x"; done'
+        ('f=""; for x in ' + $cmdlineFiles + '; do [ -f "$x" ] && f="$f $x"; done')
         'if command -v grubby >/dev/null; then for a in $(grubby --info=ALL | grep -oE "(console|earlyprintk)=ttyS0[^ \"]*" | sort -u); do grubby --update-kernel=ALL --remove-args="$a"; done; fi'
         '[ -n "$f" ] && sed -i -E "s/ ?(console|earlyprintk)=ttyS0[^ \"]*//g" $f'
-        'systemctl disable serial-getty@ttyS0.service 2>/dev/null'
+        'systemctl disable serial-getty@ttyS0.service'
     )
     if ($wantQuiet) {
         $cmdline += @(
             'command -v grubby >/dev/null && grubby --update-kernel=ALL --args=quiet'
-            'if [ -f /etc/default/grub ] && ! grep -qE "^GRUB_CMDLINE_LINUX(_DEFAULT)?=.*\bquiet\b" /etc/default/grub; then v=GRUB_CMDLINE_LINUX; grep -q "^GRUB_CMDLINE_LINUX_DEFAULT=" /etc/default/grub && v=GRUB_CMDLINE_LINUX_DEFAULT; sed -i -E "s/^$v=\"/&quiet /" /etc/default/grub; fi'
+            'if [ ! -f /etc/default/grub.d/99-hv-studio-console.cfg ] && [ -f /etc/default/grub ] && ! grep -qE "^GRUB_CMDLINE_LINUX(_DEFAULT)?=.*\bquiet\b" /etc/default/grub; then v=GRUB_CMDLINE_LINUX; grep -q "^GRUB_CMDLINE_LINUX_DEFAULT=" /etc/default/grub && v=GRUB_CMDLINE_LINUX_DEFAULT; sed -i -E "s/^$v=\"/&quiet /" /etc/default/grub; fi'
             '[ -f /etc/kernel/cmdline ] && ! grep -qw quiet /etc/kernel/cmdline && sed -i "s/ *\$/ quiet/" /etc/kernel/cmdline'
         )
     }
@@ -6299,6 +6325,13 @@ function Get-BakeUserData {
         'if command -v grubby >/dev/null; then a=$(grubby --info=DEFAULT | sed -n "s/^args=//p" | tr -d "\""); else a=$(grep -m1 -E "^\s+linux\s" /boot/grub*/grub.cfg | sed -E "s/^\s+linux\s+\S+\s+//"); fi; echo "BAKE-CMDLINE $a"'
     )
     [void]$lines.Add("  - [ sh, -c, '" + ($cmdline -join "; ") + "; true' ]")
+    # cloud-init's ntp module, where the image leaves it out. Build-Vms.ps1 points a
+    # joined VM's clock at the domain through the `ntp:` key, and a key whose module is
+    # not in cloud_config_modules is silently ignored: Oracle Linux 9's cloud.cfg lists
+    # no ntp module (Oracle 10's does), so t-oracle9 kept the image's internet pool
+    # while every other joined VM synced from the DC (found 2026-09-27). Inserted
+    # before timezone, where Oracle 10 has it; a no-op on every image that lists it.
+    [void]$lines.Add('  - [ sh, -c, "if ! sed -n \"/^cloud_config_modules:/,/^[a-z_]*:/p\" /etc/cloud/cloud.cfg | grep -qE \"^ *- *\\[? *ntp\\b\"; then sed -i \"/^cloud_config_modules:/,/^[a-z_]*:/{s/^\\( *\\)- timezone$/\\1- ntp\\n\\1- timezone/}\" /etc/cloud/cloud.cfg && sed -n \"/^cloud_config_modules:/,/^[a-z_]*:/p\" /etc/cloud/cloud.cfg | grep -qE \"^ *- ntp$\" && echo BAKE-NTP-MODULE-ADDED || echo BAKE-NTP-MODULE-MISSING; fi" ]')
     [void]$lines.Add("  - [ cloud-init, clean, '--logs', '--machine-id' ]")
     [void]$lines.Add("  - [ sh, -c, 'rm -f /etc/ssh/ssh_host_*' ]")
     foreach ($artifact in @($familyProfile.NetworkArtifacts)) {
@@ -6328,7 +6361,36 @@ function Get-BakeUserData {
     # write refused mid-growpart, hostname "bake") read as the VM's. The directory
     # itself stays - it is what makes the journal persistent - and journald creates the
     # VM's own subdirectory on its first boot. The host keeps the bake's transcript.
-    [void]$lines.Add("  - [ sh, -c, 'rm -rf /var/log/journal/*' ]")
+    #
+    # --relinquish-var first: journald holds those files open, and an rm under it lost
+    # a race on the 2026-09-27 parallel round - it wrote again 6 s later and recreated
+    # the bake's directory in the Ubuntu 26.04 gold. Relinquished, journald logs the
+    # rest of the bake to /run and has nothing under /var/log/journal left to recreate.
+    [void]$lines.Add("  - [ sh, -c, 'journalctl --relinquish-var && rm -rf /var/log/journal/*' ]")
+    # Ubuntu 26.04 builds its initrd with dracut in hostonly mode, which copies the live
+    # /etc/hostname and /etc/machine-id into it - the bake's "bake" and its id, as they
+    # were when the kernel was installed. Every VM's initrd then set the hostname "bake"
+    # and logged under the bake's machine-id until the real root took over. Rebuilt
+    # here, after both are empty, with the distribution's own command (dracut's
+    # update-initramfs). The other dracut distributions here carry an empty
+    # machine-id placeholder already and initramfs-tools copies neither file.
+    if (([string]$Entry.Distro) -eq "ubuntu") {
+        [void]$lines.Add("  - [ sh, -c, 'if dpkg -s dracut >/dev/null 2>&1; then update-initramfs -u -k all && echo BAKE-INITRD-REBUILT || echo BAKE-INITRD-FAILED; fi' ]")
+    }
+    # SELinux labels on the mount points hidden under btrfs subvolumes. Fedora Cloud's
+    # image build creates /var and /home in the root subvolume before labelling
+    # anything, and once the var and home subvolumes are mounted over them no
+    # restorecon ever reaches those directories again. They stay unlabeled_t, and every
+    # boot systemd-userdbd - which runs before var.mount - is denied a search there: 45
+    # AVCs per boot on a Fedora 43 VM (directories dated 2025-10-23, the image build).
+    # They get the label the policy itself names for the path (matchpathcon). Checked
+    # on that VM: 45 AVCs before, 0 after a reboot. A no-op anywhere without SELinux,
+    # without btrfs, or with the labels already right.
+    $relabel = 'if command -v matchpathcon >/dev/null && selinuxenabled 2>/dev/null && [ "$(findmnt -no FSTYPE /)" = btrfs ]; then ' +
+               'dev=$(findmnt -no SOURCE / | sed "s/\[.*//"); rs=$(findmnt -no FSROOT /); t=$(mktemp -d); ' +
+               'if mount -o subvolid=5 "$dev" "$t"; then findmnt -rn -t btrfs -o TARGET | grep -vx / | while read -r m; do h="$t$rs$m"; [ -d "$h" ] || continue; want=$(matchpathcon -n "$m"); have=$(stat -c %C "$h"); ' +
+               'if [ "$have" != "$want" ]; then chcon "$want" "$h" && echo "BAKE-RELABEL $m $have -> $want" || echo "BAKE-RELABEL-FAILED $m"; fi; done; umount "$t"; fi; rmdir "$t"; fi'
+    [void]$lines.Add("  - [ sh, -c, '" + $relabel + "' ]")
     # The diagnostic account goes here, at the end, once everything that might have
     # needed it has succeeded. -f because the account may own a running process, -r to
     # take its home directory with it, and the sudoers drop-in is cloud-init's own file
@@ -6721,6 +6783,26 @@ function Invoke-LinuxBakeBoot {
             }
             if ($missing.Count -gt 0) {
                 Write-Log "The bake finished without installing $($missing -join ', ') - the gold is missing them" -Tag "Warn"
+            }
+
+            # The generalize steps report what they did, and each of them runs in a shell
+            # that carries on past a failure - so the reports are read here, or a step
+            # that failed would pass unseen. Warnings, like BAKE-PKG: the gold boots, it
+            # is just not what it was meant to be.
+            if ($transcript -match "BAKE-CMDLINE\s*([^\r\n]*)") {
+                if ($Matches[1] -match "ttyS0") {
+                    Write-Log "The gold's kernel command line still names ttyS0 - its VMs get a serial console with no port behind it" -Tag "Warn"
+                }
+            }
+            else {
+                Write-Log "The kernel command line step did not report - the gold may still boot with console=ttyS0" -Tag "Warn"
+            }
+            foreach ($failure in @(
+                @{ Pattern = "BAKE-INITRD-FAILED";        Text = "The initrd could not be rebuilt - VMs boot with the bake's hostname and machine-id in it" },
+                @{ Pattern = "BAKE-RELABEL-FAILED\s+(\S+)"; Text = "An SELinux label could not be set on a hidden mount point" },
+                @{ Pattern = "BAKE-NTP-MODULE-MISSING";   Text = "cloud-init's ntp module could not be enabled - joined VMs keep the image's time servers" }
+            )) {
+                if ($transcript -match $failure.Pattern) { Write-Log $failure.Text -Tag "Warn" }
             }
 
             $kernel = ""
