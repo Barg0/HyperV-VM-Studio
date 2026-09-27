@@ -802,6 +802,7 @@ Same menu style as `Build-Vms.ps1`.
 | `toolbox\Migrate-Vms.ps1` | Export VMs (and vTPM certs, and optionally switches) to a disk or share before a host reinstall; import them back after. Check mode validates a package first. |
 | `toolbox\Convert-Vhdx.ps1` | Convert Fixed disks to Dynamic and actually reclaim the space — guest ReTrim, zero fallback, host compact. |
 | `toolbox\Remove-Vms.ps1` | Tear the lab down: cluster role, VM, disks, folders. **Permanent** — check the selection twice. |
+| `toolbox\Repair-VmPlacement.ps1` | Find VMs whose config or disks are not in `<VM path>\<name>\` / `<VHD path>\<name>\` the way Build-Vms puts them, and move them there, picked per VM — shut down cleanly first by default, or live. |
 
 ## <picture><source media="(prefers-color-scheme: dark)" srcset=".github/assets/icons/files-dark.png"><img src=".github/assets/icons/files-light.png" width="22" alt=""></picture> Reference
 
