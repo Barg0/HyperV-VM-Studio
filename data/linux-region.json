@@ -1,0 +1,34 @@
+{
+  "about": "Linux golds in New-Vhdx.ps1. 'defaults' is only where the four region menus open - every value can still be picked in the menu. 'keyboards' maps a locale tag to the keyboard the gold gets: 'x11' is the XKB layout (Debian and Ubuntu write it to /etc/default/keyboard), 'x11Variant' an optional XKB variant, and 'console' the console keymap names to try in order on every other family - the first one the image has wins (localectl list-keymaps). A tag not listed here falls back to its region part, lower case (de-DE -> de).",
+  "defaults": {
+    "language": "en-US",
+    "locale": "de-DE",
+    "keyboard": "de-DE",
+    "timeZone": ""
+  },
+  "keyboards": {
+    "en-US": { "x11": "us", "console": ["us"] },
+    "en-GB": { "x11": "gb", "console": ["gb", "uk"] },
+    "de-DE": { "x11": "de", "console": ["de"] },
+    "de-AT": { "x11": "at", "console": ["at", "de"] },
+    "de-CH": { "x11": "ch", "console": ["ch", "de_CH-latin1"] },
+    "fr-CH": { "x11": "ch", "x11Variant": "fr", "console": ["ch-fr", "fr_CH-latin1"] },
+    "fr-FR": { "x11": "fr", "console": ["fr"] },
+    "fr-BE": { "x11": "be", "console": ["be", "be-latin1"] },
+    "nl-BE": { "x11": "be", "console": ["be", "be-latin1"] },
+    "ja-JP": { "x11": "jp", "console": ["jp", "jp106"] },
+    "pt-BR": { "x11": "br", "console": ["br", "br-abnt2"] },
+    "pt-PT": { "x11": "pt", "console": ["pt", "pt-latin1"] },
+    "zh-CN": { "x11": "cn", "console": ["cn", "us"] },
+    "zh-TW": { "x11": "tw", "console": ["tw", "us"] },
+    "ko-KR": { "x11": "kr", "console": ["kr", "us"] },
+    "cs-CZ": { "x11": "cz", "console": ["cz"] },
+    "da-DK": { "x11": "dk", "console": ["dk"] },
+    "el-GR": { "x11": "gr", "console": ["gr"] },
+    "sv-SE": { "x11": "se", "console": ["se", "sv-latin1"] },
+    "uk-UA": { "x11": "ua", "console": ["ua"] },
+    "he-IL": { "x11": "il", "console": ["il"] },
+    "sl-SI": { "x11": "si", "console": ["si", "slovene"] },
+    "et-EE": { "x11": "ee", "console": ["ee", "et"] }
+  }
+}

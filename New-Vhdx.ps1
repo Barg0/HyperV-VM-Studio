@@ -5569,28 +5569,105 @@ function Get-LinuxLocaleName {
     return ($LocaleTag -replace "-", "_") + ".UTF-8"
 }
 
-function Get-LinuxKeymap {
+function Import-LinuxRegionFile {
     <#
-        de-DE -> de, en-GB -> gb, en-US -> us.
+        data\linux-region.json: where the Linux region menus open, and which keyboard a
+        locale tag becomes. Loaded once. The file only moves the menus' starting point -
+        every value can still be picked - so a site in another country edits the file
+        rather than the script.
 
-        A console keymap is named after the LAYOUT, which usually - not always -
-        matches the region half of the tag lowercased. The exceptions that matter are
-        listed; anything not listed falls back to the region half, and a wrong keymap
-        is a cosmetic problem on a machine reached over SSH.
+        Absent or unreadable, the menus open where they always did (en-US for the
+        language, the locale catalog's default for the rest) and keyboards fall back to
+        the region part of the tag. A broken file must not take a bake down with it.
+    #>
+    if ($null -ne $script:LinuxRegion) { return }
+    $script:LinuxRegion = [PSCustomObject]@{
+        Language  = "en-US"
+        Locale    = $script:DefaultLocale
+        Keyboard  = $script:DefaultLocale
+        TimeZone  = ""
+        Keyboards = @{}
+    }
+    $path = Join-Path -Path $PSScriptRoot -ChildPath "data\linux-region.json"
+    if (-not (Test-Path -LiteralPath $path)) {
+        Write-Log "No linux-region.json - the Linux region menus open on en-US / $($script:DefaultLocale)" -Tag "Warn"
+        return
+    }
+    try {
+        $data = Get-Content -LiteralPath $path -Raw | ConvertFrom-Json
+    }
+    catch {
+        Write-Log "linux-region.json is not valid JSON ($($_.Exception.Message)) - using the built-in region defaults" -Tag "Warn"
+        return
+    }
+
+    # A default only counts when the menu can actually open on it: a tag that is not
+    # in the locale catalog is reported and the built-in one kept.
+    foreach ($field in @("language", "locale", "keyboard")) {
+        $value = ([string]$data.defaults.$field).Trim()
+        if ([string]::IsNullOrWhiteSpace($value)) { continue }
+        if ($script:LocaleCatalog -and -not $script:LocaleCatalog.Contains($value)) {
+            Write-Log "linux-region.json: defaults.$field '$value' is not in the locale catalog - ignored" -Tag "Warn"
+            continue
+        }
+        $script:LinuxRegion.($field.Substring(0, 1).ToUpperInvariant() + $field.Substring(1)) = $value
+    }
+    $script:LinuxRegion.TimeZone = ([string]$data.defaults.timeZone).Trim()
+
+    if ($null -ne $data.keyboards) {
+        foreach ($property in $data.keyboards.PSObject.Properties) {
+            $k = $property.Value
+            $x11 = ([string]$k.x11).Trim()
+            if ([string]::IsNullOrWhiteSpace($x11)) {
+                Write-Log "linux-region.json: keyboards.$($property.Name) has no x11 layout - ignored" -Tag "Warn"
+                continue
+            }
+            $console = @(@($k.console) | ForEach-Object { ([string]$_).Trim() } | Where-Object { $_ })
+            if ($console.Count -eq 0) { $console = @($x11) }
+            $script:LinuxRegion.Keyboards[$property.Name] = [PSCustomObject]@{
+                X11     = $x11
+                Variant = ([string]$k.x11Variant).Trim()
+                Console = $console
+            }
+        }
+    }
+    Write-Log ("Linux region defaults: language {0}, locale {1}, keyboard {2}, time zone {3} ({4} keyboard mappings)" -f `
+        $script:LinuxRegion.Language, $script:LinuxRegion.Locale, $script:LinuxRegion.Keyboard,
+        $(if ($script:LinuxRegion.TimeZone) { $script:LinuxRegion.TimeZone } else { "from the locale" }),
+        $script:LinuxRegion.Keyboards.Count) -Tag "Debug"
+}
+
+function Get-LinuxKeyboard {
+    <#
+        The keyboard a locale tag becomes on a Linux gold, from data\linux-region.json.
+
+        Two name spaces, because the families set the keyboard in two different places:
+        Debian and Ubuntu write an XKB layout (XKBLAYOUT, plus XKBVARIANT) to
+        /etc/default/keyboard, and every other family sets a console keymap through
+        localectl set-keymap. They are not the same names - Arch's kbd has "uk" and no
+        "gb", openSUSE's list has "gb" and no "uk", Rocky has both - so the console side
+        is a list, and the bake takes the first name the image actually has.
+
+        A tag the file does not list falls back to its region part (de-DE -> de) for both.
     #>
     param([string]$LocaleTag)
 
-    $overrides = @{
-        "en-US" = "us"; "en-GB" = "gb"; "ja-JP" = "jp"; "pt-BR" = "br"
-        "zh-CN" = "cn"; "zh-TW" = "tw"; "ko-KR" = "kr"; "cs-CZ" = "cz"
-        "da-DK" = "dk"; "el-GR" = "gr"; "sv-SE" = "se"; "uk-UA" = "ua"
-        "he-IL" = "il"; "sl-SI" = "si"; "et-EE" = "ee"
-    }
-    if ($overrides.ContainsKey($LocaleTag)) { return $overrides[$LocaleTag] }
+    Import-LinuxRegionFile
+    if ($script:LinuxRegion.Keyboards.ContainsKey($LocaleTag)) { return $script:LinuxRegion.Keyboards[$LocaleTag] }
 
     $parts = $LocaleTag -split "-"
-    if ($parts.Count -ge 2) { return $parts[$parts.Count - 1].ToLowerInvariant() }
-    return "us"
+    $name = if ($parts.Count -ge 2) { $parts[$parts.Count - 1].ToLowerInvariant() } else { "us" }
+    return [PSCustomObject]@{ X11 = $name; Variant = ""; Console = @($name) }
+}
+
+function Get-LinuxKeymap {
+    # The keyboard as one short label for the menus and the log: the XKB layout, with
+    # its variant when there is one ("ch (fr)").
+    param([string]$LocaleTag)
+
+    $k = Get-LinuxKeyboard -LocaleTag $LocaleTag
+    if ($k.Variant) { return "$($k.X11) ($($k.Variant))" }
+    return $k.X11
 }
 
 function New-CloudInitSeedDisk {
@@ -5697,6 +5774,10 @@ function Get-BakeUserData {
         [string]$Language = "",
         [string]$Locale = "",
         [string]$Keymap = "",
+        # The XKB variant to go with it ("fr" for Swiss French), and the console keymap
+        # names to try in order on the families that set a console keymap.
+        [string]$KeymapVariant = "",
+        [string[]]$ConsoleKeymaps = @(),
         [string]$TimeZone = ""
     )
 
@@ -6127,12 +6208,21 @@ function Get-BakeUserData {
         # localed validates X11 layouts through libxkbcommon, which the cloud image
         # lacks, and answers "Local keyboard configuration not supported on this
         # system" for a layout the console had already accepted.
+        #
+        # The two sides take different names (see Get-LinuxKeyboard): Debian's file is
+        # XKB, the console keymap list differs per image. The console side tries each
+        # candidate against the image's own list and says which one it took, or
+        # BAKE-KEYMAP-MISSING when none fits - which the host turns into a warning.
         if (-not [string]::IsNullOrWhiteSpace($Keymap)) {
             if ([string]$familyProfile.Family -eq "debian") {
-                [void]$lines.Add("  - [ sh, -c, 'if grep -q ^XKBLAYOUT= /etc/default/keyboard 2>/dev/null; then sed -i s/^XKBLAYOUT=.*/XKBLAYOUT=" + $Keymap + "/ /etc/default/keyboard; else echo XKBLAYOUT=" + $Keymap + " >> /etc/default/keyboard; fi' ]")
+                foreach ($pair in @(@("XKBLAYOUT", $Keymap), @("XKBVARIANT", $KeymapVariant))) {
+                    [void]$lines.Add("  - [ sh, -c, 'if grep -q ^" + $pair[0] + "= /etc/default/keyboard 2>/dev/null; then sed -i s/^" + $pair[0] + "=.*/" + $pair[0] + "=" + $pair[1] + "/ /etc/default/keyboard; else echo " + $pair[0] + "=" + $pair[1] + " >> /etc/default/keyboard; fi' ]")
+                }
             }
             else {
-                [void]$lines.Add("  - [ sh, -c, 'localectl set-keymap " + $Keymap + "' ]")
+                $candidates = @($ConsoleKeymaps | Where-Object { $_ })
+                if ($candidates.Count -eq 0) { $candidates = @($Keymap) }
+                [void]$lines.Add('  - [ sh, -c, ''k=""; for c in ' + ($candidates -join " ") + '; do if localectl list-keymaps 2>/dev/null | grep -qx "$c"; then k=$c; break; fi; done; if [ -n "$k" ] && localectl set-keymap "$k"; then echo BAKE-KEYMAP $k; else echo BAKE-KEYMAP-MISSING ' + ($candidates -join ",") + '; fi'' ]')
             }
         }
         # BAKE-LOCALE says by name whether each locale exists on the gold, which is
@@ -6680,10 +6770,15 @@ function Invoke-LinuxBakeBoot {
             $region = @{
                 Language = Get-LinuxLocaleName -LocaleTag ([string]$Config.Language)
                 Locale   = Get-LinuxLocaleName -LocaleTag $(if ([string]::IsNullOrWhiteSpace([string]$Config.Locale)) { [string]$Config.Language } else { [string]$Config.Locale })
-                Keymap   = $(if ([string]::IsNullOrWhiteSpace([string]$Config.KeyboardLayout)) { "" } else { Get-LinuxKeymap -LocaleTag ([string]$Config.KeyboardLayout) })
                 TimeZone = [string]$Config.TimeZone
             }
-            Write-Log ("Baking region: LANG {0}, formats {1}, keymap {2}, time zone {3}" -f $region.Language, $region.Locale, $region.Keymap, $region.TimeZone) -Tag "Info"
+            if (-not [string]::IsNullOrWhiteSpace([string]$Config.KeyboardLayout)) {
+                $keyboard = Get-LinuxKeyboard -LocaleTag ([string]$Config.KeyboardLayout)
+                $region.Keymap = $keyboard.X11
+                $region.KeymapVariant = $keyboard.Variant
+                $region.ConsoleKeymaps = @($keyboard.Console)
+            }
+            Write-Log ("Baking region: LANG {0}, formats {1}, keymap {2}, time zone {3}" -f $region.Language, $region.Locale, (Get-LinuxKeymap -LocaleTag ([string]$Config.KeyboardLayout)), $region.TimeZone) -Tag "Info"
         }
         $userData = Get-BakeUserData -Entry $Entry -ApplyUpdates $ApplyUpdates -ExtraPackages $ExtraPackages -MirrorUri $mirrorUri -Features $bakeFeatures @region
         $metaData = "instance-id: bake-" + [DateTime]::UtcNow.ToString("yyyyMMddHHmmss") + "`nlocal-hostname: bake`n"
@@ -6800,7 +6895,8 @@ function Invoke-LinuxBakeBoot {
             foreach ($failure in @(
                 @{ Pattern = "BAKE-INITRD-FAILED";        Text = "The initrd could not be rebuilt - VMs boot with the bake's hostname and machine-id in it" },
                 @{ Pattern = "BAKE-RELABEL-FAILED\s+(\S+)"; Text = "An SELinux label could not be set on a hidden mount point" },
-                @{ Pattern = "BAKE-NTP-MODULE-MISSING";   Text = "cloud-init's ntp module could not be enabled - joined VMs keep the image's time servers" }
+                @{ Pattern = "BAKE-NTP-MODULE-MISSING";   Text = "cloud-init's ntp module could not be enabled - joined VMs keep the image's time servers" },
+                @{ Pattern = "BAKE-KEYMAP-MISSING";       Text = "None of the console keymaps for the chosen keyboard exists on this image - the gold keeps its own (see data\linux-region.json)" }
             )) {
                 if ($transcript -match $failure.Pattern) { Write-Log $failure.Text -Tag "Warn" }
             }
@@ -6949,10 +7045,17 @@ function Start-LinuxInteractiveConfiguration {
         # the two spellings sitting next to each other are what made this easy to write.
         $localeItems += [PSCustomObject]@{ Id = $tag; Label = "$tag - $(Get-LocaleDisplayName -Locale $tag)" }
     }
+    # Where the four menus open: data\linux-region.json, unless -Locale or
+    # -KeyboardLayout were given on the command line. Only the starting point - every
+    # entry can still be picked.
+    Import-LinuxRegionFile
+    $startLocale = if ($script:LocaleGiven) { $CurrentLocale } else { $script:LinuxRegion.Locale }
+    $startKeyboard = if ($script:KeyboardGiven) { $CurrentKeyboard } else { $script:LinuxRegion.Keyboard }
+
     # 1. Language - LANG, so what the system SAYS, and the gold's middle segment.
-    # en-US by default: English logs stay
-    # greppable and every upstream error message matches what a search engine has seen.
-    $languageDefault = [array]::IndexOf(@($localeItems.Id), "en-US")
+    # The shipped file says en-US: English logs stay greppable and every upstream error
+    # message matches what a search engine has seen.
+    $languageDefault = [array]::IndexOf(@($localeItems.Id), $script:LinuxRegion.Language)
     if ($languageDefault -lt 0) { $languageDefault = 0 }
     $language = Show-Menu -Title "Select the system language" -Items $localeItems -SelectedIndex $languageDefault `
         -Heading "Language" -HeadingHint "LANG - the language of messages, logs and man pages. Leave it on en-US unless you want translated error text" `
@@ -6962,7 +7065,7 @@ function Start-LinuxInteractiveConfiguration {
 
     # 2. Locale - the LC_* format family, so what the system SHOWS. Dates, decimal
     # separators, currency, paper size.
-    $localeDefault = [array]::IndexOf(@($localeItems.Id), $CurrentLocale)
+    $localeDefault = [array]::IndexOf(@($localeItems.Id), $startLocale)
     if ($localeDefault -lt 0) { $localeDefault = 0 }
     $locale = Show-Menu -Title "Select the regional format" -Items $localeItems -SelectedIndex $localeDefault `
         -Heading "Locale" -HeadingHint "LC_TIME, LC_NUMERIC, LC_MONETARY and the rest - dates, numbers and currency, not the language" `
@@ -6970,7 +7073,7 @@ function Start-LinuxInteractiveConfiguration {
     if ($null -eq $locale) { return $null }
 
     # 3. Keyboard - the console keymap.
-    $keyboardDefault = [array]::IndexOf(@($localeItems.Id), $CurrentKeyboard)
+    $keyboardDefault = [array]::IndexOf(@($localeItems.Id), $startKeyboard)
     if ($keyboardDefault -lt 0) { $keyboardDefault = $localeDefault }
     $keyboard = Show-Menu -Title "Select the console keyboard layout" -Items $localeItems -SelectedIndex $keyboardDefault `
         -Heading "Keyboard" -HeadingHint "The console keymap - irrelevant over SSH, it matters at the Hyper-V console" `
@@ -6991,10 +7094,14 @@ function Start-LinuxInteractiveConfiguration {
 
     # 419 zones sorted by region put UTC near the bottom and Europe in the middle, which
     # meant scrolling a long way to reach the one this lab actually uses. The default is
-    # the configured locale's own zone where that can be worked out, Europe/Berlin
-    # otherwise - and either way Home/End still reach the ends of the list.
-    $timeZoneDefault = [array]::IndexOf(@($script:LinuxTimeZones.Id), (Get-DefaultLinuxTimeZone -LocaleTag $locale))
-    if ($timeZoneDefault -lt 0) { $timeZoneDefault = [array]::IndexOf(@($script:LinuxTimeZones.Id), "Europe/Berlin") }
+    # linux-region.json's timeZone when it names one, else the chosen locale's own zone
+    # where that can be worked out, else UTC - and Home/End still reach the ends.
+    $timeZoneDefault = -1
+    if ($script:LinuxRegion.TimeZone) {
+        $timeZoneDefault = [array]::IndexOf(@($script:LinuxTimeZones.Id), $script:LinuxRegion.TimeZone)
+        if ($timeZoneDefault -lt 0) { Write-Log "linux-region.json: timeZone '$($script:LinuxRegion.TimeZone)' is not an IANA zone in the catalog - ignored" -Tag "Warn" }
+    }
+    if ($timeZoneDefault -lt 0) { $timeZoneDefault = [array]::IndexOf(@($script:LinuxTimeZones.Id), (Get-DefaultLinuxTimeZone -LocaleTag $locale)) }
     if ($timeZoneDefault -lt 0) { $timeZoneDefault = [array]::IndexOf(@($script:LinuxTimeZones.Id), "UTC") }
     if ($timeZoneDefault -lt 0) { $timeZoneDefault = 0 }
     $timeZone = Show-Menu -Title "Select the time zone" -Items $script:LinuxTimeZones -SelectedIndex $timeZoneDefault `
@@ -9148,6 +9255,10 @@ Write-Log "Log file: $logFile" -Tag "Info"
 # before either is looked at. Empty means "the catalog's default" - the parameter
 # cannot name it earlier because the default itself comes from locales.json.
 Import-LocaleCatalogFile
+# Whether they were given, before the defaults fill them in: the Linux menus open on
+# data\linux-region.json's defaults unless the command line said otherwise.
+$script:LocaleGiven = -not [string]::IsNullOrWhiteSpace($Locale)
+$script:KeyboardGiven = -not [string]::IsNullOrWhiteSpace($KeyboardLayout)
 if ([string]::IsNullOrWhiteSpace($Locale)) { $Locale = $script:DefaultLocale }
 if ([string]::IsNullOrWhiteSpace($KeyboardLayout)) { $KeyboardLayout = $script:DefaultLocale }
 foreach ($localeArgument in @(@{ Name = "-Locale"; Value = $Locale }, @{ Name = "-KeyboardLayout"; Value = $KeyboardLayout })) {

@@ -268,7 +268,13 @@ gold does not start with a backlog. The menus also ask for the language, regiona
 keyboard and time zone, the package mirror on Ubuntu and Debian, and any extra packages every
 VM should carry. Language, format, keyboard and time zone are applied **in the bake** and stay
 with the gold: a VM keeps them whether Build-Vms or Azure Local provisions it, and changing them
-means baking again. The bake then erases its own identity — cloud-init state, machine-id, SSH
+means baking again. Where those four menus open comes from `data\linux-region.json`
+(`defaults`: en-US language, de-DE format and keyboard, time zone from the format — edit it and
+the menus open on your region instead; anything can still be picked). The same file maps a
+locale to its keyboard: the XKB layout Debian and Ubuntu write to `/etc/default/keyboard`, and
+the console keymap names to try on every other family, since Arch, Rocky and openSUSE do not
+share one set (en-GB is `uk` on Arch, `gb` on openSUSE). The bake takes the first name the
+image has. The bake then erases its own identity — cloud-init state, machine-id, SSH
 host keys — which is the Linux half of what sysprep does for Windows.
 
 **Optional** — six ticks, all off by default, baked into the gold:
