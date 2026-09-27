@@ -4394,7 +4394,16 @@ function Get-LinuxImageCatalog {
             # swap), and a gold never shrinks, so the default sits just above it.
             DefaultDiskGB = 40
             Generation    = 2
-            BakePackages  = @("hyperv-daemons")
+            # kernel-uek-modules: the template carries only the -core halves of UEK,
+            # and i2c-dev is not in them. fwupd (which the template ships, and which
+            # keeps the VM's UEFI dbx current) asks for i2c_dev on every boot through
+            # /usr/lib/modules-load.d/fwupd-i2c.conf - "Failed to find module
+            # 'i2c_dev'" in the error journal until the module exists. Rocky and Alma
+            # keep i2c-dev in kernel-modules-core, which is why only Oracle needs this.
+            # The plain package, not the kernel-uek metapackage: that one also pulls
+            # the desktop, usb and wireless module sets. Installed, it follows every
+            # kernel update like any installonly package.
+            BakePackages  = @("hyperv-daemons", "kernel-uek-modules")
             # Root is an LV, and cloud-init's growpart skips it outright ("Resizing
             # mapped device ... skipped as it is not encrypted"), so a bigger gold
             # would keep a 32 GiB root. The partition, the PV and the root LV are grown
@@ -4418,7 +4427,8 @@ function Get-LinuxImageCatalog {
             SourceFormat  = "qcow2"
             DefaultDiskGB = 40
             Generation    = 2
-            BakePackages  = @("hyperv-daemons")
+            # kernel-uek-modules for i2c-dev - see Oracle 10 above.
+            BakePackages  = @("hyperv-daemons", "kernel-uek-modules")
             BakeBootCommands = @(
                 'root=$(findmnt -no SOURCE /); case "$root" in /dev/mapper/*) pv=$(pvs --noheadings -o pv_name 2>/dev/null | head -n1 | tr -d " "); part=$(basename "$(readlink -f "$pv")"); disk=$(lsblk -dno PKNAME "/dev/$part"); num=$(cat "/sys/class/block/$part/partition"); growpart "/dev/$disk" "$num"; pvresize "$pv" && lvextend -r -l +100%FREE "$root"; echo BAKE-LVM-ROOT $(lvs --noheadings -o lv_size "$root" 2>/dev/null | tr -d " ") ;; esac'
             )
@@ -4604,7 +4614,8 @@ function Get-LinuxFamilyProfile {
             # it hangs the port up, the tee below loses its output, and cloud-init's
             # final stage died with it mid-zypper on a probe bake - which then printed
             # BAKE-OK over a gold with nothing installed. bootcmd runs before getty
-            # comes up. The VMs mask it for good in Build-Vms.ps1.
+            # comes up. The VMs get no serial getty at all: the end of the bake takes
+            # console=ttyS0 off the kernel command line.
             BootCommands    = @(
                 'systemctl mask --runtime --now serial-getty@ttyS0.service'
             )
@@ -5864,20 +5875,9 @@ function Get-BakeUserData {
     if (-not [string]::IsNullOrWhiteSpace($TimeZone)) { [void]$lines.Add("timezone: $TimeZone") }
 
     $wantMirrorDropIn = $familyProfile.UsesAptModule -and -not [string]::IsNullOrWhiteSpace($MirrorUri)
-    # Always written now (the console drop-in below), so the key is unconditional.
-    [void]$lines.Add("write_files:")
-    # The console log level, for every gold. The cloud images boot without `quiet`, so
-    # the kernel prints everything below debug on the console - and on a VM's first
-    # boot that is the SELinux policy reloads, "systemd-rc-local-generator: rc.local is
-    # not marked executable" once per systemctl daemon-reload (every package install
-    # triggers one), and hv_netvsc's GRO notice, all scrolling over the login prompt
-    # of the Hyper-V console. 4 4 1 7 is the kernel's own "quiet" behaviour: errors and
-    # worse still reach the console, and everything stays in dmesg and the journal.
-    [void]$lines.Add("  - path: /etc/sysctl.d/90-hv-studio-console.conf")
-    [void]$lines.Add("    permissions: '0644'")
-    [void]$lines.Add("    content: |")
-    [void]$lines.Add("      # Baked by HyperV-VM-Studio: only errors on the console; the rest is in dmesg.")
-    [void]$lines.Add("      kernel.printk = 4 4 1 7")
+    if ($wantAliases -or $wantPrompt -or $wantFastfetch -or $wantMirrorDropIn -or $wantRegion) {
+        [void]$lines.Add("write_files:")
+    }
     if ($wantRegion) {
         # cloud-init's locale module, switched off for good. With no `locale:` key it
         # still runs on every new instance and re-applies what it thinks the default
@@ -6192,23 +6192,6 @@ function Get-BakeUserData {
     foreach ($command in @($familyProfile.CleanupCommands)) {
         [void]$lines.Add("  - [ sh, -c, '" + $command + "' ]")
     }
-    # Debian 13's systemd 257 ships systemd-ssh-generator, which looks for an AF_VSOCK
-    # CID to offer SSH over vsock. Debian's cloud kernel has no vsock transport here,
-    # so the generator fails on every boot ("Failed to query local AF_VSOCK CID") and
-    # lands in the error journal; masking it removes a feature this machine cannot use.
-    if (([string]$Entry.Distro) -eq "debian") {
-        [void]$lines.Add("  - [ sh, -c, '[ -e /usr/lib/systemd/system-generators/systemd-ssh-generator ] && mkdir -p /etc/systemd/system-generators && ln -sf /dev/null /etc/systemd/system-generators/systemd-ssh-generator; true' ]")
-    }
-    # fwupd asks systemd-modules-load for i2c_dev on every boot, and Oracle's UEK
-    # ships that module only in kernel-uek-modules-extra, which the template does not
-    # carry - "Failed to find module 'i2c_dev'" in the error journal of every boot.
-    # Firmware updates through fwupd do not apply to a VM, so the request is masked, and
-    # only where the module really is missing; a kernel that has it keeps the file.
-    # One line per boot remains, from the initrd: Oracle's dracut copies every
-    # /usr/lib/modules-load.d/*.conf into the initramfs whatever /etc says (a rebuild
-    # after the mask was tried on 2026-09-27 and changed nothing). Silencing that too
-    # would mean dropping systemd-modules-load from the initramfs - not for one notice.
-    [void]$lines.Add("  - [ sh, -c, '[ -e /usr/lib/modules-load.d/fwupd-i2c.conf ] && ! modinfo i2c_dev >/dev/null 2>&1 && ln -sf /dev/null /etc/modules-load.d/fwupd-i2c.conf; true' ]")
     # Ubuntu: the azure kernel only. The cloud image marks linux-virtual as manually
     # installed, so the generic kernel stayed beside azure on every VM, and every
     # kernel update was downloaded and installed twice. Purging the three virtual
@@ -6273,6 +6256,49 @@ function Get-BakeUserData {
         # that user is the thing being debugged.
         [void]$lines.Add('  - [ sh, -c, "touch /etc/skel/.hushlogin /root/.hushlogin" ]')
     }
+    # The kernel command line, from a cloud's to a console VM's. Every cloud image here
+    # boots with console=ttyS0 (Rocky with nothing else), for a cloud that captures the
+    # serial log - but a VM built here has its COM ports unconnected, so the kernel sees
+    # no UART behind ttyS0 (`uart:unknown` in /proc/tty/driver/serial). Two things
+    # followed from that on every VM: systemd-getty-generator made a serial getty for the
+    # console= entry, and agetty failed with EIO and was restarted until the start limit;
+    # and on Rocky /dev/console itself pointed at the missing UART. With console= gone
+    # the generator makes no serial getty and the console is the Hyper-V screen.
+    # Oracle's templates also enable serial-getty@ttyS0 outright (a symlink in
+    # getty.target.wants that no package owns), so that enable is undone too - a
+    # disable, which leaves the unit usable once a COM port is attached.
+    #
+    # `quiet` is the other half: every installed (non-cloud) system of these families
+    # has it, and the cloud images drop it, so the Hyper-V screen got every info-level
+    # line of the boot. Not on Ubuntu: its installed default is "quiet splash", which the
+    # cloud image overrides in grub.d on purpose and replaces with its own
+    # 10-console-messages.conf printk setting - Ubuntu's own answer, left as it is.
+    #
+    # Last, after every package install - a kernel installed later takes its command
+    # line from these same files. The bake itself is unaffected: this boot's command
+    # line is already set, and BAKE-OK is written to ttyS0 directly. A VM that gets a
+    # COM port for debugging needs console=ttyS0 added back.
+    $wantQuiet = ([string]$Entry.Distro) -ne "ubuntu"
+    $cmdline = @(
+        'f=""; for x in /etc/default/grub /etc/default/grub.d/*.cfg /etc/kernel/cmdline; do [ -f "$x" ] && f="$f $x"; done'
+        'if command -v grubby >/dev/null; then for a in $(grubby --info=ALL | grep -oE "(console|earlyprintk)=ttyS0[^ \"]*" | sort -u); do grubby --update-kernel=ALL --remove-args="$a"; done; fi'
+        '[ -n "$f" ] && sed -i -E "s/ ?(console|earlyprintk)=ttyS0[^ \"]*//g" $f'
+        'systemctl disable serial-getty@ttyS0.service 2>/dev/null'
+    )
+    if ($wantQuiet) {
+        $cmdline += @(
+            'command -v grubby >/dev/null && grubby --update-kernel=ALL --args=quiet'
+            'if [ -f /etc/default/grub ] && ! grep -qE "^GRUB_CMDLINE_LINUX(_DEFAULT)?=.*\bquiet\b" /etc/default/grub; then v=GRUB_CMDLINE_LINUX; grep -q "^GRUB_CMDLINE_LINUX_DEFAULT=" /etc/default/grub && v=GRUB_CMDLINE_LINUX_DEFAULT; sed -i -E "s/^$v=\"/&quiet /" /etc/default/grub; fi'
+            '[ -f /etc/kernel/cmdline ] && ! grep -qw quiet /etc/kernel/cmdline && sed -i "s/ *\$/ quiet/" /etc/kernel/cmdline'
+        )
+    }
+    # grubby has already rewritten the BLS entries; everything else regenerates grub.cfg
+    # with its distribution's own tool.
+    $cmdline += @(
+        'if command -v grubby >/dev/null; then :; elif command -v update-bootloader >/dev/null; then update-bootloader --refresh; elif command -v update-grub >/dev/null; then update-grub; elif command -v grub-mkconfig >/dev/null; then grub-mkconfig -o /boot/grub/grub.cfg; fi'
+        'if command -v grubby >/dev/null; then a=$(grubby --info=DEFAULT | sed -n "s/^args=//p" | tr -d "\""); else a=$(grep -m1 -E "^\s+linux\s" /boot/grub*/grub.cfg | sed -E "s/^\s+linux\s+\S+\s+//"); fi; echo "BAKE-CMDLINE $a"'
+    )
+    [void]$lines.Add("  - [ sh, -c, '" + ($cmdline -join "; ") + "; true' ]")
     [void]$lines.Add("  - [ cloud-init, clean, '--logs', '--machine-id' ]")
     [void]$lines.Add("  - [ sh, -c, 'rm -f /etc/ssh/ssh_host_*' ]")
     foreach ($artifact in @($familyProfile.NetworkArtifacts)) {

@@ -3833,11 +3833,22 @@ function Get-LinuxDomainJoinCommands {
         if (-not [string]::IsNullOrWhiteSpace($token)) { $sudoTokens += $token }
     }
 
+    # openSUSE's /usr/etc/sudoers sets `Defaults targetpw` beside `ALL ALL=(ALL) ALL`:
+    # sudo asks for the TARGET's password - root's - and root is locked, so a domain
+    # admin was refused with "PAM authentication error: User not known to the
+    # underlying authentication module" (found on a Leap 16 VM, 2026-09-27). The
+    # override is scoped to the granted groups: a global `!targetpw` would turn SUSE's
+    # ALL ALL rule into sudo-with-your-own-password for every user on the box.
+    $ownPassword = ([string]$Family).Trim().ToLowerInvariant() -eq "suse"
+
     if ($sudoTokens.Count -gt 0) {
         $script = 'tmp=$(mktemp); '
         foreach ($token in $sudoTokens) {
             $plain = $token.Substring(1) -replace "\\ ", " "
             $script += "if getent group " + (ConvertTo-ShellSingleQuoted -Value $plain) + " >/dev/null 2>&1; then "
+            if ($ownPassword) {
+                $script += "printf 'Defaults:%s !targetpw\n' " + (ConvertTo-ShellSingleQuoted -Value $token) + ' >> $tmp; '
+            }
             $script += "printf '%s ALL=(ALL:ALL) ALL\n' " + (ConvertTo-ShellSingleQuoted -Value $token) + ' >> $tmp; '
             $script += "else echo " + (ConvertTo-ShellSingleQuoted -Value ("SUDO-GROUP-UNRESOLVED " + $plain)) + "; fi; "
         }
@@ -4115,15 +4126,6 @@ function Get-CloudInitUserData {
     if (([string]$Family).Trim().ToLowerInvariant() -eq "debian") {
         [void]$runCommands.Add("DEBIAN_FRONTEND=noninteractive apt-get -y --purge autoremove")
     }
-
-    # The cloud images boot with console=ttyS0, so systemd starts a getty on the
-    # serial port - and a VM built here has no COM port connected. agetty fails to
-    # read the terminal, exits, and is restarted every ten seconds for the life of the
-    # machine: "failed to get terminal attributes: Input/output error", six lines a
-    # minute in the journal of every distribution except Rocky 9. Nothing here uses
-    # the serial console after the bake, so the getty is masked; unmask it on a VM
-    # that gets a COM port attached for debugging.
-    [void]$runCommands.Add("systemctl mask --now serial-getty@ttyS0.service 2>/dev/null; true")
 
     # LAST, and the reason it exists: the seed disk is detached and deleted after this
     # boot, but cloud-init has already copied everything it was given onto the guest's
