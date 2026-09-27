@@ -549,7 +549,7 @@ function Complete-Script {
     $duration      = $scriptEndTime - $scriptStartTime
 
     Write-Log "Runtime $($duration.ToString('hh\:mm\:ss\.ff'))" -Tag "Info"
-    Write-Log "Exit $ExitCode" -Tag "Info"
+    Write-Log "Exit $ExitCode" -Tag "Debug"
     Write-Log "==================== End ====================" -Tag "End"
 
     # One blank line before the prompt comes back, so the shell's own line does not sit
@@ -6316,6 +6316,19 @@ function Get-BakeUserData {
         [void]$lines.Add("  - [ sh, -c, '[ -L /etc/resolv.conf ] || : > /etc/resolv.conf' ]")
     }
     [void]$lines.Add("  - [ sh, -c, 'truncate -s 0 /etc/machine-id' ]")
+    # The bake's hostname, same reasoning: /etc/hostname still said "bake", so every VM
+    # logged its first seconds as "bake" until cloud-init set the real name. Emptied,
+    # systemd falls back to its built-in name (localhost, or the distribution's own)
+    # for those seconds instead.
+    [void]$lines.Add("  - [ sh, -c, ': > /etc/hostname' ]")
+    # The bake's own journal, with the identity it belonged to. Where the journal is
+    # persistent (Rocky, Fedora, Debian, Ubuntu, openSUSE, Arch) journald keeps it in
+    # /var/log/journal/<machine-id>, and resetting the machine-id does not move it: every
+    # VM came up carrying the bake boot beside its own, so the bake's errors (a bfq
+    # write refused mid-growpart, hostname "bake") read as the VM's. The directory
+    # itself stays - it is what makes the journal persistent - and journald creates the
+    # VM's own subdirectory on its first boot. The host keeps the bake's transcript.
+    [void]$lines.Add("  - [ sh, -c, 'rm -rf /var/log/journal/*' ]")
     # The diagnostic account goes here, at the end, once everything that might have
     # needed it has succeeded. -f because the account may own a running process, -r to
     # take its home directory with it, and the sudoers drop-in is cloud-init's own file

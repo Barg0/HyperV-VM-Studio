@@ -430,7 +430,7 @@ function Complete-Script {
     $scriptEndTime = Get-Date
     $duration      = $scriptEndTime - $scriptStartTime
     Write-Log "Runtime $($duration.ToString('hh\:mm\:ss\.ff'))" -Tag "Info"
-    Write-Log "Exit $ExitCode" -Tag "Info"
+    Write-Log "Exit $ExitCode" -Tag "Debug"
     Write-Log "==================== End ====================" -Tag "End"
 
     # One blank line before the prompt comes back, so the shell's own line does not sit
@@ -3721,21 +3721,35 @@ function Get-LinuxDomainJoinCommands {
         [void]$commands.Add("systemctl disable --now sssd-nss.socket sssd-pam.socket sssd-pam-priv.socket sssd-pac.socket 2>/dev/null; true")
     }
     [void]$commands.Add('i=0; until [ "$(timedatectl show -p NTPSynchronized --value 2>/dev/null)" = yes ] || [ $i -ge 90 ]; do sleep 1; i=$((i+1)); done; echo "TIME-SYNC $(timedatectl show -p NTPSynchronized --value 2>/dev/null) after ${i}s"')
+
+    # The sudo search base, stated - and BEFORE the join. Left unset, sssd 2.9+ logs
+    # "ldap_sudo_search_base is not set. SSSD will search the entire directory tree" at
+    # error level on every start (RHEL family, Fedora, openSUSE; Debian and Ubuntu never
+    # log it). The domain's own DN is exactly the scope sssd was already using, so
+    # nothing changes but the log. Tried on Rocky 10 (sssd 2.12): the base alone
+    # silences it; `sudo_provider = none` does NOT, and with the base it brings the
+    # warning back.
+    #
+    # A conf.d drop-in rather than an edit of sssd.conf: realm join writes sssd.conf and
+    # starts sssd in the same breath, so an edit afterwards always left the warning
+    # once in the provisioning boot. sssd merges conf.d into the domain section of the
+    # file realm writes (checked on Rocky 10 and Leap 16: no warning with the drop-in,
+    # the warning back without it). 0600 root, as sssd requires of its config.
+    $domainSection = ([string]$domain).Trim().TrimEnd(".").ToLowerInvariant()
+    $sudoBase = (($domainSection -split "\.") | ForEach-Object { "DC=$_" }) -join ","
+    if (([string]$Family).Trim().ToLowerInvariant() -in @("rhel", "suse")) {
+        # printf's own \n, not a newline in the string: the command ends up in a YAML
+        # double-quoted scalar, which folds a literal line break into a space.
+        [void]$commands.Add("mkdir -p /etc/sssd/conf.d && printf '[domain/%s]\nldap_sudo_search_base = %s\n' " +
+                            (ConvertTo-ShellSingleQuoted -Value $domainSection) + " " + (ConvertTo-ShellSingleQuoted -Value $sudoBase) +
+                            " > /etc/sssd/conf.d/90-hv-studio-sudo.conf && chmod 0600 /etc/sssd/conf.d/90-hv-studio-sudo.conf")
+    }
+
     $join = "printf '%s' " + (ConvertTo-ShellSingleQuoted -Value $joinPassword) +
             " | realm join $joinArgs " + (ConvertTo-ShellSingleQuoted -Value $domain) +
             " && echo DOMAIN-JOIN-OK || echo DOMAIN-JOIN-FAILED"
     [void]$commands.Add($join)
 
-    # The sudo search base, stated. Left unset, sssd 2.9+ logs "ldap_sudo_search_base is
-    # not set. SSSD will search the entire directory tree" at error level on every boot
-    # (RHEL family, Fedora, openSUSE). The domain's own DN is exactly the scope sssd was
-    # already using, so nothing changes but the log. Tried on Rocky 10 (sssd 2.12):
-    # the base alone silences it; `sudo_provider = none` does NOT, and together with
-    # the base it brings the warning back. Debian and Ubuntu never log it.
-    $sudoBase = (($domain.TrimEnd(".") -split "\.") | ForEach-Object { "DC=$_" }) -join ","
-    if (([string]$Family).Trim().ToLowerInvariant() -in @("rhel", "suse")) {
-        [void]$commands.Add("grep -q '^ldap_sudo_search_base' /etc/sssd/sssd.conf 2>/dev/null || sed -i '/^\[domain\//a ldap_sudo_search_base = $sudoBase' /etc/sssd/sssd.conf; systemctl restart sssd 2>/dev/null; true")
-    }
 
     # Debian leaves sssd installed and stopped. realmd writes /etc/sssd/sssd.conf and
     # walks away; the unit ships disabled, so a VM that joined perfectly still resolves
