@@ -42,7 +42,7 @@ Three parts, used in that order:
 
 | | |
 |---|---|
-| <picture><source media="(prefers-color-scheme: dark)" srcset=".github/assets/icons/gold-image-dark.png"><img src=".github/assets/icons/gold-image-light.png" width="16" alt=""></picture> **`New-Vhdx.ps1`** | Turns a Windows ISO into a generalized Gen2 gold image. Server 2016–2025, Windows 11 — including Enterprise multi-session and Server 2025 Datacenter: Azure Edition. Or a Linux cloud image into one: Ubuntu, Debian, Fedora, Rocky Linux, Arch. |
+| <picture><source media="(prefers-color-scheme: dark)" srcset=".github/assets/icons/gold-image-dark.png"><img src=".github/assets/icons/gold-image-light.png" width="16" alt=""></picture> **`New-Vhdx.ps1`** | Turns a Windows ISO into a generalized Gen2 gold image. Server 2016–2025, Windows 11 — including Enterprise multi-session and Server 2025 Datacenter: Azure Edition. Or a Linux cloud image into one: Ubuntu, Debian, Fedora, Rocky Linux, AlmaLinux, Oracle Linux, openSUSE Leap, Arch. |
 | <picture><source media="(prefers-color-scheme: dark)" srcset=".github/assets/icons/monitor-dark.png"><img src=".github/assets/icons/monitor-light.png" width="16" alt=""></picture> **The studio** | A single HTML file. Click the lab together — machines, disks, networks, domain join, Windows roles — and download `config.json`. |
 | <picture><source media="(prefers-color-scheme: dark)" srcset=".github/assets/icons/powershell-dark.png"><img src=".github/assets/icons/powershell-light.png" width="16" alt=""></picture> **`Build-Vms.ps1`** | Reads that file on the host. Differencing disks, answer files — or a cloud-init seed for Linux — VMs created and started. |
 
@@ -252,6 +252,9 @@ own cloud image instead of an ISO:
 | Debian | 13 (Trixie), 12 (Bookworm) |
 | Fedora | 43 |
 | Rocky Linux | 10, 9 |
+| AlmaLinux | 10, 9 |
+| Oracle Linux | 10, 9 |
+| openSUSE Leap | 16.0 |
 | Arch Linux | rolling |
 
 The image is downloaded into `media\`, checked against the checksum the distribution
@@ -286,9 +289,11 @@ VM cannot have rather than letting the build find out:
 
 | | Domain join | Azure Arc | Secure Boot |
 |---|---|---|---|
-| Ubuntu, Debian | ✓ | ✓ | ✓ |
+| Ubuntu, Debian 13 | ✓ | ✓ | ✓ |
+| Debian 12 | ✓ | — Microsoft ends Arc support for it in November 2026 | ✓ |
 | Fedora | ✓ | — Microsoft ships no agent for it | ✓ |
-| Rocky Linux | Joins, but sssd does not start afterwards yet — open issue | ✓ | ✓ |
+| Rocky Linux, AlmaLinux, Oracle Linux | ✓ | ✓ | ✓ |
+| openSUSE Leap | ✓ | — Microsoft lists SLES, not openSUSE | ✓ |
 | Arch Linux | — realmd and adcli are not packaged | — not a supported distribution | — no signed shim |
 
 Arc on Linux needs a service principal — host-context onboarding runs over PowerShell Direct,

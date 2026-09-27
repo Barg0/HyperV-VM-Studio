@@ -992,7 +992,8 @@ function Get-LinuxGoldIds {
     # New-Vhdx.ps1. Their only job here is to let a Linux id past the Windows rules
     # table; everything after that is the ordinary three-segment lookup.
     return @("ubuntu2604", "ubuntu2404", "debian13", "debian12",
-             "fedora43", "rocky10", "rocky9", "arch")
+             "fedora43", "rocky10", "rocky9", "alma10", "alma9", "oracle10", "oracle9",
+             "leap16", "arch")
 }
 
 function Test-IsLinuxImageId {
@@ -3468,6 +3469,18 @@ function Get-LinuxDomainJoinPackages {
         )
     }
 
+    # openSUSE splits sssd by provider, so the AD backend is a package of its own
+    # (sssd-ad); krb5-client is its name for the Kerberos tools. Checked against
+    # Leap 16.0's repo-oss on 2026-09-27. No oddjob: the home directory comes from
+    # pam_mkhomedir through pam-config, see Get-LinuxDomainJoinCommands.
+    #
+    # bind-utils for nsupdate, which is how sssd registers the VM in AD DNS. The
+    # Minimal VM image has no nsupdate, and the first joined Leap VM came up with no A
+    # record while the Oracle and Alma VMs beside it registered theirs.
+    if (([string]$Family).Trim().ToLowerInvariant() -eq "suse") {
+        return @("realmd", "sssd", "sssd-tools", "sssd-ad", "adcli", "krb5-client", "bind-utils")
+    }
+
     return @(
         "realmd", "sssd", "sssd-tools", "adcli", "krb5-user",
         "libnss-sss", "libpam-sss", "samba-common-bin"
@@ -3673,11 +3686,14 @@ function Get-LinuxDomainJoinCommands {
     # image ships no PackageKit, so the query returns nothing and realmd concludes the
     # packages are missing. With --install=/ it trusts the prefix instead and joins.
     #
-    # The RHEL family is not given it: those images DO carry PackageKit, the joins
-    # there work, and a switch that changes how realmd resolves packages is not
-    # something to hand a family that never needed it.
+    # The RHEL family is not given it, and not because it has PackageKit: Oracle
+    # Linux 10/9 and AlmaLinux 10/9 carry none, and all four joined without the switch
+    # on 2026-09-27 - RHEL's realmd does not ask PackageKit before a join. A switch
+    # that changes how realmd resolves packages is not something to hand a family
+    # that never needed it. openSUSE's realmd does ask, and its Minimal VM image has
+    # no PackageKit (`rpm -q PackageKit` on Leap 16.0), so it gets the switch.
     $joinArgs = "--unattended --user=" + (ConvertTo-ShellSingleQuoted -Value $realmUser)
-    if (([string]$Family).Trim().ToLowerInvariant() -eq "debian") {
+    if (([string]$Family).Trim().ToLowerInvariant() -in @("debian", "suse")) {
         $joinArgs = "--install=/ " + $joinArgs
     }
     if (-not [string]::IsNullOrWhiteSpace($ouPath)) {
@@ -3722,6 +3738,19 @@ function Get-LinuxDomainJoinCommands {
         [void]$commands.Add("systemctl enable --now sssd || true")
         [void]$commands.Add("systemctl disable sssd-nss.socket sssd-pam.socket sssd-pam-priv.socket sssd-pac.socket 2>/dev/null; systemctl reset-failed 2>/dev/null; true")
     }
+    # openSUSE ships sssd.service disabled as well (preset disabled on Leap 16.0), and
+    # its responder sockets disabled already, so only the service needs enabling.
+    #
+    # sss in nsswitch, stated rather than trusted to realmd. Leap keeps the vendor
+    # nsswitch.conf in /usr/etc and has none in /etc at all, so the edit starts from a
+    # copy of it - /etc is where glibc looks first. Idempotent: a line that already
+    # names sss is left alone.
+    if (([string]$Family).Trim().ToLowerInvariant() -eq "suse") {
+        [void]$commands.Add("systemctl enable --now sssd || true")
+        [void]$commands.Add("[ -f /etc/nsswitch.conf ] || cp /usr/etc/nsswitch.conf /etc/nsswitch.conf; " +
+                            "sed -i -E '/^(passwd|group):/{/[[:space:]]sss([[:space:]]|$)/!s/$/ sss/}' /etc/nsswitch.conf; " +
+                            "grep -E '^(passwd|group):.*sss' /etc/nsswitch.conf >/dev/null && echo NSS-SSS-OK || echo NSS-SSS-MISSING")
+    }
 
     # A home directory on first login.
     #
@@ -3743,7 +3772,15 @@ function Get-LinuxDomainJoinCommands {
     # which needs oddjobd running - hence the two extra packages on that side.
     # Privacy is handled differently too: HOME_MODE in /etc/login.defs is what
     # oddjob-mkhomedir reads, so 0700 there is the same decision as umask=0077 here.
-    if (([string]$Family).Trim().ToLowerInvariant() -eq "rhel") {
+    # openSUSE manages PAM through pam-config, which owns the common-*-pc files the
+    # /etc/pam.d/common-* links point at - hand edits there are overwritten on its
+    # next run. --sss wires pam_sss into auth, account, password and session (a no-op
+    # when realmd has done it already); --mkhomedir with umask 0077 is the same
+    # private-home decision the other families make.
+    if (([string]$Family).Trim().ToLowerInvariant() -eq "suse") {
+        [void]$commands.Add("pam-config --add --sss --mkhomedir --mkhomedir-umask=0077 && echo MKHOMEDIR-OK || echo MKHOMEDIR-FAILED")
+    }
+    elseif (([string]$Family).Trim().ToLowerInvariant() -eq "rhel") {
         $mkhomedir = "sed -i 's/^#*HOME_MODE.*/HOME_MODE\t0700/' /etc/login.defs; " +
                      "grep -q '^HOME_MODE' /etc/login.defs || printf 'HOME_MODE\t0700\n' >> /etc/login.defs; " +
                      "systemctl enable --now oddjobd; " +
@@ -3880,8 +3917,9 @@ function Get-CloudInitUserData {
     # the installer only drives apt, yum and zypper. Not observed failing here - the
     # studio never offers the tick, and this is the backstop for a hand-edited config.
     $arcDistro = ([string]$Distro).Trim().ToLowerInvariant()
-    if ($null -ne $arcConfig -and $arcDistro -in @("fedora", "arch")) {
-        $arcDistroName = if ($arcDistro -eq "arch") { "Arch Linux" } else { "Fedora" }
+    # openSUSE likewise: Microsoft lists SLES, never openSUSE, on its Arc table.
+    if ($null -ne $arcConfig -and $arcDistro -in @("fedora", "arch", "opensuse")) {
+        $arcDistroName = switch ($arcDistro) { "arch" { "Arch Linux" } "opensuse" { "openSUSE" } default { "Fedora" } }
         Write-Log "Azure Arc for '$HostName' skipped - Azure Arc has no agent for $arcDistroName" -Tag "Warn"
         $arcConfig = $null
     }
@@ -3994,7 +4032,7 @@ function Get-CloudInitUserData {
     # group the distribution does not have leaves an empty one behind and grants
     # nothing through it. The `sudo:` line below is what actually hands out sudo, so a
     # wrong group here has never broken a VM - it has just been wrong.
-    $adminGroup = if (([string]$Family).Trim().ToLowerInvariant() -in @("rhel", "arch")) { "wheel" } else { "sudo" }
+    $adminGroup = if (([string]$Family).Trim().ToLowerInvariant() -in @("rhel", "arch", "suse")) { "wheel" } else { "sudo" }
     [void]$lines.Add("    groups: [$adminGroup]")
     [void]$lines.Add("    shell: /bin/bash")
     [void]$lines.Add("    sudo: 'ALL=(ALL) NOPASSWD:ALL'")

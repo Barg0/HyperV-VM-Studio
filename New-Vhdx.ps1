@@ -4342,6 +4342,111 @@ function Get-LinuxImageCatalog {
             BakePackages  = @("hyperv-daemons")
         }
         [PSCustomObject]@{
+            Id            = "alma-10"
+            Name          = "AlmaLinux 10 (GenericCloud)"
+            ImageId       = "alma10"
+            Distro        = "alma"
+            Family        = "rhel"
+            Version       = "10"
+            # GenericCloud, xfs on plain partitions (no LVM), so growpart and resizefs
+            # do the whole job. `-latest` is an alias the CHECKSUM file lists by that
+            # same name, so no dated URL is needed.
+            Url           = "https://repo.almalinux.org/almalinux/10/cloud/x86_64/images/AlmaLinux-10-GenericCloud-latest.x86_64.qcow2"
+            ChecksumUrl   = "https://repo.almalinux.org/almalinux/10/cloud/x86_64/images/CHECKSUM"
+            Algorithm     = "SHA256"
+            SourceFormat  = "qcow2"
+            DefaultDiskGB = 32
+            Generation    = 2
+            BakePackages  = @("hyperv-daemons")
+        }
+        [PSCustomObject]@{
+            Id            = "alma-9"
+            Name          = "AlmaLinux 9 (GenericCloud)"
+            ImageId       = "alma9"
+            Distro        = "alma"
+            Family        = "rhel"
+            Version       = "9"
+            Url           = "https://repo.almalinux.org/almalinux/9/cloud/x86_64/images/AlmaLinux-9-GenericCloud-latest.x86_64.qcow2"
+            ChecksumUrl   = "https://repo.almalinux.org/almalinux/9/cloud/x86_64/images/CHECKSUM"
+            Algorithm     = "SHA256"
+            SourceFormat  = "qcow2"
+            DefaultDiskGB = 32
+            Generation    = 2
+            BakePackages  = @("hyperv-daemons")
+        }
+        [PSCustomObject]@{
+            Id            = "oracle-10"
+            Name          = "Oracle Linux 10 (KVM template)"
+            ImageId       = "oracle10"
+            Distro        = "oracle"
+            Family        = "rhel"
+            Version       = "10"
+            # Oracle's KVM template, pinned to one update release. Oracle publishes no
+            # checksum FILE - the SHA256 is only in the table on
+            # yum.oracle.com/oracle-linux-templates.html - so the value is pinned here
+            # beside the versioned URL, and the next update release changes both.
+            Url           = "https://yum.oracle.com/templates/OracleLinux/OL10/u1/x86_64/OL10U1_x86_64-kvm-b291.qcow2"
+            ChecksumUrl   = "https://yum.oracle.com/oracle-linux-templates.html"
+            Checksum      = "8e59326c4bf7cfa58a6cac404db8ed583fe3a5f4c460e2b73c64988785bb4f0f"
+            Algorithm     = "SHA256"
+            SourceFormat  = "qcow2"
+            # The template is already 37 GiB (vg_main: a 32 GiB root LV and 4 GiB of
+            # swap), and a gold never shrinks, so the default sits just above it.
+            DefaultDiskGB = 40
+            Generation    = 2
+            BakePackages  = @("hyperv-daemons")
+            # Root is an LV, and cloud-init's growpart skips it outright ("Resizing
+            # mapped device ... skipped as it is not encrypted"), so a bigger gold
+            # would keep a 32 GiB root. The partition, the PV and the root LV are grown
+            # here instead, and xfs with it (-r). bootcmd, so it runs before anything
+            # is installed; it only acts when / really is on device-mapper.
+            BakeBootCommands = @(
+                'root=$(findmnt -no SOURCE /); case "$root" in /dev/mapper/*) pv=$(pvs --noheadings -o pv_name 2>/dev/null | head -n1 | tr -d " "); part=$(basename "$(readlink -f "$pv")"); disk=$(lsblk -dno PKNAME "/dev/$part"); num=$(cat "/sys/class/block/$part/partition"); growpart "/dev/$disk" "$num"; pvresize "$pv" && lvextend -r -l +100%FREE "$root"; echo BAKE-LVM-ROOT $(lvs --noheadings -o lv_size "$root" 2>/dev/null | tr -d " ") ;; esac'
+            )
+        }
+        [PSCustomObject]@{
+            Id            = "oracle-9"
+            Name          = "Oracle Linux 9 (KVM template)"
+            ImageId       = "oracle9"
+            Distro        = "oracle"
+            Family        = "rhel"
+            Version       = "9"
+            Url           = "https://yum.oracle.com/templates/OracleLinux/OL9/u8/x86_64/OL9U8_x86_64-kvm-b293.qcow2"
+            ChecksumUrl   = "https://yum.oracle.com/oracle-linux-templates.html"
+            Checksum      = "b12103391327abee8090686759c0d62dac9a7af2bf0f45fdf6b0d085a0fbb52b"
+            Algorithm     = "SHA256"
+            SourceFormat  = "qcow2"
+            DefaultDiskGB = 40
+            Generation    = 2
+            BakePackages  = @("hyperv-daemons")
+            BakeBootCommands = @(
+                'root=$(findmnt -no SOURCE /); case "$root" in /dev/mapper/*) pv=$(pvs --noheadings -o pv_name 2>/dev/null | head -n1 | tr -d " "); part=$(basename "$(readlink -f "$pv")"); disk=$(lsblk -dno PKNAME "/dev/$part"); num=$(cat "/sys/class/block/$part/partition"); growpart "/dev/$disk" "$num"; pvresize "$pv" && lvextend -r -l +100%FREE "$root"; echo BAKE-LVM-ROOT $(lvs --noheadings -o lv_size "$root" 2>/dev/null | tr -d " ") ;; esac'
+            )
+        }
+        [PSCustomObject]@{
+            Id            = "opensuse-leap-16"
+            Name          = "openSUSE Leap 16.0 (Minimal VM, Cloud)"
+            ImageId       = "leap16"
+            Distro        = "opensuse"
+            Family        = "suse"
+            Version       = "16.0"
+            # The Minimal-VM Cloud build: cloud-init 25.1 (distro sles), NetworkManager,
+            # XFS root on one partition that growpart and resizefs extend, and a
+            # Microsoft-signed shim, so Secure Boot stays on. The unversioned name is an
+            # alias the project keeps pointing at the newest build, and the .sha256
+            # beside it names the same unversioned file. Leap 16.0 reaches end of life
+            # on 2027-10-31; 16.1 replaces this entry before then.
+            Url           = "https://download.opensuse.org/distribution/leap/16.0/appliances/Leap-16.0-Minimal-VM.x86_64-Cloud.qcow2"
+            ChecksumUrl   = "https://download.opensuse.org/distribution/leap/16.0/appliances/Leap-16.0-Minimal-VM.x86_64-Cloud.qcow2.sha256"
+            Algorithm     = "SHA256"
+            SourceFormat  = "qcow2"
+            DefaultDiskGB = 32
+            Generation    = 2
+            # hyper-v is openSUSE's name for the KVP, VSS and fcopy daemons. The stock
+            # kernel carries the Hyper-V drivers, so there is no kernel to swap.
+            BakePackages  = @("hyper-v")
+        }
+        [PSCustomObject]@{
             Id            = "arch"
             Name          = "Arch Linux (rolling)"
             ImageId       = "arch"
@@ -4456,6 +4561,60 @@ function Get-LinuxFamilyProfile {
             # Nothing. pacman installs no meta-packages here and leaves no orphans to
             # collect: `hyperv` is asked for by name and nothing else came with it.
             CleanupCommands = @()
+        }
+    }
+
+    if ($key -eq "suse") {
+        # Read off a Leap 16.0 Minimal-VM Cloud image booted under a NoCloud seed on
+        # 2026-09-27, not assumed from SLES documentation.
+        return [PSCustomObject]@{
+            Family          = "suse"
+            # wheel exists on the image. openSUSE's own sudoers grants it nothing - the
+            # stock rule is `ALL ALL=(ALL) ALL` with `Defaults targetpw`, the ROOT
+            # password - so sudo comes from the rule cloud-init writes for the account,
+            # the same as on every other family.
+            AdminGroup      = "wheel"
+            UsesAptModule   = $false
+            # zypper resolves cdn.opensuse.org through MirrorCache, which already routes
+            # by geography, so there is no single host worth pinning.
+            OffersMirror    = $false
+            # rpm presets decide what is enabled and nothing starts mid-transaction.
+            UsesPolicyRcD   = $false
+            PackageProbe    = 'for p in {0}; do if rpm -q $p >/dev/null 2>&1; then echo BAKE-PKG $p ok; else echo BAKE-PKG $p MISSING; fi; done'
+            # openSUSE keeps the Debian-style symlink: /boot/vmlinuz -> vmlinuz-<ver>.
+            KernelReport    = 'v=$(readlink /boot/vmlinuz 2>/dev/null); case "$v" in vmlinuz-?*) v=${v#vmlinuz-} ;; *) v=$(uname -r) ;; esac; echo BAKE-KERNEL $v'
+            # The hyper-v package ships its units DISABLED (preset disabled), like Arch
+            # and unlike Fedora's hyperv-daemons. Without this the gold carries the
+            # daemons and runs none of them, and Hyper-V shows no IP for the VM.
+            ServiceCommands = @(
+                'systemctl enable hv_kvp_daemon.service hv_vss_daemon.service || true'
+            )
+            # cloud-init renders to NetworkManager keyfiles here (renderer
+            # 'network-manager', cloud-init-eth0.nmconnection); wicked is not installed.
+            NetworkArtifacts = @(
+                "/etc/NetworkManager/system-connections/cloud-init-*.nmconnection",
+                "/etc/NetworkManager/conf.d/99-cloud-init.conf"
+            )
+            # One package for every language: glibc-locale carries all the compiled
+            # locales, glibc-locale-base only C and en_US. No {0} on purpose - the
+            # language decides WHETHER it is needed, not which package it is.
+            LanguagePackFormat = "glibc-locale"
+            # The serial getty off for THIS boot only (--runtime lives in /run and is
+            # gone on the gold's next boot). It is not tidiness: when getty takes ttyS0
+            # it hangs the port up, the tee below loses its output, and cloud-init's
+            # final stage died with it mid-zypper on a probe bake - which then printed
+            # BAKE-OK over a gold with nothing installed. bootcmd runs before getty
+            # comes up. The VMs mask it for good in Build-Vms.ps1.
+            BootCommands    = @(
+                'systemctl mask --runtime --now serial-getty@ttyS0.service'
+            )
+            CleanupCommands = @()
+            # The kernel line reads `console=ttyS0,115200 console=tty0`, and the LAST
+            # console= is /dev/console - so everything cloud-init prints goes to the
+            # video console and not one BAKE-PKG, BAKE-LOCALE or BAKE-KERNEL line
+            # reached the pipe on a probe boot. cloud-init's own output setting tees
+            # it to the serial port as well; the other images put ttyS0 last already.
+            TeeToSerial     = $true
         }
     }
 
@@ -4713,8 +4872,18 @@ function Get-CachedLinuxImage {
     $fileName = [System.IO.Path]::GetFileName(([System.Uri]$Entry.Url).AbsolutePath)
     $imagePath = Join-Path -Path $CacheDirectory -ChildPath $fileName
 
-    Write-Log "Published checksum for $fileName" -Tag "Get"
-    $expected = Get-PublishedChecksum -ChecksumUrl $Entry.ChecksumUrl -FileName $fileName
+    # A pinned checksum where the distribution publishes no checksum FILE. Oracle
+    # prints its SHA256 values only in the HTML table on oracle-linux-templates.html,
+    # beside a versioned image URL - so the catalog carries both, and moving to the
+    # next update release means changing the two together.
+    if ($Entry.PSObject.Properties["Checksum"] -and -not [string]::IsNullOrWhiteSpace([string]$Entry.Checksum)) {
+        Write-Log "Pinned checksum for $fileName" -Tag "Info"
+        $expected = ([string]$Entry.Checksum).Trim().ToLowerInvariant()
+    }
+    else {
+        Write-Log "Published checksum for $fileName" -Tag "Get"
+        $expected = Get-PublishedChecksum -ChecksumUrl $Entry.ChecksumUrl -FileName $fileName
+    }
 
     if (Test-Path -LiteralPath $imagePath) {
         if ([string]::IsNullOrWhiteSpace($expected)) {
@@ -5028,7 +5197,7 @@ function Get-LinuxGoldFeatureCatalog {
             DefaultOn = $false
             Distro    = ""
             Family    = ""
-            ImageIds  = @("ubuntu2604", "ubuntu2404", "debian13", "debian12", "fedora43", "rocky10", "rocky9", "arch")
+            ImageIds  = @("ubuntu2604", "ubuntu2404", "debian13", "debian12", "fedora43", "rocky10", "rocky9", "alma10", "alma9", "oracle10", "oracle9", "leap16", "arch")
             Packages  = @("fastfetch")
         }
         [PSCustomObject]@{
@@ -5120,10 +5289,11 @@ function Get-LinuxDistroDisplayName {
         "ubuntu" { return "Ubuntu" }
         "debian" { return "Debian" }
         "rocky"  { return "Rocky Linux" }
+        "oracle" { return "Oracle Linux" }
         "alma"   { return "AlmaLinux" }
         "fedora" { return "Fedora" }
         "arch"   { return "Arch Linux" }
-        "suse"   { return "openSUSE" }
+        "opensuse" { return "openSUSE" }
         "other"  { return "Other" }
     }
     if ([string]::IsNullOrWhiteSpace($key)) { return "Other" }
@@ -5557,6 +5727,9 @@ function Get-BakeUserData {
 
     $lines = New-Object System.Collections.Generic.List[string]
     [void]$lines.Add("#cloud-config")
+    if ($familyProfile.PSObject.Properties["TeeToSerial"] -and $familyProfile.TeeToSerial) {
+        [void]$lines.Add("output: {all: '| tee -a /var/log/cloud-init-output.log /dev/ttyS0'}")
+    }
     # A console login, purely so a bake that stalls can be looked at. The first run that
     # hung sat at a login prompt nobody could get past, which turned a five-minute
     # diagnosis into guesswork.
@@ -5653,12 +5826,18 @@ function Get-BakeUserData {
     # is conditional here, so a second write_files key would collide with the aliases
     # one below. What each family puts here, and why, is in Get-LinuxFamilyProfile.
     $bootCommands = @($familyProfile.BootCommands)
+    # What one image needs on top of its family - Oracle's LVM root, for one.
+    if ($Entry.PSObject.Properties["BakeBootCommands"]) { $bootCommands += @($Entry.BakeBootCommands) }
     # fastfetch is not in Rocky's own repositories - it is in EPEL, and EPEL is one
     # package away. In bootcmd rather than runcmd because the repository has to exist
     # before the package module runs, and that module is the first thing in the final
     # stage; a runcmd would enable EPEL long after the install it was for had failed.
-    if ($wantFastfetch -and ([string]$Entry.Distro) -eq "rocky") {
+    if ($wantFastfetch -and ([string]$Entry.Distro) -in @("rocky", "alma")) {
         $bootCommands += 'dnf install -y epel-release'
+    }
+    # Oracle ships EPEL as its own release package, one per major version.
+    if ($wantFastfetch -and ([string]$Entry.Distro) -eq "oracle") {
+        $bootCommands += ('dnf install -y oracle-epel-release-el' + [string]$Entry.Version)
     }
     if ($bootCommands.Count -gt 0) {
         [void]$lines.Add("bootcmd:")
@@ -5685,9 +5864,20 @@ function Get-BakeUserData {
     if (-not [string]::IsNullOrWhiteSpace($TimeZone)) { [void]$lines.Add("timezone: $TimeZone") }
 
     $wantMirrorDropIn = $familyProfile.UsesAptModule -and -not [string]::IsNullOrWhiteSpace($MirrorUri)
-    if ($wantAliases -or $wantPrompt -or $wantFastfetch -or $wantMirrorDropIn -or $wantRegion) {
-        [void]$lines.Add("write_files:")
-    }
+    # Always written now (the console drop-in below), so the key is unconditional.
+    [void]$lines.Add("write_files:")
+    # The console log level, for every gold. The cloud images boot without `quiet`, so
+    # the kernel prints everything below debug on the console - and on a VM's first
+    # boot that is the SELinux policy reloads, "systemd-rc-local-generator: rc.local is
+    # not marked executable" once per systemctl daemon-reload (every package install
+    # triggers one), and hv_netvsc's GRO notice, all scrolling over the login prompt
+    # of the Hyper-V console. 4 4 1 7 is the kernel's own "quiet" behaviour: errors and
+    # worse still reach the console, and everything stays in dmesg and the journal.
+    [void]$lines.Add("  - path: /etc/sysctl.d/90-hv-studio-console.conf")
+    [void]$lines.Add("    permissions: '0644'")
+    [void]$lines.Add("    content: |")
+    [void]$lines.Add("      # Baked by HyperV-VM-Studio: only errors on the console; the rest is in dmesg.")
+    [void]$lines.Add("      kernel.printk = 4 4 1 7")
     if ($wantRegion) {
         # cloud-init's locale module, switched off for good. With no `locale:` key it
         # still runs on every new instance and re-applies what it thinks the default
@@ -5773,6 +5963,9 @@ function Get-BakeUserData {
             "debian" { "1;31" }
             "fedora" { "1;34" }
             "rocky"  { "1;32" }
+            "opensuse" { "1;32" }
+            "oracle" { "1;31" }
+            "alma"   { "1;34" }
             "arch"   { "1;36" }
             default  { "1" }
         }
@@ -5780,13 +5973,24 @@ function Get-BakeUserData {
         # padding is worked out here: the frame runs 19 lines from user@host to its
         # bottom corner, starting one line down. Arch, Fedora and Rocky draw 19 lines
         # and Ubuntu 20, so one line of padding lines them up; Debian's swirl is 17
-        # and needs two to sit in the middle instead of hanging from the top.
-        $logoPaddingTop = if (([string]$Entry.Distro) -eq "debian") { 2 } else { 1 }
+        # and needs two to sit in the middle instead of hanging from the top. Measured
+        # on the VMs on 2026-09-27: openSUSE's chameleon is 19 like Arch (one line),
+        # Oracle's ring only 11 (five, to sit mid-frame) and Alma's logo 20 (none -
+        # one line more than the frame, so it starts level with user@host).
+        $logoPaddingTop = switch ([string]$Entry.Distro) {
+            "debian" { 2 }
+            "oracle" { 5 }
+            "alma"   { 0 }
+            default  { 1 }
+        }
         [void]$lines.Add("  - path: /etc/skel/.config/fastfetch/config.jsonc")
         [void]$lines.Add("    permissions: '0644'")
         [void]$lines.Add("    content: |")
         [void]$lines.Add('      {')
-        [void]$lines.Add('        "logo": { "padding": { "top": ' + $logoPaddingTop + ' } },')
+        # openSUSE gets the Geeko chameleon rather than fastfetch's auto-detected
+        # opensuse-leap mark, by choice; 18 rows, so the one line of padding centres it.
+        $logoSource = if (([string]$Entry.Distro) -eq "opensuse") { '"source": "opensuse", ' } else { "" }
+        [void]$lines.Add('        "logo": { ' + $logoSource + '"padding": { "top": ' + $logoPaddingTop + ' } },')
         [void]$lines.Add('        "display": { "separator": "  ", "key": { "width": 16 } },')
         [void]$lines.Add('        "modules": [')
         [void]$lines.Add('          "break",')
@@ -6063,8 +6267,9 @@ function Get-BakeUserData {
     # bake network's DNS first, and a realm join against AD timed out on discovery.
     # Emptied, not removed, and only when it is a plain file: on Fedora it is
     # systemd-resolved's symlink, and deleting that would unhook resolved.
-    # NetworkManager on Rocky 10 and Fedora writes it afresh at boot either way.
-    if ($familyProfile.Family -eq "rhel") {
+    # NetworkManager on Rocky 10, Fedora and openSUSE writes it afresh at boot either
+    # way; on openSUSE it is a plain file NetworkManager generated for the bake network.
+    if ($familyProfile.Family -in @("rhel", "suse")) {
         [void]$lines.Add("  - [ sh, -c, '[ -L /etc/resolv.conf ] || : > /etc/resolv.conf' ]")
     }
     [void]$lines.Add("  - [ sh, -c, 'truncate -s 0 /etc/machine-id' ]")
@@ -7134,9 +7339,10 @@ function Invoke-LinuxGoldRun {
     }
     # The format locale as well, on the family where a locale only exists as a
     # package. An en-US gold with de-DE formats needs glibc-langpack-de, or localectl
-    # refuses the LC_* lines. Ubuntu's language-pack is translations, not locale data,
-    # so a format locale there needs only locale-gen, which the bake runs anyway.
-    if ($entry.Family -eq "rhel") {
+    # refuses the LC_* lines - and on openSUSE glibc-locale, for the same reason.
+    # Ubuntu's language-pack is translations, not locale data, so a format locale
+    # there needs only locale-gen, which the bake runs anyway.
+    if ($entry.Family -in @("rhel", "suse")) {
         $formatPack = Get-LinuxLanguagePack -Entry $entry -LanguageTag ([string]$Config.Locale)
         if (-not [string]::IsNullOrWhiteSpace($formatPack) -and $bakePackages -notcontains $formatPack) {
             Write-Log "Adding $formatPack for the $($Config.Locale) formats" -Tag "Info"

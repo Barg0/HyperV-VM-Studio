@@ -2782,6 +2782,76 @@ const IMAGE_CATALOG = [
     defaults: { useDifferencingDisk: false, enableSecureBoot: true, enableVtpm: false, startAfterCreate: true, memoryGB: 2, cpuCount: 2 }
   },
   {
+    id: "alma10",
+    label: "AlmaLinux 10",
+    icon: "os-server-panes.svg",
+    kind: "linux",
+    osFamily: "linux",
+    distro: "alma",
+    edition: "",
+    experience: "",
+    noServerRoles: true,
+    secureBootTemplate: "MicrosoftUEFICertificateAuthority",
+    defaults: { useDifferencingDisk: false, enableSecureBoot: true, enableVtpm: false, startAfterCreate: true, memoryGB: 2, cpuCount: 2 }
+  },
+  {
+    id: "alma9",
+    label: "AlmaLinux 9",
+    icon: "os-server-panes.svg",
+    kind: "linux",
+    osFamily: "linux",
+    distro: "alma",
+    edition: "",
+    experience: "",
+    noServerRoles: true,
+    secureBootTemplate: "MicrosoftUEFICertificateAuthority",
+    defaults: { useDifferencingDisk: false, enableSecureBoot: true, enableVtpm: false, startAfterCreate: true, memoryGB: 2, cpuCount: 2 }
+  },
+  {
+    id: "oracle10",
+    label: "Oracle Linux 10",
+    icon: "os-server-panes.svg",
+    kind: "linux",
+    osFamily: "linux",
+    distro: "oracle",
+    edition: "",
+    experience: "",
+    noServerRoles: true,
+    secureBootTemplate: "MicrosoftUEFICertificateAuthority",
+    defaults: { useDifferencingDisk: false, enableSecureBoot: true, enableVtpm: false, startAfterCreate: true, memoryGB: 2, cpuCount: 2 }
+  },
+  {
+    id: "oracle9",
+    label: "Oracle Linux 9",
+    icon: "os-server-panes.svg",
+    kind: "linux",
+    osFamily: "linux",
+    distro: "oracle",
+    edition: "",
+    experience: "",
+    noServerRoles: true,
+    secureBootTemplate: "MicrosoftUEFICertificateAuthority",
+    defaults: { useDifferencingDisk: false, enableSecureBoot: true, enableVtpm: false, startAfterCreate: true, memoryGB: 2, cpuCount: 2 }
+  },
+  {
+    id: "leap16",
+    label: "openSUSE Leap 16.0",
+    /* Azure Arc lists SLES but no openSUSE release, and Build-Vms.ps1 drops the Arc
+       block for it with a warning - the studio says so first. Domain join works:
+       realmd, adcli and sssd-ad are all in Leap's own repo-oss. */
+    noAzureArc: true,
+    icon: "os-server-panes.svg",
+    kind: "linux",
+    osFamily: "linux",
+    distro: "opensuse",
+    edition: "",
+    experience: "",
+    noServerRoles: true,
+    /* openSUSE ships a Microsoft-signed shim, so Secure Boot stays on like Fedora. */
+    secureBootTemplate: "MicrosoftUEFICertificateAuthority",
+    defaults: { useDifferencingDisk: false, enableSecureBoot: true, enableVtpm: false, startAfterCreate: true, memoryGB: 2, cpuCount: 2 }
+  },
+  {
     /* Secure Boot OFF, and not as a preference. Arch ships no Microsoft-signed shim,
        so there is nothing for the third-party UEFI CA to validate and a Gen 2 VM with
        Secure Boot on stops before the kernel. The gold's sidecar says the same thing,
@@ -2834,6 +2904,11 @@ const LINUX_BAKED_PACKAGES = {
   fedora43:   ["hyperv-daemons"],
   rocky10:    ["hyperv-daemons"],
   rocky9:     ["hyperv-daemons"],
+  alma10:     ["hyperv-daemons"],
+  alma9:      ["hyperv-daemons"],
+  oracle10:   ["hyperv-daemons"],
+  oracle9:    ["hyperv-daemons"],
+  leap16:     ["hyper-v"],
   arch:       ["hyperv"]
 };
 /** True when Azure Arc has no agent for this image's distribution. */
@@ -3293,7 +3368,7 @@ function vlanHintText(vlanId) {
 
 const LINUX_DISTRO_LABEL = {
   ubuntu: "Ubuntu", debian: "Debian", fedora: "Fedora",
-  rocky: "Rocky Linux", arch: "Arch Linux"
+  rocky: "Rocky Linux", alma: "AlmaLinux", oracle: "Oracle Linux", opensuse: "openSUSE", arch: "Arch Linux"
 };
 
 function imageReleaseLabel(img) {
