@@ -2736,13 +2736,27 @@ const IMAGE_CATALOG = [
   {
     /* Fedora and Rocky ship a Microsoft-signed shim, so the same Secure Boot
        template the other Linux golds use applies unchanged. */
-    id: "fedora43",
+    id: "fedora44",
     /* Azure Arc does not support Fedora, and this is Microsoft's answer rather than a
        guess: the installer from aka.ms/azcmagent stops with "unsupported Linux
        distribution: Fedora Linux", so azcmagent is never on the disk and the connect
        that follows fails on a path that does not exist. A VM here can be ticked into
        an Arc principal and would simply never arrive in the portal, which is the
        worst of the three possible outcomes. */
+    noAzureArc: true,
+    label: "Fedora 44",
+    icon: "os-server-panes.svg",
+    kind: "linux",
+    osFamily: "linux",
+    distro: "fedora",
+    edition: "",
+    experience: "",
+    noServerRoles: true,
+    secureBootTemplate: "MicrosoftUEFICertificateAuthority",
+    defaults: { useDifferencingDisk: false, enableSecureBoot: true, enableVtpm: false, startAfterCreate: true, memoryGB: 2, cpuCount: 2 }
+  },
+  {
+    id: "fedora43",
     noAzureArc: true,
     label: "Fedora 43",
     icon: "os-server-panes.svg",
@@ -2901,6 +2915,7 @@ const LINUX_BAKED_PACKAGES = {
   ubuntu2404: ["linux-azure", "linux-cloud-tools-azure"],
   debian13:   ["hyperv-daemons", "kbd", "console-setup", "keyboard-configuration"],
   debian12:   ["hyperv-daemons", "kbd", "console-setup", "keyboard-configuration"],
+  fedora44:   ["hyperv-daemons"],
   fedora43:   ["hyperv-daemons"],
   rocky10:    ["hyperv-daemons"],
   rocky9:     ["hyperv-daemons"],

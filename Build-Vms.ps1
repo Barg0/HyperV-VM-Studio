@@ -992,8 +992,8 @@ function Get-LinuxGoldIds {
     # New-Vhdx.ps1. Their only job here is to let a Linux id past the Windows rules
     # table; everything after that is the ordinary three-segment lookup.
     return @("ubuntu2604", "ubuntu2404", "debian13", "debian12",
-             "fedora43", "rocky10", "rocky9", "alma10", "alma9", "oracle10", "oracle9",
-             "leap16", "arch")
+             "fedora44", "fedora43", "rocky10", "rocky9", "alma10", "alma9", "oracle10",
+             "oracle9", "leap16", "arch")
 }
 
 function Test-IsLinuxImageId {
@@ -3734,9 +3734,10 @@ function Get-LinuxDomainJoinCommands {
     #
     # An earlier version set ldap_sudo_search_base to the domain's root DN instead.
     # That kept the whole-tree search and only removed the warning - a mute, not a fix.
-    # sssd builds without 972f78e1bb (2.12.0 on Rocky/Alma/Oracle 10, Fedora 43) still
-    # print the alert with the provider off; it goes once those packages carry the fix,
-    # and it is left visible until then.
+    # sssd builds without 972f78e1bb (2.12.0 on Rocky/Alma/Oracle 10, Fedora 43, 2.13.1
+    # on Fedora 44 - the fix landed upstream 2026-09-24) still print the alert with the
+    # provider off; it goes once those packages carry the fix, and it is left visible
+    # until then.
     #
     # A conf.d drop-in rather than an edit of sssd.conf: realm join writes sssd.conf and
     # starts sssd in the same breath, so it has to be in place first. sssd merges

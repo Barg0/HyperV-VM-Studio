@@ -4277,22 +4277,22 @@ function Get-LinuxImageCatalog {
             BakePackages  = @("hyperv-daemons", "kbd", "console-setup", "keyboard-configuration")
         }
         [PSCustomObject]@{
-            Id            = "fedora-43"
-            Name          = "Fedora 43 (Cloud Base)"
-            ImageId       = "fedora43"
+            Id            = "fedora-44"
+            Name          = "Fedora 44 (Cloud Base)"
+            ImageId       = "fedora44"
             Distro        = "fedora"
             Family        = "rhel"
-            Version       = "43"
+            Version       = "44"
             # Base-Generic, not Base-UEFI-UKI: the UKI variant boots a unified kernel
             # image with its command line sealed inside, which is the one thing a gold
             # that has to take a serial console from the host must not do.
             #
             # download.fedoraproject.org is the mirror redirector rather than a mirror,
-            # so this URL keeps working when any single mirror does not. The 1.6 is the
+            # so this URL keeps working when any single mirror does not. The 1.7 is the
             # compose's build number and it is part of BOTH names - it moves on a
             # respin, and this entry moves with it.
-            Url           = "https://download.fedoraproject.org/pub/fedora/linux/releases/43/Cloud/x86_64/images/Fedora-Cloud-Base-Generic-43-1.6.x86_64.qcow2"
-            ChecksumUrl   = "https://download.fedoraproject.org/pub/fedora/linux/releases/43/Cloud/x86_64/images/Fedora-Cloud-43-1.6-x86_64-CHECKSUM"
+            Url           = "https://download.fedoraproject.org/pub/fedora/linux/releases/44/Cloud/x86_64/images/Fedora-Cloud-Base-Generic-44-1.7.x86_64.qcow2"
+            ChecksumUrl   = "https://download.fedoraproject.org/pub/fedora/linux/releases/44/Cloud/x86_64/images/Fedora-Cloud-44-1.7-x86_64-CHECKSUM"
             Algorithm     = "SHA256"
             SourceFormat  = "qcow2"
             DefaultDiskGB = 32
@@ -4302,6 +4302,21 @@ function Get-LinuxImageCatalog {
             # hyperv-daemons is a meta package over hypervkvpd, hypervvssd and
             # hypervfcopyd. The keyboard machinery Debian needs is not listed because
             # cloud-init drives localectl on this family, not console-setup.
+            BakePackages  = @("hyperv-daemons")
+        }
+        [PSCustomObject]@{
+            Id            = "fedora-43"
+            Name          = "Fedora 43 (Cloud Base)"
+            ImageId       = "fedora43"
+            Distro        = "fedora"
+            Family        = "rhel"
+            Version       = "43"
+            Url           = "https://download.fedoraproject.org/pub/fedora/linux/releases/43/Cloud/x86_64/images/Fedora-Cloud-Base-Generic-43-1.6.x86_64.qcow2"
+            ChecksumUrl   = "https://download.fedoraproject.org/pub/fedora/linux/releases/43/Cloud/x86_64/images/Fedora-Cloud-43-1.6-x86_64-CHECKSUM"
+            Algorithm     = "SHA256"
+            SourceFormat  = "qcow2"
+            DefaultDiskGB = 32
+            Generation    = 2
             BakePackages  = @("hyperv-daemons")
         }
         [PSCustomObject]@{
@@ -4653,7 +4668,11 @@ function Get-LinuxFamilyProfile {
             # There is no /boot/vmlinuz symlink on this family. grubby reads the
             # BootLoaderSpec entries and prints the default kernel's path, which is
             # the same question asked of the thing that will actually answer it.
-            KernelReport    = 'k=$(grubby --default-kernel 2>/dev/null); case "$k" in /boot/vmlinuz-?*) k=${k#/boot/vmlinuz-} ;; *) k=$(uname -r) ;; esac; echo BAKE-KERNEL $k'
+            # Matched on the last /vmlinuz- rather than on /boot/vmlinuz-: Fedora 44
+            # puts /boot on the root btrfs, and grubby then prints
+            # /boot/boot/vmlinuz-<version> - the old pattern missed it and the line
+            # reported the bake's running kernel instead of the upgraded one.
+            KernelReport    = 'k=$(grubby --default-kernel 2>/dev/null); case "$k" in */vmlinuz-?*) k=${k##*/vmlinuz-} ;; *) k=$(uname -r) ;; esac; echo BAKE-KERNEL $k'
             # cloud-init renders network config to NetworkManager keyfiles here, not
             # to netplan. The conf.d drop-in goes too: it is cloud-init's own file
             # and it names the instance it was written for.
@@ -5208,7 +5227,7 @@ function Get-LinuxGoldFeatureCatalog {
             DefaultOn = $false
             Distro    = ""
             Family    = ""
-            ImageIds  = @("ubuntu2604", "ubuntu2404", "debian13", "debian12", "fedora43", "rocky10", "rocky9", "alma10", "alma9", "oracle10", "oracle9", "leap16", "arch")
+            ImageIds  = @("ubuntu2604", "ubuntu2404", "debian13", "debian12", "fedora44", "fedora43", "rocky10", "rocky9", "alma10", "alma9", "oracle10", "oracle9", "leap16", "arch")
             Packages  = @("fastfetch")
         }
         [PSCustomObject]@{

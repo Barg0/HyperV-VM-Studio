@@ -250,7 +250,7 @@ own cloud image instead of an ISO:
 |--------------|----------|
 | Ubuntu | 26.04 LTS, 24.04 LTS |
 | Debian | 13 (Trixie), 12 (Bookworm) |
-| Fedora | 43 |
+| Fedora | 44, 43 |
 | Rocky Linux | 10, 9 |
 | AlmaLinux | 10, 9 |
 | Oracle Linux | 10, 9 |
