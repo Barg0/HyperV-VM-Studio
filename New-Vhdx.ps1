@@ -1642,6 +1642,140 @@ function Get-MenuWindowTop {
     catch { return $null }
 }
 
+# ---------------------------[ Blade Navigation ]---------------------------
+# Every blade answers one of three ways: a value, $null (Esc/Q - the whole wizard is
+# cancelled, as it always was) or $script:MenuBackId (Backspace - step back one blade).
+# Back is a string rather than a second return channel so a blade that is not offered
+# it never produces it, and a caller that does not ask for it never has to look.
+$script:MenuBackId = "__back__"
+
+function Test-MenuBack {
+    param($Value)
+    return ($Value -is [string] -and $Value -eq $script:MenuBackId)
+}
+
+function Test-BladeAnswer {
+    # True for a real answer - not a cancel, not a step back. An empty array from a
+    # multi-select is an answer: "continue with none of these".
+    param($Value)
+    if ($null -eq $Value) { return $false }
+    return -not (Test-MenuBack -Value $Value)
+}
+
+function Get-BladeLegend {
+    <#
+        The key legend under a blade, as one line.
+
+        One builder for every blade so none can leave it out - which is how several
+        ended up with a closing rule and nothing under it. Only the keys that belong to
+        the blade are passed; Backspace and Esc are appended here, always last and
+        always spelt the same.
+
+        Always ONE line: the blades pass few enough keys that the longest legend fits
+        an 80-column console. A key that is there but not worth the width - PgUp/PgDn,
+        Home/End, Q beside Esc - still works and is simply not listed.
+    #>
+    param(
+        [string[]]$Keys = @(),
+        [switch]$AllowBack,
+        # No cursor keys (ISE, redirected console): typed commands instead of keys.
+        [switch]$LineMode
+    )
+
+    $parts = @($Keys | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+    if ($LineMode) {
+        if ($AllowBack) { $parts += "B back" }
+        $parts += "Q cancel"
+    }
+    else {
+        if ($AllowBack) { $parts += "Backspace back" }
+        $parts += "Esc cancel"
+    }
+    return ($parts -join "   ")
+}
+
+function Write-BladeLegend {
+    # The closing rule, the legend, and the blank line under it - the foot of every
+    # blade. The caller writes the blank line ABOVE the rule, as every blade already did.
+    param(
+        [string[]]$Keys = @(),
+        [switch]$AllowBack,
+        [switch]$LineMode
+    )
+
+    Write-Studio -Text ("  " + ("-" * 62)) -Key "muted"
+    Write-Studio -Text ("  " + (Get-BladeLegend -Keys $Keys -AllowBack:$AllowBack -LineMode:$LineMode)) -Key "muted"
+    Write-Host ""
+}
+
+function Read-BladeText {
+    <#
+        One typed answer, read key by key rather than through Read-Host, so a typing
+        blade keeps the keys every other blade has: Enter answers, Esc cancels the
+        wizard, and Backspace on an empty field steps back a blade.
+
+        Returns what was typed (possibly empty - the caller applies its own default),
+        $null for Esc, or $script:MenuBackId.
+
+        Backspace deletes first and only steps back once the field is empty AND no
+        Backspace has landed in the last 400 ms. Holding the key to clear a long entry
+        auto-repeats every ~30 ms, so a held key empties the field and stops there;
+        stepping back takes a second, deliberate press.
+    #>
+    param(
+        [string]$Prompt,
+        [switch]$AllowBack
+    )
+
+    if (-not (Test-MenuHostSupported)) {
+        $raw = Read-Host $Prompt
+        # A lone B is Back, as on every line-mode blade. Nothing typed here is ever
+        # just that letter.
+        if ($AllowBack -and ([string]$raw).Trim() -match "^[Bb]$") { return $script:MenuBackId }
+        return [string]$raw
+    }
+
+    if (-not [string]::IsNullOrEmpty($Prompt)) {
+        Write-Studio -Text "${Prompt}: " -Key "fg" -NoNewline
+    }
+    $buffer = New-Object System.Text.StringBuilder
+    $sinceBackspace = $null
+
+    while ($true) {
+        $key = $Host.UI.RawUI.ReadKey("NoEcho,IncludeKeyDown")
+        $virtualKey = [int]$key.VirtualKeyCode
+        $character = $key.Character
+
+        if ($virtualKey -eq 13) {
+            Write-Host ""
+            return $buffer.ToString()
+        }
+        if ($virtualKey -eq 27) {
+            Write-Host ""
+            return $null
+        }
+        if ($virtualKey -eq 8) {
+            $recent = ($null -ne $sinceBackspace -and $sinceBackspace.ElapsedMilliseconds -lt 400)
+            if ($buffer.Length -gt 0) {
+                [void]$buffer.Remove($buffer.Length - 1, 1)
+                Write-Host ("{0} {0}" -f [char]8) -NoNewline
+            }
+            elseif ($AllowBack -and -not $recent) {
+                Write-Host ""
+                return $script:MenuBackId
+            }
+            $sinceBackspace = [System.Diagnostics.Stopwatch]::StartNew()
+            continue
+        }
+        # Printable characters only. A cursor key or a function key has a NUL character,
+        # and Tab would put a character the field cannot show into the answer.
+        if ([int]$character -ge 32) {
+            [void]$buffer.Append($character)
+            Write-Host $character -NoNewline
+        }
+    }
+}
+
 function Show-Menu {
     param(
         [string]$Title,
@@ -1654,11 +1788,21 @@ function Show-Menu {
         # VHDX form. The fastfetch header alone is too far from the list to read as
         # a question - without this, pickers get mistaken for something else.
         [string]$Heading,
-        [string]$HeadingHint
+        [string]$HeadingHint,
+        # Backspace returns $script:MenuBackId. Off on a wizard's first blade, where
+        # there is nothing to go back to.
+        [switch]$AllowBack,
+        # Wins over SelectedIndex when it names an item: a blade revisited through
+        # Back opens on the answer it was given, not on its default.
+        [string]$SelectedId
     )
 
     if (-not $Items -or $Items.Count -eq 0) {
         throw "Show-Menu requires at least one item."
+    }
+    if (-not [string]::IsNullOrWhiteSpace($SelectedId)) {
+        $idAt = [array]::IndexOf(@($Items | ForEach-Object { [string]$_.Id }), $SelectedId)
+        if ($idAt -ge 0) { $SelectedIndex = $idAt }
     }
 
     # An item carrying Separator = $true is drawn but never lands under the caret: it is
@@ -1697,6 +1841,34 @@ function Show-Menu {
 
     $useRawUi = Test-MenuHostSupported
     $maxVisible = 16
+
+    # Type to find, on a list long enough to page - 251 locales and 419 time zones are
+    # a long walk by arrow key. Letters build a search shown under the list, and every
+    # one moves the caret to the best match: a label that starts with it, then a word
+    # inside a label that does (Europe/Berlin for "ber", "(UTC+01:00) Amsterdam,
+    # Berlin" for "berlin"), then the text anywhere. The search stays until Up/Down
+    # clears it; Backspace edits it, as in a text field, and steps back a blade only
+    # once it is empty. Q is a letter here, so only Esc cancels.
+    $findable = $useRawUi -and ($Items.Count -gt $maxVisible)
+    $findText = ""
+    $findMatch = {
+        param([string]$Text)
+        $needle = $Text.Trim().ToLowerInvariant()
+        if ($needle.Length -eq 0) { return -1 }
+        foreach ($tier in 1..3) {
+            for ($at = 0; $at -lt $Items.Count; $at++) {
+                if (-not (& $isSelectable $at)) { continue }
+                $label = ([string]$Items[$at].Label).Trim().ToLowerInvariant()
+                $hit = switch ($tier) {
+                    1 { $label.StartsWith($needle) }
+                    2 { @($label -split "[^a-z0-9+]+" | Where-Object { $_.StartsWith($needle) }).Count -gt 0 }
+                    3 { $label.Contains($needle) }
+                }
+                if ($hit) { return $at }
+            }
+        }
+        return -1
+    }
 
     # The header and the heading are the same on every pass, so they are written once
     # and the list below them is what a keypress rewrites. $anchor is where that list
@@ -1782,15 +1954,23 @@ function Show-Menu {
             Write-Studio -Text "    ..." -Key "muted"
         }
 
+        if ($findable -and $findText.Length -gt 0) {
+            Write-Host ""
+            Write-Studio -Text "  find: " -Key "muted" -NoNewline
+            Write-Studio -Text $findText -Key "accent" -NoNewline
+            if ((& $findMatch $findText) -lt 0) { Write-Studio -Text "   no match" -Key "muted" } else { Write-Host "" }
+        }
+
         Write-Host ""
-        Write-Studio -Text ("  " + ("-" * 62)) -Key "muted"
-        if ($useRawUi) {
-            Write-Studio -Text "  Up/Down move   PgUp/PgDn/Home/End jump   Enter select   Esc/Q cancel" -Key "muted"
+        if ($findable) {
+            Write-BladeLegend -Keys @("Up/Down move", "type to find", "Enter select") -AllowBack:$AllowBack
+        }
+        elseif ($useRawUi) {
+            Write-BladeLegend -Keys @("Up/Down move", "Enter select") -AllowBack:$AllowBack
         }
         else {
-            Write-Studio -Text "  Enter number + Enter   (Q to cancel)" -Key "muted"
+            Write-BladeLegend -Keys @("Enter number + Enter") -AllowBack:$AllowBack -LineMode
         }
-        Write-Host ""
 
         # Read when the frame is COMPLETE, never half way through it. A frame taller
         # than the window scrolls as its last lines are written, so a top measured
@@ -1807,10 +1987,12 @@ function Show-Menu {
             $charKey = [string]$key.Character
 
             if ($virtualKey -eq 38) {
+                $findText = ""
                 $index = & $nextSelectable $index (-1)
                 continue
             }
             if ($virtualKey -eq 40) {
+                $findText = ""
                 $index = & $nextSelectable $index 1
                 continue
             }
@@ -1839,7 +2021,25 @@ function Show-Menu {
                 if (-not (& $isSelectable $index)) { continue }
                 return $Items[$index].Id
             }
-            if ($virtualKey -eq 27 -or $charKey -eq "q" -or $charKey -eq "Q") {
+            if ($virtualKey -eq 8 -and $findText.Length -gt 0) {
+                $findText = $findText.Substring(0, $findText.Length - 1)
+                $found = & $findMatch $findText
+                if ($found -ge 0) { $index = $found }
+                continue
+            }
+            if ($virtualKey -eq 8 -and $AllowBack) {
+                return $script:MenuBackId
+            }
+            if ($virtualKey -eq 27) {
+                return $null
+            }
+            if ($findable -and [int]$key.Character -ge 32) {
+                $findText += [string]$key.Character
+                $found = & $findMatch $findText
+                if ($found -ge 0) { $index = $found }
+                continue
+            }
+            if ($charKey -eq "q" -or $charKey -eq "Q") {
                 return $null
             }
         }
@@ -1847,6 +2047,7 @@ function Show-Menu {
             $raw = Read-Host "Select"
             if ([string]::IsNullOrWhiteSpace($raw)) { continue }
             if ($raw -match "^[Qq]$") { return $null }
+            if ($AllowBack -and $raw -match "^[Bb]$") { return $script:MenuBackId }
             if ($raw -match "^\d+$") {
                 $num = [int]$raw
                 if ($num -ge 1 -and $num -le $Items.Count -and (& $isSelectable ($num - 1))) {
@@ -1857,13 +2058,53 @@ function Show-Menu {
     }
 }
 
+function Show-NoteBlade {
+    <#
+        A blade with something to read and nothing to choose: the text, then the legend.
+        Enter goes on, Backspace goes back, Esc cancels - the same keys every other blade
+        has, with no row to put a caret on. Returns "continue", $null or
+        $script:MenuBackId.
+    #>
+    param(
+        [string]$Title,
+        [string[]]$Lines,
+        [System.Collections.IDictionary]$StatusLines,
+        [switch]$AllowBack
+    )
+
+    Show-MenuHeader -Title $Title -StatusLines $StatusLines
+    foreach ($line in $Lines) {
+        if ([string]::IsNullOrWhiteSpace($line)) { Write-Host "" }
+        else { Write-Studio -Text "  $line" -Key "muted" }
+    }
+    Write-Host ""
+
+    if (-not (Test-MenuHostSupported)) {
+        Write-BladeLegend -Keys @("Enter continue") -AllowBack:$AllowBack -LineMode
+        $raw = Read-Host
+        if ($raw -match "^[Qq]$") { return $null }
+        if ($AllowBack -and $raw -match "^[Bb]$") { return $script:MenuBackId }
+        return "continue"
+    }
+
+    Write-BladeLegend -Keys @("Enter continue") -AllowBack:$AllowBack
+    while ($true) {
+        $key = $Host.UI.RawUI.ReadKey("NoEcho,IncludeKeyDown")
+        $virtualKey = [int]$key.VirtualKeyCode
+        $charKey = [string]$key.Character
+        if ($virtualKey -eq 13) { return "continue" }
+        if ($virtualKey -eq 8 -and $AllowBack) { return $script:MenuBackId }
+        if ($virtualKey -eq 27 -or $charKey -eq "q" -or $charKey -eq "Q") { return $null }
+    }
+}
+
 function Show-MultiSelectMenu {
     param(
         [string]$Title,
         [object[]]$Items,
         [hashtable]$StatusLines,
         [switch]$AllowEmpty,
-        [string]$Subtitle = "Space toggles selection",
+        [string]$Subtitle = "",
         # Free lines rendered above the list, for a menu whose consequences do not fit
         # in a subtitle. Kept as an array so the caller controls where each line breaks
         # rather than trusting a terminal width nobody measured.
@@ -1871,13 +2112,14 @@ function Show-MultiSelectMenu {
         # One emphasised line above the note - bold where the host can draw it, bright
         # white where it cannot. For the sentence a reader must not skim past.
         [string]$NoteHeadline = "",
-        # When set, a real row the cursor can land on that confirms the selection. A menu
-        # whose sane answer is "none of these" needs somewhere to press Enter that reads
-        # like continuing, not like giving up.
-        [string]$ContinueLabel = "",
         # Free lines rendered directly under a section header, keyed by section name.
         # For the sentence that belongs to one group of rows rather than the whole menu.
-        [hashtable]$SectionNotes = @{}
+        [hashtable]$SectionNotes = @{},
+        # Label and hint right above the rows, as Show-Menu draws them.
+        [string]$Heading,
+        [string]$HeadingHint,
+        # Backspace returns $script:MenuBackId - see Show-Menu.
+        [switch]$AllowBack
     )
 
     if (-not $Items -or $Items.Count -eq 0) {
@@ -1901,12 +2143,8 @@ function Show-MultiSelectMenu {
     $useRawUi = Test-MenuHostSupported
     $hasSections = (@($Items | Where-Object { -not [string]::IsNullOrWhiteSpace([string]$_.Section) })).Count -gt 0
 
-    # Rows are what the cursor walks; items are what can be ticked. They differ by the
-    # continue row, which is navigable but carries no checkbox.
+    # No Continue row: Enter continues from any row, and the legend says so.
     $rows = @($Items)
-    if (-not [string]::IsNullOrWhiteSpace($ContinueLabel)) {
-        $rows += [PSCustomObject]@{ Id = "__continue__"; Label = $ContinueLabel; IsContinue = $true }
-    }
 
     # Header and notes once, the rows on every keypress - see the repaint helpers.
     $anchor = $null
@@ -1947,6 +2185,14 @@ function Show-MultiSelectMenu {
                 Write-Host ""
             }
 
+            if (-not [string]::IsNullOrWhiteSpace($Heading)) {
+                Write-Studio -Text "  $Heading" -Key "fg"
+                if (-not [string]::IsNullOrWhiteSpace($HeadingHint)) {
+                    Write-Studio -Text "  $HeadingHint" -Key "muted"
+                }
+                Write-Host ""
+            }
+
             $anchor = Get-MenuCursorAnchor
         }
 
@@ -1956,27 +2202,18 @@ function Show-MultiSelectMenu {
             $isSelectedRow = ($i -eq $index)
             $indent = if ($hasSections) { "  " } else { "" }
 
-            if ($item.IsContinue) {
-                Write-Host ""
-                if ($isSelectedRow) {
-                    Write-Studio -Text "  $indent> " -Key "accent" -NoNewline
-                    Write-Studio -Text $item.Label -Key "fg"
-                }
-                else {
-                    Write-Host "    $indent" -NoNewline
-                    Write-Studio -Text $item.Label -Key "muted"
-                }
-                continue
-            }
-
             $section = [string]$item.Section
             if (-not [string]::IsNullOrWhiteSpace($section) -and $section -ne $lastSection) {
                 # A blank line before every heading but the first, and none after it:
                 # the heading belongs to the rows under it, so the gap goes between the
                 # groups rather than between a group's name and its contents. Build-Vms
                 # draws its own sections the same way.
+                #
+                # Accent, as every group header in every list is - Show-Menu's separators,
+                # Build-Vms' config groups. White (fg) belongs to the blade's own heading
+                # above the list; a group inside the list must not read as another one.
                 if ($null -ne $lastSection) { Write-Host "" }
-                Write-Studio -Text "  $section" -Key "fg"
+                Write-Studio -Text "  $section" -Key "accent"
                 # A section that carries a note keeps its blank lines: the note is a
                 # paragraph, and a paragraph jammed against rows reads as a row.
                 if ($SectionNotes.ContainsKey($section)) {
@@ -2013,14 +2250,12 @@ function Show-MultiSelectMenu {
         }
 
         Write-Host ""
-        Write-Studio -Text ("  " + ("-" * 62)) -Key "muted"
         if ($useRawUi) {
-            Write-Studio -Text "  Up/Down move   Space toggle   Enter continue   Esc/Q cancel" -Key "muted"
+            Write-BladeLegend -Keys @("Up/Down move", "Space toggle", "Enter continue") -AllowBack:$AllowBack
         }
         else {
-            Write-Studio -Text "  Number toggles, Enter continues, Q cancels" -Key "muted"
+            Write-BladeLegend -Keys @("Number toggles", "blank Enter continues") -AllowBack:$AllowBack -LineMode
         }
-        Write-Host ""
 
         # Read when the frame is COMPLETE, never half way through it. A frame taller
         # than the window scrolls as its last lines are written, so a top measured
@@ -2053,8 +2288,7 @@ function Show-MultiSelectMenu {
                 continue
             }
             if ($virtualKey -eq 32) {
-                # Nothing to toggle on the continue row, and nothing on a locked one.
-                if ($rows[$index].IsContinue) { continue }
+                # Nothing to toggle on a locked row.
                 if (& $isLocked $rows[$index]) { continue }
                 $id = [string]$rows[$index].Id
                 $selected[$id] = -not $selected[$id]
@@ -2078,6 +2312,9 @@ function Show-MultiSelectMenu {
                 # return intact to say so.
                 return ,$chosen
             }
+            if ($virtualKey -eq 8 -and $AllowBack) {
+                return $script:MenuBackId
+            }
             if ($virtualKey -eq 27 -or $charKey -eq "q" -or $charKey -eq "Q") {
                 return $null
             }
@@ -2085,6 +2322,7 @@ function Show-MultiSelectMenu {
         else {
             $raw = Read-Host "Toggle number / empty Enter to confirm"
             if ($raw -match "^[Qq]$") { return $null }
+            if ($AllowBack -and $raw -match "^[Bb]$") { return $script:MenuBackId }
             if ([string]::IsNullOrWhiteSpace($raw)) {
                 $chosen = @()
                 foreach ($item in $Items) {
@@ -2118,7 +2356,9 @@ function Show-VhdxConfigForm {
         [int]$DefaultSizeGB = 64,
         [int]$MinSizeGB = 20,
         [int]$MaxSizeGB = 2048,
-        [string]$DefaultType = "Fixed"
+        [string]$DefaultType = "Fixed",
+        # Backspace returns $script:MenuBackId - see Show-Menu.
+        [switch]$AllowBack
     )
 
     # No descriptions beside the two names. Fixed and Dynamic are the words Hyper-V
@@ -2131,7 +2371,9 @@ function Show-VhdxConfigForm {
 
     if (-not (Test-MenuHostSupported)) {
         Show-MenuHeader -Title $Title -Subtitle $Subtitle -StatusLines $StatusLines
-        $sizeGB = Read-BoundedInt -Prompt "VHDX size in GB" -DefaultValue $DefaultSizeGB -MinValue $MinSizeGB -MaxValue $MaxSizeGB
+        Write-BladeLegend -Keys @("Enter confirm") -AllowBack:$AllowBack -LineMode
+        $sizeGB = Read-BoundedInt -Prompt "VHDX size in GB" -DefaultValue $DefaultSizeGB -MinValue $MinSizeGB -MaxValue $MaxSizeGB -AllowBack:$AllowBack
+        if (-not (Test-BladeAnswer -Value $sizeGB)) { return $sizeGB }
         $typeChoice = Read-Host "VHDX type: Fixed or Dynamic [$DefaultType]"
         if ([string]::IsNullOrWhiteSpace($typeChoice)) { $typeChoice = $DefaultType }
         if ($typeChoice -notin @("Fixed", "Dynamic")) { $typeChoice = $DefaultType }
@@ -2147,6 +2389,9 @@ function Show-VhdxConfigForm {
     $cursor = 0
     $rowCount = 3
     $errorMessage = $null
+    # Backspace on the size field deletes digits, and steps back only on a fresh press
+    # into an empty field - the same guard Read-BladeText has.
+    $sinceBackspace = $null
 
     # Typing a digit redraws this form. Redrawing the header with it made every
     # keystroke blink the screen - see the repaint helpers above Show-Menu.
@@ -2206,9 +2451,8 @@ function Show-VhdxConfigForm {
         }
 
         Write-Host ""
-        Write-Studio -Text ("  " + ("-" * 62)) -Key "muted"
-        Write-Studio -Text "  Up/Down move   Space select type   Type digits for size   Enter confirm   Esc cancel" -Key "muted"
-        Write-Host ""
+        # Typing digits is said on the form itself, beside the field.
+        Write-BladeLegend -Keys @("Up/Down move", "Space type", "Enter confirm") -AllowBack:$AllowBack
 
         # Read when the frame is COMPLETE, never half way through it. A frame taller
         # than the window scrolls as its last lines are written, so a top measured
@@ -2223,7 +2467,9 @@ function Show-VhdxConfigForm {
         $virtualKey = [int]$key.VirtualKeyCode
         $charKey = [string]$key.Character
 
-        if ($virtualKey -eq 27 -or $charKey -eq "q" -or $charKey -eq "Q") {
+        # Esc only - the form takes typed input, and one cancel key on every blade that
+        # does is easier to remember than a Q that works on some fields.
+        if ($virtualKey -eq 27) {
             return $null
         }
         if ($virtualKey -eq 38) {
@@ -2234,11 +2480,17 @@ function Show-VhdxConfigForm {
             $cursor = if ($cursor -ge ($rowCount - 1)) { 0 } else { $cursor + 1 }
             continue
         }
-        if ($cursor -eq 0) {
-            if ($virtualKey -eq 8) {
-                if ($sizeText.Length -gt 0) { $sizeText = $sizeText.Substring(0, $sizeText.Length - 1) }
+        if ($virtualKey -eq 8) {
+            $recent = ($null -ne $sinceBackspace -and $sinceBackspace.ElapsedMilliseconds -lt 400)
+            $sinceBackspace = [System.Diagnostics.Stopwatch]::StartNew()
+            if ($cursor -eq 0 -and $sizeText.Length -gt 0) {
+                $sizeText = $sizeText.Substring(0, $sizeText.Length - 1)
                 continue
             }
+            if ($AllowBack -and -not ($cursor -eq 0 -and $recent)) { return $script:MenuBackId }
+            continue
+        }
+        if ($cursor -eq 0) {
             if ($charKey -match "^\d$") {
                 if ($sizeText.Length -lt 5) { $sizeText += $charKey }
                 continue
@@ -2332,10 +2584,12 @@ function Get-MountedIsoDriveCandidates {
 
 function Read-ConsolePath {
     # Styled to match the arrow-key menus (white label, gray hint, cyan
-    # input row) instead of a bare Read-Host prompt.
+    # input row) instead of a bare Read-Host prompt. Returns the path, $null for Esc,
+    # or $script:MenuBackId.
     param(
         [string]$Prompt,
-        [string]$DefaultPath
+        [string]$DefaultPath,
+        [switch]$AllowBack
     )
 
     Write-Studio -Text "  $Prompt" -Key "fg"
@@ -2359,15 +2613,16 @@ function Read-ConsolePath {
     # is the same breathing room every menu leaves above its footer divider.
     Write-Host ""
     Write-Host ""
-    Write-Studio -Text ("  " + ("-" * 62)) -Key "muted"
-    Write-Studio -Text "  Type a path, then Enter   (blank keeps default)" -Key "muted"
-    Write-Host ""
+    # "Blank keeps the default" is said above the field, next to the default itself.
+    Write-BladeLegend -Keys @("Enter confirm") -AllowBack:$AllowBack -LineMode:(-not (Test-MenuHostSupported))
 
     if ($null -ne $inputPosition) {
         try { $Host.UI.RawUI.CursorPosition = $inputPosition } catch { }
     }
 
-    $raw = Read-Host
+    # An empty prompt: the caret row above already says where to type.
+    $raw = Read-BladeText -Prompt "" -AllowBack:$AllowBack
+    if (-not (Test-BladeAnswer -Value $raw)) { return $raw }
     if ([string]::IsNullOrWhiteSpace($raw)) {
         return $DefaultPath
     }
@@ -2390,15 +2645,21 @@ function Write-BladeFooterAbove {
         the rule simply stays where it was drawn, which is the older behaviour - the
         frame closes after the answer rather than before it. Ugly, never wrong.
     #>
-    param([int]$ReserveLines = 1)
+    param(
+        [int]$ReserveLines = 1,
+        # The legend under the rule - see Write-BladeLegend. A typing blade always.
+        [string[]]$Keys = @("Enter confirm"),
+        [switch]$AllowBack
+    )
 
     $before = $null
     try { $before = $Host.UI.RawUI.CursorPosition } catch { $before = $null }
 
+    $lineMode = -not (Test-MenuHostSupported)
+
     for ($i = 0; $i -lt $ReserveLines; $i++) { Write-Host "" }
     Write-Host ""
-    Write-Studio -Text ("  " + ("-" * 62)) -Key "muted"
-    Write-Host ""
+    Write-BladeLegend -Keys $Keys -AllowBack:$AllowBack -LineMode:$lineMode
 
     if ($null -eq $before) { return }
 
@@ -2406,24 +2667,27 @@ function Write-BladeFooterAbove {
     try { $after = $Host.UI.RawUI.CursorPosition } catch { $after = $null }
     if ($null -eq $after) { return }
 
-    # Reserve blanks + the blank above the rule + the rule + the blank below it.
-    $expected = $ReserveLines + 3
+    # Reserve blanks + the blank above the rule + the rule + the legend + the blank below.
+    $expected = $ReserveLines + 4
     if (($after.Y - $before.Y) -ne $expected) { return }
 
     try { $Host.UI.RawUI.CursorPosition = $before } catch { }
 }
 
 function Read-BoundedInt {
-    # Loops until a whole number within [MinValue, MaxValue] is entered; blank keeps the default.
+    # Loops until a whole number within [MinValue, MaxValue] is entered; blank keeps the
+    # default. $null for Esc, $script:MenuBackId for Backspace on an empty field.
     param(
         [string]$Prompt,
         [int]$DefaultValue,
         [int]$MinValue,
-        [int]$MaxValue
+        [int]$MaxValue,
+        [switch]$AllowBack
     )
 
     while ($true) {
-        $raw = Read-Host "$Prompt [$DefaultValue] (range $MinValue-$MaxValue)"
+        $raw = Read-BladeText -Prompt "$Prompt [$DefaultValue] (range $MinValue-$MaxValue)" -AllowBack:$AllowBack
+        if (-not (Test-BladeAnswer -Value $raw)) { return $raw }
         if ([string]::IsNullOrWhiteSpace($raw)) {
             return $DefaultValue
         }
@@ -2441,15 +2705,18 @@ function Read-ConsoleIpAddress {
     # Loops until a dotted-quad IPv4 address is entered. Blank returns the default,
     # which for an optional field is an empty string - a gateway or a DNS server that
     # nobody wants is a legitimate answer, an address with five octets is not.
+    # $null for Esc, $script:MenuBackId for Backspace on an empty field.
     param(
         [string]$Prompt,
         [string]$DefaultValue = "",
-        [switch]$AllowEmpty
+        [switch]$AllowEmpty,
+        [switch]$AllowBack
     )
 
     while ($true) {
         $shown = if ([string]::IsNullOrWhiteSpace($DefaultValue)) { "" } else { " [$DefaultValue]" }
-        $raw = Read-Host "$Prompt$shown"
+        $raw = Read-BladeText -Prompt "$Prompt$shown" -AllowBack:$AllowBack
+        if (-not (Test-BladeAnswer -Value $raw)) { return $raw }
         if ([string]::IsNullOrWhiteSpace($raw)) {
             if (-not [string]::IsNullOrWhiteSpace($DefaultValue)) { return $DefaultValue }
             if ($AllowEmpty) { return "" }
@@ -2596,9 +2863,12 @@ function Get-DefaultIsoBrowseRoot {
 }
 
 function Show-IsoFilePicker {
-    # Arrow-key file browser: drives -> folders -> select a .iso file.
+    # Arrow-key file browser: drives -> folders -> select a .iso file. Backspace climbs
+    # a folder; on the drive list, where there is nothing left to climb, it steps back a
+    # blade instead ($script:MenuBackId) when -AllowBack is set.
     param(
-        [string]$StartPath = ":DRIVES"
+        [string]$StartPath = ":DRIVES",
+        [switch]$AllowBack
     )
 
     $currentPath = $StartPath
@@ -2647,8 +2917,7 @@ function Show-IsoFilePicker {
         }
 
         if (-not $repainted) {
-            Show-MenuHeader -Title "Select Windows ISO file" -Subtitle "Enter opens folder / selects .iso" `
-                -StatusLines $status
+            Show-MenuHeader -Title "Select Windows ISO file" -StatusLines $status
             $anchor = Get-MenuCursorAnchor
             $anchoredPath = $displayPath
         }
@@ -2701,14 +2970,19 @@ function Show-IsoFilePicker {
         }
 
         Write-Host ""
-        Write-Studio -Text ("  " + ("-" * 62)) -Key "muted"
+        # Backspace means "up a folder" here until there is no folder left, so the legend
+        # says which one it is right now rather than listing both.
+        $atTop = ($currentPath -eq ":DRIVES")
         if ($useRawUi) {
-            Write-Studio -Text "  Up/Down move   Enter open/select   Backspace up   Esc cancel" -Key "muted"
+            $pickerKeys = @("Up/Down move", "Enter open/select")
+            if (-not $atTop) { $pickerKeys += "Backspace up a folder" }
+            Write-BladeLegend -Keys $pickerKeys -AllowBack:($AllowBack -and $atTop)
         }
         else {
-            Write-Studio -Text "  Number + Enter selects   B = up   Q = cancel" -Key "muted"
+            $pickerKeys = @("Number + Enter selects")
+            if (-not $atTop) { $pickerKeys += "B up a folder" }
+            Write-BladeLegend -Keys $pickerKeys -AllowBack:($AllowBack -and $atTop) -LineMode
         }
-        Write-Host ""
 
         # Read once the frame is complete - a top measured mid-frame disagrees with
         # itself the moment the list is long enough to scroll the window.
@@ -2728,8 +3002,11 @@ function Show-IsoFilePicker {
                 continue
             }
             if ($virtualKey -eq 8) {
-                # Backspace = go up
-                if ($currentPath -eq ":DRIVES") { continue }
+                # Backspace = go up, and off the top of the tree = back a blade.
+                if ($currentPath -eq ":DRIVES") {
+                    if ($AllowBack) { return $script:MenuBackId }
+                    continue
+                }
                 $parent = Split-Path -Path $currentPath -Parent
                 if ([string]::IsNullOrWhiteSpace($parent) -or $parent -eq $currentPath) {
                     $currentPath = ":DRIVES"
@@ -2754,7 +3031,10 @@ function Show-IsoFilePicker {
             if ([string]::IsNullOrWhiteSpace($raw)) { continue }
             if ($raw -match '^[Qq]$') { return $null }
             if ($raw -match '^[Bb]$') {
-                if ($currentPath -eq ":DRIVES") { continue }
+                if ($currentPath -eq ":DRIVES") {
+                    if ($AllowBack) { return $script:MenuBackId }
+                    continue
+                }
                 $parent = Split-Path -Path $currentPath -Parent
                 if ([string]::IsNullOrWhiteSpace($parent) -or $parent -eq $currentPath) {
                     $currentPath = ":DRIVES"
@@ -2887,347 +3167,433 @@ function Start-InteractiveConfiguration {
 
     # The first blade. Everything below this point is the Windows path; Linux returns
     # its own configuration object and the caller branches on OsFamily.
-    $familyItems = @(
-        [PSCustomObject]@{ Id = "Windows"; Label = "Windows" }
-        [PSCustomObject]@{ Id = "Linux";   Label = "Linux" }
-    )
-    $familyId = Show-Menu -Title "What kind of gold is this?" -Items $familyItems `
-        -Heading "Operating system" -HeadingHint "Windows builds from an ISO; Linux fetches a cloud image"
-    if ($null -eq $familyId) { return $null }
+    #
+    # The wizard is a loop over named blades rather than a straight run of them, so that
+    # Backspace can step back. $history holds the blades actually shown, in order: a
+    # blade skipped on the way forward is skipped on the way back too. Each blade builds
+    # its items from the answers so far and opens on its own earlier answer when it has
+    # one, so going back and forward again changes only what was changed.
+    #
+    # Every blade sets $answer (its return: a value, $null for cancel, or
+    # $script:MenuBackId) and $goto (the blade after it). The tail of the loop does the
+    # rest, so no blade has to know how Back works.
+    $history = New-Object System.Collections.Generic.Stack[string]
+    $step = "family"
 
-    if ($familyId -eq "Linux") {
-        return Start-LinuxInteractiveConfiguration -CurrentLocale $CurrentLocale `
-            -CurrentKeyboard $CurrentKeyboard -CurrentOutputDirectory $CurrentOutputDirectory
+    $familyId = $null
+    $isoChoice = $null
+    # Not a question: -OutputDirectory decides it, the same as on the Linux path.
+    $outputDirectory = $CurrentOutputDirectory
+    if ([string]::IsNullOrWhiteSpace($outputDirectory)) {
+        $outputDirectory = Join-Path -Path $PSScriptRoot -ChildPath "vhdx"
     }
-
-    $isoCandidates = @(Get-MountedIsoDriveCandidates)
-    $pickerItems = @()
-    $pickerItems += [PSCustomObject]@{
-        Id    = "__browse__"
-        Label = "Browse for ISO file..."
-    }
-    foreach ($candidate in $isoCandidates) {
-        $pickerItems += [PSCustomObject]@{
-            Id    = $candidate.Id
-            Label = "Already mounted: $($candidate.Label)"
-        }
-    }
-
-    $isoChoice = Show-Menu -Title "Select Windows ISO source" -Items $pickerItems
-    if ($null -eq $isoChoice) { return $null }
-
     $isoId = $null
     $isoFilePath = $null
+    $isoStatus = $null
+    $targetId = $null
+    $wimPath = ""
+    $images = @()
+    $editionChoice = $null
+    $locale = $null
+    $timeZone = $null
+    $featureChoice = $null
+    $vhdSizeGB = $null
+    $vhdType = $null
 
-    if ($isoChoice -eq "__browse__") {
-        $isoFilePath = Show-IsoFilePicker -StartPath (Get-DefaultIsoBrowseRoot)
-        if ($null -eq $isoFilePath) {
-            Write-Log "ISO file selection cancelled - nothing was built" -Tag "Info"
-            return $null
+    while ($true) {
+        $canBack = ($history.Count -gt 0)
+        $answer = $null
+        $goto = $step
+
+        switch ($step) {
+            "family" {
+                $familyItems = @(
+                    [PSCustomObject]@{ Id = "Windows"; Label = "Windows" }
+                    [PSCustomObject]@{ Id = "Linux";   Label = "Linux" }
+                )
+                $answer = Show-Menu -Title "What kind of gold is this?" -Items $familyItems -SelectedId $familyId `
+                    -Heading "Operating system" -HeadingHint "Windows builds from an ISO; Linux fetches a cloud image"
+                if (Test-BladeAnswer -Value $answer) {
+                    $familyId = $answer
+                    $goto = if ($answer -eq "Linux") { "linux" } else { "isosource" }
+                }
+            }
+            "linux" {
+                # The whole Linux wizard counts as one blade here: it steps back inside
+                # itself, and hands Back out only from its own first blade.
+                $answer = Start-LinuxInteractiveConfiguration -CurrentLocale $CurrentLocale `
+                    -CurrentKeyboard $CurrentKeyboard -CurrentOutputDirectory $CurrentOutputDirectory -AllowBack
+                if (Test-BladeAnswer -Value $answer) { return $answer }
+            }
+            "isosource" {
+                $isoCandidates = @(Get-MountedIsoDriveCandidates)
+                $pickerItems = @()
+                $pickerItems += [PSCustomObject]@{
+                    Id    = "__browse__"
+                    Label = "Browse for ISO file..."
+                }
+                foreach ($candidate in $isoCandidates) {
+                    $pickerItems += [PSCustomObject]@{
+                        Id    = $candidate.Id
+                        Label = "Already mounted: $($candidate.Label)"
+                    }
+                }
+
+                $answer = Show-Menu -Title "Select Windows ISO source" -Items $pickerItems -AllowBack:$canBack `
+                    -SelectedId $isoChoice `
+                    -Heading "Installation media" -HeadingHint "A Windows ISO - browse for the file, or use one that is already mounted"
+                if (Test-BladeAnswer -Value $answer) {
+                    $isoChoice = $answer
+                    if ($answer -eq "__browse__") {
+                        $goto = "isofile"
+                    }
+                    else {
+                        $isoId = $answer
+                        $isoFilePath = $null
+                        $isoStatus = $isoId
+                        $goto = "target"
+                    }
+                }
+            }
+            "isofile" {
+                $answer = Show-IsoFilePicker -StartPath (Get-DefaultIsoBrowseRoot) -AllowBack
+                if ($null -eq $answer) {
+                    Write-Log "ISO file selection cancelled - nothing was built" -Tag "Info"
+                }
+                if (Test-BladeAnswer -Value $answer) {
+                    $isoFilePath = $answer
+                    try {
+                        $isoId = Mount-WindowsIsoFile -IsoFilePath $isoFilePath
+                    }
+                    catch {
+                        Write-Log "Failed to mount ISO '$isoFilePath': $($_.Exception.Message)" -Tag "Error"
+                        return $null
+                    }
+                    $isoStatus = Split-Path -Path $isoFilePath -Leaf
+                    $goto = "target"
+                }
+            }
+            "target" {
+                $targetItems = @(
+                    [PSCustomObject]@{ Id = "HyperV";     Label = "Hyper-V" }
+                    [PSCustomObject]@{ Id = "AzureLocal"; Label = "Azure Local" }
+                )
+                $targetDefault = 0
+                if ($CurrentTarget -eq "AzureLocal") { $targetDefault = 1 }
+                $answer = Show-Menu -Title "Select deployment target" -Items $targetItems -SelectedIndex $targetDefault `
+                    -SelectedId $targetId -AllowBack:$canBack `
+                    -Heading "Target platform" -HeadingHint "Where the golds built here will be deployed" `
+                    -StatusLines ([ordered]@{ iso = $isoStatus })
+                if (Test-BladeAnswer -Value $answer) {
+                    $targetId = $answer
+                    $wimPath = Resolve-WindowsImagePath -DriveLetter $isoId
+                    if ($wimPath -eq "") {
+                        Write-Log "No install image found under '$isoId\sources'" -Tag "Error"
+                        return $null
+                    }
+                    $images = @(Get-WindowsImage -ImagePath $wimPath)
+                    $goto = "editions"
+                }
+            }
+            "editions" {
+                # Plain Pro only. Enterprise, Education, Pro for Workstations and the rest are
+                # virtual editions already staged on top of Pro, and DISM's own rule is to change
+                # the lowest edition in the family and never one that has already been raised -
+                # such an image has no packs left to offer. Pro N is excluded on purpose: only
+                # plain Pro is verified to list a multi-session target, and a media-less N gold
+                # is nothing this lab deploys.
+                $msCandidates = @($images | Where-Object {
+                        (Test-IsClientImage -ImageName $_.ImageName) -and
+                        ([string]$_.ImageName) -match "(?i)\bpro\s*$"
+                    })
+
+                # Server 2025 Datacenter only. Probed on retail 26100 media: Datacenter Core
+                # lists ServerTurbineCor and Datacenter Desktop lists ServerTurbine directly,
+                # while Standard Core lists only ServerDatacenterCor - no direct Azure Edition
+                # hop. Standard Desktop does list ServerTurbine, but it would build the same
+                # gold as the Datacenter row and collide with it on disk, so one source edition
+                # carries the rows. Only Server 2025 media lists the target at all - 2022 ships
+                # Azure Edition as a separate image with no conversion path - so older Server
+                # ISOs get no rows.
+                $azCandidates = @($images | Where-Object {
+                        ([string]$_.ImageName) -match "(?i)windows\s+server\s+2025\s+datacenter"
+                    })
+
+                $editionItems = @()
+                foreach ($image in $images) {
+                    $editionItems += [PSCustomObject]@{
+                        Id       = [string]$image.ImageIndex
+                        Label    = "Index $($image.ImageIndex): $($image.ImageName)"
+                        Selected = ($null -ne $editionChoice -and @($editionChoice) -contains [string]$image.ImageIndex)
+                        Section  = "Editions in this ISO"
+                    }
+                }
+                # Virtual edition rows share the screen with the real indexes because they decide
+                # what a gold IS, same as picking an index. A row is its own build: the same Pro
+                # index can leave once as Pro and once as multi-session, and the gold names
+                # (w11-pro / w11-enterprise-ms) keep the two from colliding on disk.
+                foreach ($image in $msCandidates) {
+                    $rowId = "ms:$($image.ImageIndex)"
+                    $editionItems += [PSCustomObject]@{
+                        Id       = $rowId
+                        Label    = "Index $($image.ImageIndex): Windows 11 Enterprise multi-session"
+                        Selected = $(if ($null -ne $editionChoice) { @($editionChoice) -contains $rowId } else { $CurrentMultiSessionImageIndexes -contains [int]$image.ImageIndex })
+                        Section  = "Virtual editions"
+                    }
+                }
+                foreach ($image in $azCandidates) {
+                    # Core and Desktop Experience are separate rows from separate indexes, so the
+                    # label carries the install type the source has - the edition change keeps it.
+                    $installType = if (([string]$image.ImageName) -match "(?i)desktop") { " (Desktop Experience)" } else { "" }
+                    $rowId = "az:$($image.ImageIndex)"
+                    $editionItems += [PSCustomObject]@{
+                        Id       = $rowId
+                        Label    = "Index $($image.ImageIndex): Windows Server 2025 Datacenter: Azure Edition$installType"
+                        Selected = $(if ($null -ne $editionChoice) { @($editionChoice) -contains $rowId } else { $CurrentAzureEditionImageIndexes -contains [int]$image.ImageIndex })
+                        Section  = "Virtual editions"
+                    }
+                }
+
+                # The licensing caveat sits under the section header it belongs to, not at the top
+                # of the whole menu. On Azure Local the SKU is where it is licensed to run, so
+                # there is nothing to warn about.
+                $editionSectionNotes = @{}
+                if ($targetId -ne "AzureLocal") {
+                    $noteLines = @()
+                    if ($msCandidates.Count -gt 0) {
+                        $noteLines += "This build targets Hyper-V. Multi-session is licensed for Azure Virtual Desktop,"
+                        $noteLines += "so a gold built here is a lab image - not supported in production."
+                    }
+                    if ($azCandidates.Count -gt 0) {
+                        $noteLines += "Azure Edition is supported on Azure and Azure Local only - on plain Hyper-V"
+                        $noteLines += "the VM deactivates itself once it notices where it runs."
+                    }
+                    if ($noteLines.Count -gt 0) {
+                        $editionSectionNotes["Virtual editions"] = $noteLines
+                    }
+                }
+
+                $answer = Show-MultiSelectMenu -Title "Select edition(s) to build" -Items $editionItems `
+                    -Heading "Editions" -HeadingHint "Every ticked row is a gold of its own" `
+                    -SectionNotes $editionSectionNotes -AllowBack:$canBack `
+                    -StatusLines ([ordered]@{ iso = $isoStatus; target = $targetId })
+                if (Test-BladeAnswer -Value $answer) {
+                    $editionChoice = $answer
+                    $selectedIndexes = @($editionChoice | Where-Object { $_ -notlike "ms:*" -and $_ -notlike "az:*" })
+                    $multiSessionIndexes = @($editionChoice | Where-Object { $_ -like "ms:*" } | ForEach-Object { [int]($_ -replace "^ms:", "") })
+                    $azureEditionIndexes = @($editionChoice | Where-Object { $_ -like "az:*" } | ForEach-Object { [int]($_ -replace "^az:", "") })
+
+                    # All editions in one ISO share a product line, but detect per selected image so a
+                    # mixed/unusual WIM still gates features correctly. Virtual edition builds count
+                    # too: their source index gates the same even when no plain row is ticked.
+                    $chosenIndexUnion = @(@($selectedIndexes | ForEach-Object { [int]$_ }) + $multiSessionIndexes + $azureEditionIndexes | Sort-Object -Unique)
+                    $selectedImageObjects = @($images | Where-Object { $chosenIndexUnion -contains [int]$_.ImageIndex })
+                    $summaryParts = @(foreach ($image in $images) {
+                            if ($selectedIndexes -contains [string]$image.ImageIndex) { "#$($image.ImageIndex) $($image.ImageName)" }
+                            if ($multiSessionIndexes -contains [int]$image.ImageIndex) { "#$($image.ImageIndex) Windows 11 Enterprise multi-session" }
+                            if ($azureEditionIndexes -contains [int]$image.ImageIndex) { "#$($image.ImageIndex) Windows Server 2025 Datacenter: Azure Edition" }
+                        })
+                    $editionsSummary = $summaryParts -join "; "
+                    $buildHasServer = (@($selectedImageObjects | Where-Object { -not (Test-IsClientImage -ImageName $_.ImageName) })).Count -gt 0
+                    $buildHasClient = (@($selectedImageObjects | Where-Object { Test-IsClientImage -ImageName $_.ImageName })).Count -gt 0
+                    # Anything that ships a browser: every client image, and Server with Desktop Experience.
+                    $buildHasEdge = (@($selectedImageObjects | Where-Object { -not (Test-IsServerCoreImage -ImageName $_.ImageName) })).Count -gt 0
+
+                    # Status-line value for every later screen: plain indexes as-is, virtual edition
+                    # builds marked so "5, 5 ms, 2 az" reads as separate golds from their indexes.
+                    $imagesStatus = (@($selectedIndexes) + @($multiSessionIndexes | ForEach-Object { "$_ ms" }) + @($azureEditionIndexes | ForEach-Object { "$_ az" })) -join ", "
+                    $goto = "locale"
+                }
+            }
+            "locale" {
+                $localeTags = Get-OrderedLocaleTags
+                $localeItems = @()
+                foreach ($tag in $localeTags) {
+                    $localeItems += [PSCustomObject]@{ Id = $tag; Label = "$tag - $(Get-LocaleDisplayName -Locale $tag)" }
+                }
+                $localeDefaultIndex = [array]::IndexOf($localeTags, $CurrentLocale)
+                if ($localeDefaultIndex -lt 0) { $localeDefaultIndex = 0 }
+                $answer = Show-Menu -Title "Select locale / keyboard" -Items $localeItems -SelectedIndex $localeDefaultIndex `
+                    -SelectedId $locale -AllowBack:$canBack `
+                    -Heading "Regional format and keyboard layout" `
+                    -HeadingHint "NOT the display language - the image keeps whatever UI language the ISO shipped with." `
+                    -StatusLines ([ordered]@{ iso = $isoStatus; target = $targetId; images = $imagesStatus })
+                if (Test-BladeAnswer -Value $answer) {
+                    $locale = $answer
+                    $keyboard = $answer
+                    $localeSummary = "$locale - $(Get-LocaleDisplayName -Locale $locale)"
+                    $goto = "timezone"
+                }
+            }
+            "timezone" {
+                # Time zone picker - same style as the locale picker above, backed by the
+                # live Windows time zone database instead of a hardcoded list.
+                $timeZoneCatalog = @(Get-OrderedTimeZoneCatalog)
+                if ($timeZoneCatalog.Count -gt 0) {
+                    $tzDefaultIndex = [array]::IndexOf(@($timeZoneCatalog | ForEach-Object { $_.Id }), $CurrentTimeZone)
+                    if ($tzDefaultIndex -lt 0) { $tzDefaultIndex = 0 }
+                    $answer = Show-Menu -Title "Select time zone" -Items $timeZoneCatalog -SelectedIndex $tzDefaultIndex `
+                        -SelectedId $timeZone -AllowBack:$canBack `
+                        -Heading "Default time zone" `
+                        -HeadingHint "Baked into the image with DISM /Set-TimeZone. Sorted by UTC offset." `
+                        -StatusLines ([ordered]@{ iso = $isoStatus; target = $targetId; locale = $locale })
+                    if (Test-BladeAnswer -Value $answer) {
+                        $timeZone = $answer
+                        $timeZoneSummary = ($timeZoneCatalog | Where-Object { $_.Id -eq $timeZone } | Select-Object -First 1).Label
+                        $goto = "features"
+                    }
+                }
+                else {
+                    Show-MenuHeader -Title "Select time zone" -StatusLines ([ordered]@{ iso = $isoStatus; target = $targetId; locale = $locale })
+                    $answer = Read-ConsolePath -Prompt "Time zone" -DefaultPath $(if ($timeZone) { $timeZone } else { $CurrentTimeZone }) -AllowBack:$canBack
+                    if (Test-BladeAnswer -Value $answer) {
+                        $timeZone = $answer
+                        $timeZoneSummary = $timeZone
+                        $goto = "features"
+                    }
+                }
+            }
+            "features" {
+                # Recommended features apply to every build; optional ones are gated to
+                # the build type actually present in the selected edition(s).
+                $featureItems = @(
+                    [PSCustomObject]@{ Id = "rdp";  Label = "Remote Desktop (RDP)"; Selected = $CurrentEnableRdp;  Section = "Recommended" }
+                    [PSCustomObject]@{ Id = "ping"; Label = "ICMP echo (ping)";     Selected = $CurrentEnablePing; Section = "Recommended" }
+                )
+                # Recommended on the client path, and ticked: a qualifying VM encrypts itself once
+                # OOBE finishes and arms for real at domain join, before any policy has had a say.
+                # BitLocker is meant to be turned on deliberately, by GPO after deployment, so the
+                # gold stays out of the decision rather than pre-empting it.
+                if ($buildHasClient) {
+                    $featureItems += [PSCustomObject]@{ Id = "autode"; Label = "Prevent automatic BitLocker device encryption"; Selected = $CurrentPreventDeviceEncryption; Section = "Recommended (Client)" }
+                    # Also recommended on the client path: the gold's whole life is as a VM, where the
+                    # console blanking after ten minutes and the machine sleeping after thirty are
+                    # settings written for a laptop lid, and hiberfil.sys is dead weight on every disk
+                    # cloned from it.
+                    $featureItems += [PSCustomObject]@{ Id = "power"; Label = "VM power plan (High performance, display/sleep never, no hibernation)"; Selected = $CurrentSetVmPowerPlan; Section = "Recommended (Client)" }
+                }
+                # Applies to both client and server: pin sign-in keyboard to the baked layout.
+                $featureItems += [PSCustomObject]@{ Id = "signin"; Label = "Block per-user input methods on sign-in screen (STIG)"; Selected = $CurrentBlockSignInInputMethods; Section = "Optional" }
+                # Edge ships on both sides of the client/server line, but not on Server Core - that
+                # install has no browser to manage, so a build made only of Core images is never asked.
+                if ($buildHasEdge) {
+                    $featureItems += [PSCustomObject]@{ Id = "edge"; Label = "Microsoft Edge Config (Google search, no first run, clean new tab)"; Selected = $CurrentConfigureEdge; Section = "Optional" }
+                }
+                if ($buildHasServer) {
+                    $featureItems += [PSCustomObject]@{ Id = "svrmgr"; Label = "Suppress Server Manager at logon"; Selected = $CurrentSuppressServerManagerAtLogon; Section = "Optional (Server)" }
+                }
+                if ($buildHasClient) {
+                    $featureItems += [PSCustomObject]@{ Id = "welcome"; Label = "Suppress Getting Started / Welcome Experience"; Selected = $CurrentSuppressWelcomeExperience; Section = "Optional (Client)" }
+                    $featureItems += [PSCustomObject]@{ Id = "signinanim"; Label = "Suppress first sign-in animation"; Selected = $CurrentSuppressFirstSignInAnimation; Section = "Optional (Client)" }
+                }
+                # A blade revisited through Back shows what was ticked last time, not the
+                # defaults it opened with the first time.
+                if ($null -ne $featureChoice) {
+                    foreach ($featureItem in $featureItems) { $featureItem.Selected = (@($featureChoice) -contains $featureItem.Id) }
+                }
+                $answer = Show-MultiSelectMenu -Title "Recommended & optional features" -Items $featureItems -AllowEmpty `
+                    -Heading "Features" -HeadingHint "Grouped by relevance to this build" `
+                    -AllowBack:$canBack `
+                    -StatusLines ([ordered]@{ iso = $isoStatus; target = $targetId; locale = $locale })
+                if (Test-BladeAnswer -Value $answer) {
+                    $featureChoice = $answer
+                    $enableRdp = $featureChoice -contains "rdp"
+                    $enablePing = $featureChoice -contains "ping"
+                    $suppressServerManager = $featureChoice -contains "svrmgr"
+                    $suppressWelcome = $featureChoice -contains "welcome"
+                    $suppressSignInAnimation = $featureChoice -contains "signinanim"
+                    $blockSignIn = $featureChoice -contains "signin"
+                    $configureEdge = $featureChoice -contains "edge"
+                    $preventDeviceEncryption = $featureChoice -contains "autode"
+                    $setVmPowerPlan = $featureChoice -contains "power"
+                    $goto = "vhdx"
+                }
+            }
+            "vhdx" {
+                # Dedicated VHDX window: size and type together on one form.
+                $answer = Show-VhdxConfigForm -Title "Configure VHDX" -Subtitle "Disk size and provisioning type" `
+                    -StatusLines ([ordered]@{ iso = $isoStatus; target = $targetId; locale = $locale; timezone = $timeZone }) `
+                    -DefaultSizeGB $(if ($vhdSizeGB) { $vhdSizeGB } else { $CurrentVhdSizeGB }) -MinSizeGB 20 -MaxSizeGB 2048 `
+                    -DefaultType $(if ($vhdType) { $vhdType } else { $CurrentVhdType }) -AllowBack:$canBack
+                if (Test-BladeAnswer -Value $answer) {
+                    $vhdSizeGB = $answer.SizeGB
+                    $vhdType = $answer.Type
+                    $goto = "confirm"
+                }
+            }
+            "confirm" {
+                # Final confirmation screen - every selected setting, then Continue/Cancel.
+                $renderSummary = {
+                    Write-Studio -Text "  Source" -Key "fg"
+                    Write-FastfetchInfoRow -Label "iso"      -Value $isoStatus -LabelWidth 24 -IndentWidth 2
+                    Write-FastfetchInfoRow -Label "target"   -Value $targetId -LabelWidth 24 -IndentWidth 2
+                    Write-FastfetchInfoRow -Label "editions" -Value $editionsSummary -LabelWidth 24 -IndentWidth 2
+                    # Shown only where the rows were actually offered - an ISO with no Pro index
+                    # never had virtual edition rows, and a row reading "No" implies it did.
+                    if ($msCandidates.Count -gt 0) {
+                        Write-FastfetchInfoRow -Label "multi-session" -Value $(if ($multiSessionIndexes.Count -gt 0) {
+                            "index " + ($multiSessionIndexes -join ", ") + " built as own gold, upgraded after generalize"
+                        } else { "No" }) -LabelWidth 24 -IndentWidth 2
+                    }
+                    if ($azCandidates.Count -gt 0) {
+                        Write-FastfetchInfoRow -Label "azure edition" -Value $(if ($azureEditionIndexes.Count -gt 0) {
+                            "index " + ($azureEditionIndexes -join ", ") + " built as own gold, upgraded after generalize"
+                        } else { "No" }) -LabelWidth 24 -IndentWidth 2
+                    }
+                    Write-FastfetchInfoRow -Label "output"   -Value $outputDirectory -LabelWidth 24 -IndentWidth 2
+                    Write-Host ""
+                    Write-Studio -Text "  Region" -Key "fg"
+                    Write-FastfetchInfoRow -Label "locale"    -Value $localeSummary -LabelWidth 24 -IndentWidth 2
+                    Write-FastfetchInfoRow -Label "time zone" -Value $timeZoneSummary -LabelWidth 24 -IndentWidth 2
+                    Write-FastfetchInfoRow -Label "applied" -Value $(if ($targetId -eq "AzureLocal") {
+                        "At the VM's first boot - Azure Local overwrites a baked locale"
+                    } else { "Baked into the image offline" }) -LabelWidth 24 -IndentWidth 2
+                    Write-Host ""
+                    Write-Studio -Text "  Features" -Key "fg"
+                    Write-FastfetchInfoRow -Label "remote desktop (rdp)" -Value $(if ($enableRdp) { "Enabled" } else { "Disabled" }) -LabelWidth 24 -IndentWidth 2
+                    Write-FastfetchInfoRow -Label "icmp echo (ping)"     -Value $(if ($enablePing) { "Enabled" } else { "Disabled" }) -LabelWidth 24 -IndentWidth 2
+                    Write-FastfetchInfoRow -Label "block sign-in imes"   -Value $(if ($blockSignIn) { "Enabled" } else { "Disabled" }) -LabelWidth 24 -IndentWidth 2
+                    if ($buildHasEdge) {
+                        Write-FastfetchInfoRow -Label "edge config"          -Value $(if ($configureEdge) { "Baked (Google, no first run, clean new tab)" } else { "Not baked" }) -LabelWidth 24 -IndentWidth 2
+                    }
+                    if ($buildHasServer) {
+                        Write-FastfetchInfoRow -Label "suppress server mgr" -Value $(if ($suppressServerManager) { "Enabled" } else { "Disabled" }) -LabelWidth 24 -IndentWidth 2
+                    }
+                    if ($buildHasClient) {
+                        Write-FastfetchInfoRow -Label "suppress welcome exp" -Value $(if ($suppressWelcome) { "Enabled" } else { "Disabled" }) -LabelWidth 24 -IndentWidth 2
+                        Write-FastfetchInfoRow -Label "suppress signin anim" -Value $(if ($suppressSignInAnimation) { "Enabled" } else { "Disabled" }) -LabelWidth 24 -IndentWidth 2
+                        Write-FastfetchInfoRow -Label "auto bitlocker" -Value $(if ($preventDeviceEncryption) { "Prevented" } else { "Left to Windows" }) -LabelWidth 24 -IndentWidth 2
+                        Write-FastfetchInfoRow -Label "power plan" -Value $(if ($setVmPowerPlan) { "High performance, display/sleep never, no hibernation" } else { "Windows default (Balanced)" }) -LabelWidth 24 -IndentWidth 2
+                    }
+                    Write-Host ""
+                    Write-Studio -Text "  Disk" -Key "fg"
+                    Write-FastfetchInfoRow -Label "vhdx size" -Value "$vhdSizeGB GB" -LabelWidth 24 -IndentWidth 2
+                    Write-FastfetchInfoRow -Label "vhdx type" -Value $vhdType -LabelWidth 24 -IndentWidth 2
+                    Write-Host ""
+                    Write-Studio -Text ("  " + ("-" * 62)) -Key "muted"
+                    Write-Host ""
+                }
+
+                $confirmItems = @(
+                    [PSCustomObject]@{ Id = "continue"; Label = "Continue - start the build" }
+                    [PSCustomObject]@{ Id = "cancel";   Label = "Cancel" }
+                )
+                $answer = Show-Menu -Title "Confirm build settings" -Subtitle "Review everything below" `
+                    -Items $confirmItems -SelectedIndex 0 -PreItems $renderSummary -AllowBack:$canBack
+                if ($answer -eq "cancel") { return $null }
+                if (Test-BladeAnswer -Value $answer) { $goto = "done" }
+            }
         }
 
-        try {
-            $isoId = Mount-WindowsIsoFile -IsoFilePath $isoFilePath
+        if ($null -eq $answer) { return $null }
+        if (Test-MenuBack -Value $answer) {
+            if ($history.Count -gt 0) { $step = $history.Pop() }
+            continue
         }
-        catch {
-            Write-Log "Failed to mount ISO '$isoFilePath': $($_.Exception.Message)" -Tag "Error"
-            return $null
-        }
+        $history.Push($step)
+        $step = $goto
+        if ($step -eq "done") { break }
     }
-    else {
-        $isoId = $isoChoice
-    }
-
-    $isoStatus = $isoId
-    if (-not [string]::IsNullOrWhiteSpace($isoFilePath)) {
-        $isoStatus = Split-Path -Path $isoFilePath -Leaf
-    }
-
-    $targetItems = @(
-        [PSCustomObject]@{ Id = "HyperV";     Label = "Hyper-V" }
-        [PSCustomObject]@{ Id = "AzureLocal"; Label = "Azure Local" }
-    )
-    $targetDefault = 0
-    if ($CurrentTarget -eq "AzureLocal") { $targetDefault = 1 }
-    $targetId = Show-Menu -Title "Select deployment target" -Items $targetItems -SelectedIndex $targetDefault `
-        -Heading "Target platform" -HeadingHint "Where the golds built here will be deployed" `
-        -StatusLines ([ordered]@{ iso = $isoStatus })
-    if ($null -eq $targetId) { return $null }
-
-    $wimPath = Resolve-WindowsImagePath -DriveLetter $isoId
-    if ($wimPath -eq "") {
-        Write-Log "No install image found under '$isoId\sources'" -Tag "Error"
-        return $null
-    }
-
-    $images = @(Get-WindowsImage -ImagePath $wimPath)
-
-    # Plain Pro only. Enterprise, Education, Pro for Workstations and the rest are
-    # virtual editions already staged on top of Pro, and DISM's own rule is to change
-    # the lowest edition in the family and never one that has already been raised -
-    # such an image has no packs left to offer. Pro N is excluded on purpose: only
-    # plain Pro is verified to list a multi-session target, and a media-less N gold
-    # is nothing this lab deploys.
-    $msCandidates = @($images | Where-Object {
-            (Test-IsClientImage -ImageName $_.ImageName) -and
-            ([string]$_.ImageName) -match "(?i)\bpro\s*$"
-        })
-
-    # Server 2025 Datacenter only. Probed on retail 26100 media: Datacenter Core
-    # lists ServerTurbineCor and Datacenter Desktop lists ServerTurbine directly,
-    # while Standard Core lists only ServerDatacenterCor - no direct Azure Edition
-    # hop. Standard Desktop does list ServerTurbine, but it would build the same
-    # gold as the Datacenter row and collide with it on disk, so one source edition
-    # carries the rows. Only Server 2025 media lists the target at all - 2022 ships
-    # Azure Edition as a separate image with no conversion path - so older Server
-    # ISOs get no rows.
-    $azCandidates = @($images | Where-Object {
-            ([string]$_.ImageName) -match "(?i)windows\s+server\s+2025\s+datacenter"
-        })
-
-    $editionItems = @()
-    foreach ($image in $images) {
-        $editionItems += [PSCustomObject]@{
-            Id      = [string]$image.ImageIndex
-            Label   = "Index $($image.ImageIndex): $($image.ImageName)"
-            Section = "Editions in this ISO"
-        }
-    }
-    # Virtual edition rows share the screen with the real indexes because they decide
-    # what a gold IS, same as picking an index. A row is its own build: the same Pro
-    # index can leave once as Pro and once as multi-session, and the gold names
-    # (w11-pro / w11-enterprise-ms) keep the two from colliding on disk.
-    foreach ($image in $msCandidates) {
-        $editionItems += [PSCustomObject]@{
-            Id       = "ms:$($image.ImageIndex)"
-            Label    = "Index $($image.ImageIndex): Windows 11 Enterprise multi-session"
-            Selected = ($CurrentMultiSessionImageIndexes -contains [int]$image.ImageIndex)
-            Section  = "Virtual editions"
-        }
-    }
-    foreach ($image in $azCandidates) {
-        # Core and Desktop Experience are separate rows from separate indexes, so the
-        # label carries the install type the source has - the edition change keeps it.
-        $installType = if (([string]$image.ImageName) -match "(?i)desktop") { " (Desktop Experience)" } else { "" }
-        $editionItems += [PSCustomObject]@{
-            Id       = "az:$($image.ImageIndex)"
-            Label    = "Index $($image.ImageIndex): Windows Server 2025 Datacenter: Azure Edition$installType"
-            Selected = ($CurrentAzureEditionImageIndexes -contains [int]$image.ImageIndex)
-            Section  = "Virtual editions"
-        }
-    }
-
-    # The licensing caveat sits under the section header it belongs to, not at the top
-    # of the whole menu. On Azure Local the SKU is where it is licensed to run, so
-    # there is nothing to warn about.
-    $editionSectionNotes = @{}
-    if ($targetId -ne "AzureLocal") {
-        $noteLines = @()
-        if ($msCandidates.Count -gt 0) {
-            $noteLines += "This build targets Hyper-V. Multi-session is licensed for Azure Virtual Desktop,"
-            $noteLines += "so a gold built here is a lab image - not supported in production."
-        }
-        if ($azCandidates.Count -gt 0) {
-            $noteLines += "Azure Edition is supported on Azure and Azure Local only - on plain Hyper-V"
-            $noteLines += "the VM deactivates itself once it notices where it runs."
-        }
-        if ($noteLines.Count -gt 0) {
-            $editionSectionNotes["Virtual editions"] = $noteLines
-        }
-    }
-
-    $editionChoice = Show-MultiSelectMenu -Title "Select edition(s) to build" -Items $editionItems `
-        -SectionNotes $editionSectionNotes `
-        -StatusLines ([ordered]@{ iso = $isoStatus; target = $targetId })
-    if ($null -eq $editionChoice) { return $null }
-
-    $selectedIndexes = @($editionChoice | Where-Object { $_ -notlike "ms:*" -and $_ -notlike "az:*" })
-    $multiSessionIndexes = @($editionChoice | Where-Object { $_ -like "ms:*" } | ForEach-Object { [int]($_ -replace "^ms:", "") })
-    $azureEditionIndexes = @($editionChoice | Where-Object { $_ -like "az:*" } | ForEach-Object { [int]($_ -replace "^az:", "") })
-
-    # All editions in one ISO share a product line, but detect per selected image so a
-    # mixed/unusual WIM still gates features correctly. Virtual edition builds count
-    # too: their source index gates the same even when no plain row is ticked.
-    $chosenIndexUnion = @(@($selectedIndexes | ForEach-Object { [int]$_ }) + $multiSessionIndexes + $azureEditionIndexes | Sort-Object -Unique)
-    $selectedImageObjects = @($images | Where-Object { $chosenIndexUnion -contains [int]$_.ImageIndex })
-    $summaryParts = @(foreach ($image in $images) {
-            if ($selectedIndexes -contains [string]$image.ImageIndex) { "#$($image.ImageIndex) $($image.ImageName)" }
-            if ($multiSessionIndexes -contains [int]$image.ImageIndex) { "#$($image.ImageIndex) Windows 11 Enterprise multi-session" }
-            if ($azureEditionIndexes -contains [int]$image.ImageIndex) { "#$($image.ImageIndex) Windows Server 2025 Datacenter: Azure Edition" }
-        })
-    $editionsSummary = $summaryParts -join "; "
-    $buildHasServer = (@($selectedImageObjects | Where-Object { -not (Test-IsClientImage -ImageName $_.ImageName) })).Count -gt 0
-    $buildHasClient = (@($selectedImageObjects | Where-Object { Test-IsClientImage -ImageName $_.ImageName })).Count -gt 0
-    # Anything that ships a browser: every client image, and Server with Desktop Experience.
-    $buildHasEdge = (@($selectedImageObjects | Where-Object { -not (Test-IsServerCoreImage -ImageName $_.ImageName) })).Count -gt 0
-
-    # Status-line value for every later screen: plain indexes as-is, virtual edition
-    # builds marked so "5, 5 ms, 2 az" reads as separate golds from their indexes.
-    $imagesStatus = (@($selectedIndexes) + @($multiSessionIndexes | ForEach-Object { "$_ ms" }) + @($azureEditionIndexes | ForEach-Object { "$_ az" })) -join ", "
-
-    Show-MenuHeader -Title "Output location" -Subtitle "Enter keeps the default" `
-        -StatusLines ([ordered]@{
-            iso    = $isoStatus
-            target = $targetId
-            images = $imagesStatus
-        })
-
-    $defaultOutput = $CurrentOutputDirectory
-    if ([string]::IsNullOrWhiteSpace($defaultOutput)) {
-        $defaultOutput = Join-Path -Path $PSScriptRoot -ChildPath "vhdx"
-    }
-
-    $outputDirectory = Read-ConsolePath -Prompt "Where should the finished VHDX file(s) land?" -DefaultPath $defaultOutput
-
-    $localeTags = Get-OrderedLocaleTags
-    $localeItems = @()
-    foreach ($tag in $localeTags) {
-        $localeItems += [PSCustomObject]@{ Id = $tag; Label = "$tag - $(Get-LocaleDisplayName -Locale $tag)" }
-    }
-    $localeDefaultIndex = [array]::IndexOf($localeTags, $CurrentLocale)
-    if ($localeDefaultIndex -lt 0) { $localeDefaultIndex = 0 }
-    $localeChoice = Show-Menu -Title "Select locale / keyboard" -Items $localeItems -SelectedIndex $localeDefaultIndex `
-        -Heading "Regional format and keyboard layout" `
-        -HeadingHint "NOT the display language - the image keeps whatever UI language the ISO shipped with." `
-        -StatusLines ([ordered]@{ iso = $isoStatus; target = $targetId; images = $imagesStatus })
-    if ($null -eq $localeChoice) { return $null }
-    $locale = $localeChoice
-    $keyboard = $localeChoice
-    $localeSummary = "$locale - $(Get-LocaleDisplayName -Locale $locale)"
-
-    # Time zone picker - same style as the locale picker above, backed by the
-    # live Windows time zone database instead of a hardcoded list.
-    $timeZoneCatalog = @(Get-OrderedTimeZoneCatalog)
-    if ($timeZoneCatalog.Count -gt 0) {
-        $tzDefaultIndex = [array]::IndexOf(@($timeZoneCatalog | ForEach-Object { $_.Id }), $CurrentTimeZone)
-        if ($tzDefaultIndex -lt 0) { $tzDefaultIndex = 0 }
-        $tzChoice = Show-Menu -Title "Select time zone" -Items $timeZoneCatalog -SelectedIndex $tzDefaultIndex `
-            -Heading "Default time zone" `
-            -HeadingHint "Baked into the image with DISM /Set-TimeZone. Sorted by UTC offset." `
-            -StatusLines ([ordered]@{ iso = $isoStatus; target = $targetId; locale = $locale })
-        if ($null -eq $tzChoice) { return $null }
-        $timeZone = $tzChoice
-        $timeZoneSummary = ($timeZoneCatalog | Where-Object { $_.Id -eq $timeZone } | Select-Object -First 1).Label
-    }
-    else {
-        $timeZone = Read-ConsolePath -Prompt "Time zone" -DefaultPath $CurrentTimeZone
-        $timeZoneSummary = $timeZone
-    }
-
-    # Recommended features apply to every build; optional ones are gated to
-    # the build type actually present in the selected edition(s).
-    $featureItems = @(
-        [PSCustomObject]@{ Id = "rdp";  Label = "Remote Desktop (RDP)"; Selected = $CurrentEnableRdp;  Section = "Recommended" }
-        [PSCustomObject]@{ Id = "ping"; Label = "ICMP echo (ping)";     Selected = $CurrentEnablePing; Section = "Recommended" }
-    )
-    # Recommended on the client path, and ticked: a qualifying VM encrypts itself once
-    # OOBE finishes and arms for real at domain join, before any policy has had a say.
-    # BitLocker is meant to be turned on deliberately, by GPO after deployment, so the
-    # gold stays out of the decision rather than pre-empting it.
-    if ($buildHasClient) {
-        $featureItems += [PSCustomObject]@{ Id = "autode"; Label = "Prevent automatic BitLocker device encryption"; Selected = $CurrentPreventDeviceEncryption; Section = "Recommended (Client)" }
-        # Also recommended on the client path: the gold's whole life is as a VM, where the
-        # console blanking after ten minutes and the machine sleeping after thirty are
-        # settings written for a laptop lid, and hiberfil.sys is dead weight on every disk
-        # cloned from it.
-        $featureItems += [PSCustomObject]@{ Id = "power"; Label = "VM power plan (High performance, display/sleep never, no hibernation)"; Selected = $CurrentSetVmPowerPlan; Section = "Recommended (Client)" }
-    }
-    # Applies to both client and server: pin sign-in keyboard to the baked layout.
-    $featureItems += [PSCustomObject]@{ Id = "signin"; Label = "Block per-user input methods on sign-in screen (STIG)"; Selected = $CurrentBlockSignInInputMethods; Section = "Optional" }
-    # Edge ships on both sides of the client/server line, but not on Server Core - that
-    # install has no browser to manage, so a build made only of Core images is never asked.
-    if ($buildHasEdge) {
-        $featureItems += [PSCustomObject]@{ Id = "edge"; Label = "Microsoft Edge Config (Google search, no first run, clean new tab)"; Selected = $CurrentConfigureEdge; Section = "Optional" }
-    }
-    if ($buildHasServer) {
-        $featureItems += [PSCustomObject]@{ Id = "svrmgr"; Label = "Suppress Server Manager at logon"; Selected = $CurrentSuppressServerManagerAtLogon; Section = "Optional (Server)" }
-    }
-    if ($buildHasClient) {
-        $featureItems += [PSCustomObject]@{ Id = "welcome"; Label = "Suppress Getting Started / Welcome Experience"; Selected = $CurrentSuppressWelcomeExperience; Section = "Optional (Client)" }
-        $featureItems += [PSCustomObject]@{ Id = "signinanim"; Label = "Suppress first sign-in animation"; Selected = $CurrentSuppressFirstSignInAnimation; Section = "Optional (Client)" }
-    }
-    $featureChoice = Show-MultiSelectMenu -Title "Recommended & optional features" -Items $featureItems -AllowEmpty `
-        -Subtitle "Space toggles selection - grouped by relevance to this build" `
-        -ContinueLabel "Continue" `
-        -StatusLines ([ordered]@{ iso = $isoStatus; target = $targetId; locale = $locale })
-    if ($null -eq $featureChoice) { return $null }
-    $enableRdp = $featureChoice -contains "rdp"
-    $enablePing = $featureChoice -contains "ping"
-    $suppressServerManager = $featureChoice -contains "svrmgr"
-    $suppressWelcome = $featureChoice -contains "welcome"
-    $suppressSignInAnimation = $featureChoice -contains "signinanim"
-    $blockSignIn = $featureChoice -contains "signin"
-    $configureEdge = $featureChoice -contains "edge"
-    $preventDeviceEncryption = $featureChoice -contains "autode"
-    $setVmPowerPlan = $featureChoice -contains "power"
-
-    # Dedicated VHDX window: size and type together on one form.
-    $vhdxConfig = Show-VhdxConfigForm -Title "Configure VHDX" -Subtitle "Disk size and provisioning type" `
-        -StatusLines ([ordered]@{ iso = $isoStatus; target = $targetId; locale = $locale; timezone = $timeZone }) `
-        -DefaultSizeGB $CurrentVhdSizeGB -MinSizeGB 20 -MaxSizeGB 2048 -DefaultType $CurrentVhdType
-    if ($null -eq $vhdxConfig) { return $null }
-    $vhdSizeGB = $vhdxConfig.SizeGB
-    $vhdType = $vhdxConfig.Type
-
-    # Final confirmation screen - every selected setting, then Continue/Cancel.
-    $renderSummary = {
-        Write-Studio -Text "  Source" -Key "fg"
-        Write-FastfetchInfoRow -Label "iso"      -Value $isoStatus -LabelWidth 24 -IndentWidth 2
-        Write-FastfetchInfoRow -Label "target"   -Value $targetId -LabelWidth 24 -IndentWidth 2
-        Write-FastfetchInfoRow -Label "editions" -Value $editionsSummary -LabelWidth 24 -IndentWidth 2
-        # Shown only where the rows were actually offered - an ISO with no Pro index
-        # never had virtual edition rows, and a row reading "No" implies it did.
-        if ($msCandidates.Count -gt 0) {
-            Write-FastfetchInfoRow -Label "multi-session" -Value $(if ($multiSessionIndexes.Count -gt 0) {
-                "index " + ($multiSessionIndexes -join ", ") + " built as own gold, upgraded after generalize"
-            } else { "No" }) -LabelWidth 24 -IndentWidth 2
-        }
-        if ($azCandidates.Count -gt 0) {
-            Write-FastfetchInfoRow -Label "azure edition" -Value $(if ($azureEditionIndexes.Count -gt 0) {
-                "index " + ($azureEditionIndexes -join ", ") + " built as own gold, upgraded after generalize"
-            } else { "No" }) -LabelWidth 24 -IndentWidth 2
-        }
-        Write-FastfetchInfoRow -Label "output"   -Value $outputDirectory -LabelWidth 24 -IndentWidth 2
-        Write-Host ""
-        Write-Studio -Text "  Region" -Key "fg"
-        Write-FastfetchInfoRow -Label "locale"    -Value $localeSummary -LabelWidth 24 -IndentWidth 2
-        Write-FastfetchInfoRow -Label "time zone" -Value $timeZoneSummary -LabelWidth 24 -IndentWidth 2
-        Write-FastfetchInfoRow -Label "applied" -Value $(if ($targetId -eq "AzureLocal") {
-            "At the VM's first boot - Azure Local overwrites a baked locale"
-        } else { "Baked into the image offline" }) -LabelWidth 24 -IndentWidth 2
-        Write-Host ""
-        Write-Studio -Text "  Features" -Key "fg"
-        Write-FastfetchInfoRow -Label "remote desktop (rdp)" -Value $(if ($enableRdp) { "Enabled" } else { "Disabled" }) -LabelWidth 24 -IndentWidth 2
-        Write-FastfetchInfoRow -Label "icmp echo (ping)"     -Value $(if ($enablePing) { "Enabled" } else { "Disabled" }) -LabelWidth 24 -IndentWidth 2
-        Write-FastfetchInfoRow -Label "block sign-in imes"   -Value $(if ($blockSignIn) { "Enabled" } else { "Disabled" }) -LabelWidth 24 -IndentWidth 2
-        if ($buildHasEdge) {
-            Write-FastfetchInfoRow -Label "edge config"          -Value $(if ($configureEdge) { "Baked (Google, no first run, clean new tab)" } else { "Not baked" }) -LabelWidth 24 -IndentWidth 2
-        }
-        if ($buildHasServer) {
-            Write-FastfetchInfoRow -Label "suppress server mgr" -Value $(if ($suppressServerManager) { "Enabled" } else { "Disabled" }) -LabelWidth 24 -IndentWidth 2
-        }
-        if ($buildHasClient) {
-            Write-FastfetchInfoRow -Label "suppress welcome exp" -Value $(if ($suppressWelcome) { "Enabled" } else { "Disabled" }) -LabelWidth 24 -IndentWidth 2
-            Write-FastfetchInfoRow -Label "suppress signin anim" -Value $(if ($suppressSignInAnimation) { "Enabled" } else { "Disabled" }) -LabelWidth 24 -IndentWidth 2
-            Write-FastfetchInfoRow -Label "auto bitlocker" -Value $(if ($preventDeviceEncryption) { "Prevented" } else { "Left to Windows" }) -LabelWidth 24 -IndentWidth 2
-            Write-FastfetchInfoRow -Label "power plan" -Value $(if ($setVmPowerPlan) { "High performance, display/sleep never, no hibernation" } else { "Windows default (Balanced)" }) -LabelWidth 24 -IndentWidth 2
-        }
-        Write-Host ""
-        Write-Studio -Text "  Disk" -Key "fg"
-        Write-FastfetchInfoRow -Label "vhdx size" -Value "$vhdSizeGB GB" -LabelWidth 24 -IndentWidth 2
-        Write-FastfetchInfoRow -Label "vhdx type" -Value $vhdType -LabelWidth 24 -IndentWidth 2
-        Write-Host ""
-        Write-Studio -Text ("  " + ("-" * 62)) -Key "muted"
-        Write-Host ""
-    }
-
-    $confirmItems = @(
-        [PSCustomObject]@{ Id = "continue"; Label = "Continue - start the build" }
-        [PSCustomObject]@{ Id = "cancel";   Label = "Cancel" }
-    )
-    $decision = Show-Menu -Title "Confirm build settings" -Subtitle "Review everything below, then continue" `
-        -Items $confirmItems -SelectedIndex 0 -PreItems $renderSummary
-    if ($decision -ne "continue") { return $null }
 
     return [PSCustomObject]@{
         IsoDrive                     = $isoId
@@ -6086,18 +6452,27 @@ function Get-BakeUserData {
             default  { "1" }
         }
         # fastfetch top-aligns the logo and has no setting to centre it, so the
-        # padding is worked out here: the frame runs 19 lines from user@host to its
-        # bottom corner, starting one line down. Arch, Fedora and Rocky draw 19 lines
-        # and Ubuntu 20, so one line of padding lines them up; Debian's swirl is 17
-        # and needs two to sit in the middle instead of hanging from the top. Measured
-        # on the VMs on 2026-09-27: openSUSE's chameleon is 19 like Arch (one line),
-        # Oracle's ring only 11 (five, to sit mid-frame) and Alma's logo 20 (none -
-        # one line more than the frame, so it starts level with user@host).
+        # padding is worked out here. The logo is centred on the box - the 19 lines
+        # from the System corner down to the bottom one, NOT the user@host line above
+        # them - which starts two lines down (the leading break, then the title).
+        #
+        #   19 lines  Fedora, Rocky, Arch      2   exact fit
+        #   17        Debian's swirl           3   one line above, one below
+        #   11        Oracle's ring            6   four and four
+        #   18        openSUSE's chameleon     2   one short at the bottom - an even
+        #                                          height cannot split an odd box
+        #   20        Ubuntu, Alma             1   one line taller than the box
+        #
+        # A logo taller than the box sticks out at the TOP, level with user@host, and
+        # never below the bottom corner. Heights measured on the VMs on 2026-09-27 and
+        # against fastfetch 2.69 on 2026-09-28; a fastfetch release that redraws a logo
+        # changes its row here.
         $logoPaddingTop = switch ([string]$Entry.Distro) {
-            "debian" { 2 }
-            "oracle" { 5 }
-            "alma"   { 0 }
-            default  { 1 }
+            "debian" { 3 }
+            "oracle" { 6 }
+            "ubuntu" { 1 }
+            "alma"   { 1 }
+            default  { 2 }
         }
         [void]$lines.Add("  - path: /etc/skel/.config/fastfetch/config.jsonc")
         [void]$lines.Add("    permissions: '0644'")
@@ -6128,6 +6503,15 @@ function Get-BakeUserData {
         [void]$lines.Add('          { "type": "localip", "key": "{#0;90}\u2502{#0}  {#1;31}IP" },')
         [void]$lines.Add('          { "type": "command", "key": "{#0;90}\u2502{#0}  {#1;31}Gateway", "text": "ip route show default 2>/dev/null | awk ''{print $3; exit}''" },')
         [void]$lines.Add('          { "type": "dns", "key": "{#0;90}\u2502{#0}  {#1;31}DNS" },')
+        # The domain, read at every login rather than baked: the gold is made before
+        # any VM joins. realm list --name-only prints the joined realm and nothing on a
+        # workgroup VM, needs no root, and is missing altogether where realmd was never
+        # installed - both of which read as "none", dimmed so it is not mistaken for a
+        # domain called that. /usr/sbin and /sbin go on PATH for this one command:
+        # realm lives in /usr/sbin, and Debian leaves both off a normal user's PATH, so
+        # a joined Debian VM said "none" without them. The row is always there, so the frame is the same height
+        # joined or not and the logo padding above holds for both.
+        [void]$lines.Add('          { "type": "command", "key": "{#0;90}\u2502{#0}  {#1;31}Domain", "text": "d=$(PATH=\"$PATH:/usr/sbin:/sbin\" realm list --name-only 2>/dev/null | head -n 1); if [ -n \"$d\" ]; then printf ''%s'' \"$d\"; else printf ''\\033[2;37mnone\\033[0m''; fi" },')
         [void]$lines.Add('          { "type": "custom", "format": "{#90}\u2514\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500{#}" },')
         [void]$lines.Add('          "break",')
         [void]$lines.Add('          { "type": "colors", "paddingLeft": 2 }')
@@ -6361,9 +6745,10 @@ function Get-BakeUserData {
         # printing "fastfetch: not found" at every login.
         # printf, not blank lines in the config: a trailing break there is absorbed by
         # whatever logo rows are still unprinted, so the gap only appears on a
-        # distribution whose module list happens to be taller than its logo. Three
-        # lines, so the banner is not sitting under the prompt.
-        [void]$lines.Add('  - [ sh, -c, "grep -q hv-studio-fastfetch /etc/skel/.bashrc || echo ''command -v fastfetch >/dev/null 2>&1 && case $- in *i*) fastfetch; printf \"\\n\\n\\n\" ;; esac # hv-studio-fastfetch'' >> /etc/skel/.bashrc" ]')
+        # distribution whose module list happens to be taller than its logo. Two
+        # blank lines between the colour blocks and the prompt - the same gap the
+        # studio's own fastfetch leaves.
+        [void]$lines.Add('  - [ sh, -c, "grep -q hv-studio-fastfetch /etc/skel/.bashrc || echo ''command -v fastfetch >/dev/null 2>&1 && case $- in *i*) fastfetch; printf \"\\n\\n\" ;; esac # hv-studio-fastfetch'' >> /etc/skel/.bashrc" ]')
     }
     if ($wantQuietMotd -and ([string]$Entry.Distro) -eq "ubuntu") {
         # ENABLED=0 stops the fetch itself; the chmod stops the scripts that print the
@@ -6974,197 +7359,32 @@ function Start-LinuxInteractiveConfiguration {
     param(
         [string]$CurrentLocale,
         [string]$CurrentKeyboard,
-        [string]$CurrentOutputDirectory
+        [string]$CurrentOutputDirectory,
+        # The first blade here hands Back out to the caller's own first blade.
+        [switch]$AllowBack
     )
 
     $catalog = @(Get-LinuxImageCatalog)
 
-    # Grouped under the distribution rather than listed flat. Three releases read fine
-    # either way; a dozen do not, and the catalog is meant to grow.
-    #
-    # Group order follows the CATALOG, not the alphabet, so the list stays in the order
-    # the catalog author chose - newest first within a distribution, and whichever
-    # distribution they put first at the top.
-    $distroItems = @()
-    $seenDistros = @()
-    foreach ($entry in $catalog) {
-        $key = [string]$entry.Distro
-        if ([string]::IsNullOrWhiteSpace($key)) { $key = "other" }
-        if ($seenDistros -notcontains $key) { $seenDistros += $key }
-    }
+    # The same loop over named blades the Windows path runs - see the note there. Here
+    # some blades are not shown at all (no mirror question for a metalink family, no bake
+    # questions when the bake is skipped); those set $asked = $false, pass straight on to
+    # $goto, and never enter $history, so Back steps over them the way forward did.
+    $history = New-Object System.Collections.Generic.Stack[string]
+    $step = "distro"
 
-    foreach ($key in $seenDistros) {
-        if ($distroItems.Count -gt 0) {
-            $distroItems += [PSCustomObject]@{ Id = "__gap__"; Label = ""; Separator = $true }
-        }
-        $distroItems += [PSCustomObject]@{ Id = "__head__"; Label = (Get-LinuxDistroDisplayName -Distro $key); Separator = $true }
-
-        foreach ($entry in $catalog) {
-            $entryKey = [string]$entry.Distro
-            if ([string]::IsNullOrWhiteSpace($entryKey)) { $entryKey = "other" }
-            if ($entryKey -ne $key) { continue }
-            # Indented in the LABEL rather than by the renderer, so Show-Menu keeps its
-            # single way of drawing a row and the caret still lands in one column.
-            $distroItems += [PSCustomObject]@{ Id = $entry.Id; Label = ("  " + $entry.Name) }
-        }
-    }
-
-    $distroId = Show-Menu -Title "Select a Linux distribution" -Items $distroItems `
-        -Heading "Distribution" -HeadingHint "The cloud image this gold is built from"
-    if ($null -eq $distroId) { return $null }
-    $entry = $catalog | Where-Object { $_.Id -eq $distroId } | Select-Object -First 1
-
-    # The same question the Windows path asks, and it decides the same two things: the
-    # gold's prefix, and whether a sidecar manifest is written at all.
-    $targetItems = @(
-        [PSCustomObject]@{ Id = "HyperV";     Label = "Hyper-V" }
-        [PSCustomObject]@{ Id = "AzureLocal"; Label = "Azure Local" }
-    )
-    $targetDefault = 0
-    if ($CurrentTarget -eq "AzureLocal") { $targetDefault = 1 }
-    $targetId = Show-Menu -Title "Select deployment target" -Items $targetItems -SelectedIndex $targetDefault `
-        -Heading "Target platform" -HeadingHint "Where this gold will be deployed - it decides the gold's name prefix" `
-        -StatusLines ([ordered]@{ distro = $entry.Name })
-    if ($null -eq $targetId) { return $null }
-    # Worked out after the language blade below, because the name now carries it.
+    $distroId = $null
+    $entry = $null
+    $targetId = $null
     $goldName = ""
-
-    if ($targetId -eq "AzureLocal") {
-        # Worth saying once, plainly. Build-Vms.ps1 enumerates hv-*.vhdx and nothing
-        # else, so an azl- gold never meets this project's seed machinery: whatever
-        # Azure Local does for cloud-init is what that VM gets. The bake still runs -
-        # it happens on this Hyper-V host - so the kernel, the daemons and the SSH
-        # settings baked in are the only ones such a VM will ever have.
-        Show-MenuHeader -Title "Azure Local" -StatusLines ([ordered]@{ distro = $entry.Name })
-        Write-Studio -Text "  An Azure Local gold is not provisioned by Build-Vms.ps1 - it only builds hv-* golds." -Key "muted"
-        Write-Studio -Text "  No per-VM seed is written for it, and no sidecar manifest: nothing on that path reads one." -Key "muted"
-        Write-Studio -Text "  What the bake puts in is all such a VM carries, so pick the bake options with that in mind." -Key "muted"
-        Write-Host ""
-        Write-Studio -Text ("  " + ("-" * 62)) -Key "muted"
-        Write-Host ""
-    }
-
-    # Three separate questions, because on Linux they really are three separate things.
-    #
-    # glibc splits what Windows calls "display language" and "regional format" across
-    # LC_* variables: LANG (and LC_MESSAGES under it) decides what language a program
-    # SPEAKS, while LC_TIME, LC_NUMERIC, LC_MONETARY, LC_PAPER and the rest decide how
-    # it FORMATS. Setting one locale sets both, which is why asking once was wrong -
-    # wanting German dates without German error messages is the normal case, and it is
-    # exactly what a single `locale:` line cannot express.
-    #
-    # All three pick from the same catalog. What differs is which variable each one
-    # ends up in, and that is decided in Get-CloudInitUserData rather than here.
-    $localeItems = @()
-    foreach ($tag in (Get-OrderedLocaleTags)) {
-        # -Locale, not -LocaleTag. Get-LocaleDisplayName is a simple function, so an
-        # unknown parameter name is NOT rejected - it goes into $args and the real
-        # parameter keeps its default, which here meant every row looked up the empty
-        # string and logged a fallback. The Linux helpers beside it do take -LocaleTag;
-        # the two spellings sitting next to each other are what made this easy to write.
-        $localeItems += [PSCustomObject]@{ Id = $tag; Label = "$tag - $(Get-LocaleDisplayName -Locale $tag)" }
-    }
-    # Where the four menus open: data\linux-region.json, unless -Locale or
-    # -KeyboardLayout were given on the command line. Only the starting point - every
-    # entry can still be picked.
-    Import-LinuxRegionFile
-    $startLocale = if ($script:LocaleGiven) { $CurrentLocale } else { $script:LinuxRegion.Locale }
-    $startKeyboard = if ($script:KeyboardGiven) { $CurrentKeyboard } else { $script:LinuxRegion.Keyboard }
-
-    # 1. Language - LANG, so what the system SAYS, and the gold's middle segment.
-    # The shipped file says en-US: English logs stay greppable and every upstream error
-    # message matches what a search engine has seen.
-    $languageDefault = [array]::IndexOf(@($localeItems.Id), $script:LinuxRegion.Language)
-    if ($languageDefault -lt 0) { $languageDefault = 0 }
-    $language = Show-Menu -Title "Select the system language" -Items $localeItems -SelectedIndex $languageDefault `
-        -Heading "Language" -HeadingHint "LANG - the language of messages, logs and man pages. Leave it on en-US unless you want translated error text" `
-        -StatusLines ([ordered]@{ distro = $entry.Name })
-    if ($null -eq $language) { return $null }
-    $goldName = Get-LinuxGoldName -Entry $entry -Target $targetId -Language $language
-
-    # 2. Locale - the LC_* format family, so what the system SHOWS. Dates, decimal
-    # separators, currency, paper size.
-    $localeDefault = [array]::IndexOf(@($localeItems.Id), $startLocale)
-    if ($localeDefault -lt 0) { $localeDefault = 0 }
-    $locale = Show-Menu -Title "Select the regional format" -Items $localeItems -SelectedIndex $localeDefault `
-        -Heading "Locale" -HeadingHint "LC_TIME, LC_NUMERIC, LC_MONETARY and the rest - dates, numbers and currency, not the language" `
-        -StatusLines ([ordered]@{ distro = $entry.Name; language = (Get-LinuxLocaleName -LocaleTag $language) })
-    if ($null -eq $locale) { return $null }
-
-    # 3. Keyboard - the console keymap.
-    $keyboardDefault = [array]::IndexOf(@($localeItems.Id), $startKeyboard)
-    if ($keyboardDefault -lt 0) { $keyboardDefault = $localeDefault }
-    $keyboard = Show-Menu -Title "Select the console keyboard layout" -Items $localeItems -SelectedIndex $keyboardDefault `
-        -Heading "Keyboard" -HeadingHint "The console keymap - irrelevant over SSH, it matters at the Hyper-V console" `
-        -StatusLines ([ordered]@{
-            distro   = $entry.Name
-            language = (Get-LinuxLocaleName -LocaleTag $language)
-            format   = (Get-LinuxLocaleName -LocaleTag $locale)
-        })
-    if ($null -eq $keyboard) { return $null }
-
-    # Loaded HERE rather than at the top of this function. It parses a 54 KB catalogue
-    # into 419 objects and logs a line when it is done, and at the top that line landed
-    # on the PREVIOUS menu's screen - so choosing Linux printed a log row, paused, and
-    # only then cleared and drew the next blade. Three paints for one keypress, which
-    # reads as a flicker. Here the pause belongs to the blade that needs the data, and
-    # the log line is cleared by the menu that follows it.
-    Import-LinuxTimeZoneCatalog
-
-    # 419 zones sorted by region put UTC near the bottom and Europe in the middle, which
-    # meant scrolling a long way to reach the one this lab actually uses. The default is
-    # linux-region.json's timeZone when it names one, else the chosen locale's own zone
-    # where that can be worked out, else UTC - and Home/End still reach the ends.
-    $timeZoneDefault = -1
-    if ($script:LinuxRegion.TimeZone) {
-        $timeZoneDefault = [array]::IndexOf(@($script:LinuxTimeZones.Id), $script:LinuxRegion.TimeZone)
-        if ($timeZoneDefault -lt 0) { Write-Log "linux-region.json: timeZone '$($script:LinuxRegion.TimeZone)' is not an IANA zone in the catalog - ignored" -Tag "Warn" }
-    }
-    if ($timeZoneDefault -lt 0) { $timeZoneDefault = [array]::IndexOf(@($script:LinuxTimeZones.Id), (Get-DefaultLinuxTimeZone -LocaleTag $locale)) }
-    if ($timeZoneDefault -lt 0) { $timeZoneDefault = [array]::IndexOf(@($script:LinuxTimeZones.Id), "UTC") }
-    if ($timeZoneDefault -lt 0) { $timeZoneDefault = 0 }
-    $timeZone = Show-Menu -Title "Select the time zone" -Items $script:LinuxTimeZones -SelectedIndex $timeZoneDefault `
-        -Heading "Time zone" -HeadingHint "IANA name, as cloud-init and systemd want it" `
-        -StatusLines ([ordered]@{
-            distro   = $entry.Name
-            language = (Get-LinuxLocaleName -LocaleTag $language)
-            format   = (Get-LinuxLocaleName -LocaleTag $locale)
-            keyboard = (Get-LinuxKeymap -LocaleTag $keyboard)
-        })
-    if ($null -eq $timeZone) { return $null }
-
-    # The same single-screen form the Windows path uses - size and provisioning type
-    # together - rather than a second way of asking the same two questions. Fixed and
-    # Dynamic mean exactly what they mean for a Windows gold, and both targets take
-    # either: an Azure Local gold is a VHDX like any other.
-    $vhdxConfig = Show-VhdxConfigForm -Title "Configure VHDX" `
-        -Subtitle "Size applies to every VM built from this gold" `
-        -StatusLines ([ordered]@{
-            distro   = $entry.Name
-            target   = $targetId
-            language = (Get-LinuxLocaleName -LocaleTag $language)
-            format   = (Get-LinuxLocaleName -LocaleTag $locale)
-            timezone = $timeZone
-        }) `
-        -DefaultSizeGB $entry.DefaultDiskGB -MinSizeGB 8 -MaxSizeGB 2048 -DefaultType "Fixed"
-    if ($null -eq $vhdxConfig) { return $null }
-    $diskGB = $vhdxConfig.SizeGB
-    $vhdType = $vhdxConfig.Type
-
-    # The bake boot needs a switch with a route to the distribution mirrors. There is no
-    # way to install a kernel without one, so the question is asked rather than guessed,
-    # and "skip" is an explicit answer rather than something that happens by accident.
-    $switchItems = @()
-    foreach ($switch in @(Get-VMSwitch -ErrorAction SilentlyContinue)) {
-        $switchItems += [PSCustomObject]@{ Id = $switch.Name; Label = "$($switch.Name)  ($($switch.SwitchType))" }
-    }
-    $switchItems += [PSCustomObject]@{ Id = "__skip__"; Label = "Skip the bake boot - leave the stock kernel and no hyperv-daemons" }
-
-    $switchName = Show-Menu -Title "Select a virtual switch for the bake boot" -Items $switchItems `
-        -Heading "Bake network" -HeadingHint "The gold boots once to install $($entry.BakePackages -join ', ') - it needs to reach the mirrors" `
-        -StatusLines ([ordered]@{ distro = $entry.Name; disk = "$diskGB GB" })
-    if ($null -eq $switchName) { return $null }
-
+    $language = $null
+    $locale = $null
+    $keyboard = $null
+    $timeZone = $null
+    $diskGB = $null
+    $vhdType = $null
+    $switchName = $null
+    $addressChoice = $null
     $applyUpdates = $false
     $bakeExtraPackages = @()
     $bakeUseDhcp = $true
@@ -7174,333 +7394,680 @@ function Start-LinuxInteractiveConfiguration {
     $bakeDnsServers = @()
     $bakeVlanId = 0
     $bakeMirrorRegion = "default"
+    $bakeFeatures = @()
+    $featureAnswer = $null
 
-    if ($switchName -ne "__skip__") {
-        # The bake VM has to reach the distribution mirrors, and a switch alone does not
-        # promise that. A lab with no DHCP leaves apt retrying mirrors it cannot see,
-        # cloud-init's final stage never finishes, power_state never fires, and the VM
-        # sits at a login prompt looking like a hang - which is exactly what it did.
-        $addressItems = @(
-            [PSCustomObject]@{ Id = "dhcp";   Label = "DHCP - the network hands out an address" }
-            [PSCustomObject]@{ Id = "static"; Label = "Static address - enter it here" }
-        )
-        $addressChoice = Show-Menu -Title "How does the bake VM get an address?" -Items $addressItems `
-            -Heading "Bake addressing" -HeadingHint "It only has to last one boot, but it does have to reach the mirrors" `
-            -StatusLines ([ordered]@{ distro = $entry.Name; switch = $switchName })
-        if ($null -eq $addressChoice) { return $null }
-        $bakeUseDhcp = ($addressChoice -eq "dhcp")
+    while ($true) {
+        $canBack = ($history.Count -gt 0) -or $AllowBack
+        $asked = $true
+        $answer = $null
+        $goto = $step
 
-        Show-MenuHeader -Title "Bake network" -StatusLines ([ordered]@{
-            distro    = $entry.Name
-            switch    = $switchName
-            addressing = $(if ($bakeUseDhcp) { "DHCP" } else { "static" })
-        })
-        Write-Studio -Text "  These settings are thrown away with the bake VM." -Key "muted"
-        Write-Studio -Text "  The gold keeps none of them - every VM built from it is addressed on its own card." -Key "muted"
-        Write-Host ""
-
-        Write-BladeFooterAbove -ReserveLines $(if ($bakeUseDhcp) { 1 } else { 5 })
-
-        if (-not $bakeUseDhcp) {
-            $bakeIpAddress = Read-ConsoleIpAddress -Prompt "  IP address"
-            $bakePrefixLength = Read-BoundedInt -Prompt "  Prefix length" -DefaultValue 24 -MinValue 1 -MaxValue 32
-            $bakeGateway = Read-ConsoleIpAddress -Prompt "  Default gateway" -AllowEmpty
-            $dnsRaw = Read-Host "  DNS servers (space separated)"
-            foreach ($dnsEntry in @($dnsRaw -split "[\s,]+")) {
-                $trimmedDns = ([string]$dnsEntry).Trim()
-                if (-not [string]::IsNullOrWhiteSpace($trimmedDns)) { $bakeDnsServers += $trimmedDns }
-            }
-        }
-
-        # VLAN is asked either way: a tagged port with DHCP behind it still needs the tag.
-        $bakeVlanId = Read-BoundedInt -Prompt "  VLAN ID (0 for untagged)" -DefaultValue 0 -MinValue 0 -MaxValue 4094
-
-        # Review, then continue or fix one field. Typed-in addresses are the one place in
-        # this blade where a single wrong character costs a whole bake - the VM boots,
-        # apt cannot resolve anything, and the run only says so half an hour later. So
-        # they get read back before they are used, and any one of them can be changed
-        # without walking through the other four again.
-        while ($true) {
-            $dnsShown = if ($bakeDnsServers.Count -gt 0) { $bakeDnsServers -join " " } else { "(none)" }
-            $gatewayShown = if ([string]::IsNullOrWhiteSpace($bakeGateway)) { "(none)" } else { $bakeGateway }
-            $vlanShown = if ($bakeVlanId -gt 0) { [string]$bakeVlanId } else { "untagged" }
-
-            # Settings first, then a blank line, then the way out. Continue sits under
-            # what it is confirming rather than above it, and it starts selected so the
-            # common answer is one keypress.
-            $reviewItems = @()
-            $reviewItems += [PSCustomObject]@{ Id = "mode"; Label = ("Addressing        {0}" -f $(if ($bakeUseDhcp) { "DHCP" } else { "static" })) }
-            if (-not $bakeUseDhcp) {
-                $reviewItems += [PSCustomObject]@{ Id = "ip";      Label = ("IP address        {0}" -f $bakeIpAddress) }
-                $reviewItems += [PSCustomObject]@{ Id = "prefix";  Label = ("Prefix length     /{0}" -f $bakePrefixLength) }
-                $reviewItems += [PSCustomObject]@{ Id = "gateway"; Label = ("Default gateway   {0}" -f $gatewayShown) }
-                $reviewItems += [PSCustomObject]@{ Id = "dns";     Label = ("DNS servers       {0}" -f $dnsShown) }
-            }
-            $reviewItems += [PSCustomObject]@{ Id = "vlan"; Label = ("VLAN              {0}" -f $vlanShown) }
-            $reviewItems += [PSCustomObject]@{ Id = "__gap__"; Label = ""; Separator = $true }
-            $reviewItems += [PSCustomObject]@{ Id = "__ok__"; Label = "Continue with these settings" }
-
-            $reviewHint = "Enter on a row to change it, or continue"
-            if (-not $bakeUseDhcp -and $bakeDnsServers.Count -eq 0) {
-                # Not a hard block - a mirror named by IP would still work - but apt
-                # resolves host names, so this is the setting that quietly kills a bake.
-                $reviewHint = "No DNS server - apt resolves by name, so the bake will almost certainly fail"
-            }
-
-            $reviewChoice = Show-Menu -Title "Review the bake network" -Items $reviewItems `
-                -SelectedIndex ($reviewItems.Count - 1) `
-                -Heading "Bake network" -HeadingHint $reviewHint `
-                -StatusLines ([ordered]@{ distro = $entry.Name; switch = $switchName })
-            if ($null -eq $reviewChoice) { return $null }
-            if ($reviewChoice -eq "__ok__") {
-                if (-not $bakeUseDhcp -and [string]::IsNullOrWhiteSpace($bakeIpAddress)) {
-                    # Static with no address is the one combination that cannot proceed:
-                    # netplan would be handed an empty addresses list.
-                    continue
+        switch ($step) {
+            "distro" {
+                # Grouped under the distribution rather than listed flat. Three releases read fine
+                # either way; a dozen do not, and the catalog is meant to grow.
+                #
+                # Group order follows the CATALOG, not the alphabet, so the list stays in the order
+                # the catalog author chose - newest first within a distribution, and whichever
+                # distribution they put first at the top.
+                $distroItems = @()
+                $seenDistros = @()
+                foreach ($entry in $catalog) {
+                    $key = [string]$entry.Distro
+                    if ([string]::IsNullOrWhiteSpace($key)) { $key = "other" }
+                    if ($seenDistros -notcontains $key) { $seenDistros += $key }
                 }
-                break
-            }
 
-            Show-MenuHeader -Title "Bake network" -StatusLines ([ordered]@{
-                distro     = $entry.Name
-                switch     = $switchName
-                addressing = $(if ($bakeUseDhcp) { "DHCP" } else { "static" })
-            })
-            Write-Host ""
-
-            switch ($reviewChoice) {
-                "mode" {
-                    $bakeUseDhcp = -not $bakeUseDhcp
-                    if ($bakeUseDhcp) {
-                        # Keep what was typed rather than discarding it: switching back
-                        # to static should not mean typing the address again.
-                        Write-Studio -Text "  Addressing switched to DHCP - the static values are kept in case you switch back." -Key "muted"
-                        Write-Host ""
-                        Write-Studio -Text ("  " + ("-" * 62)) -Key "muted"
+                foreach ($key in $seenDistros) {
+                    if ($distroItems.Count -gt 0) {
+                        $distroItems += [PSCustomObject]@{ Id = "__gap__"; Label = ""; Separator = $true }
                     }
-                    else {
-                        if ([string]::IsNullOrWhiteSpace($bakeIpAddress)) {
-                            $bakeIpAddress = Read-ConsoleIpAddress -Prompt "  IP address"
-                            Write-Host ""
-                            Write-Studio -Text ("  " + ("-" * 62)) -Key "muted"
+                    $distroItems += [PSCustomObject]@{ Id = "__head__"; Label = (Get-LinuxDistroDisplayName -Distro $key); Separator = $true }
+
+                    foreach ($entry in $catalog) {
+                        $entryKey = [string]$entry.Distro
+                        if ([string]::IsNullOrWhiteSpace($entryKey)) { $entryKey = "other" }
+                        if ($entryKey -ne $key) { continue }
+                        # Indented in the LABEL rather than by the renderer, so Show-Menu keeps its
+                        # single way of drawing a row and the caret still lands in one column.
+                        $distroItems += [PSCustomObject]@{ Id = $entry.Id; Label = ("  " + $entry.Name) }
+                    }
+                }
+
+                $answer = Show-Menu -Title "Select a Linux distribution" -Items $distroItems -SelectedId $distroId `
+                    -AllowBack:$canBack `
+                    -Heading "Distribution" -HeadingHint "The cloud image this gold is built from"
+                if (Test-BladeAnswer -Value $answer) {
+                    $distroId = $answer
+                    $entry = $catalog | Where-Object { $_.Id -eq $distroId } | Select-Object -First 1
+                    $goto = "target"
+                }
+            }
+            "target" {
+                # The same question the Windows path asks, and it decides the same two things:
+                # the gold's prefix, and whether a sidecar manifest is written at all.
+                $targetItems = @(
+                    [PSCustomObject]@{ Id = "HyperV";     Label = "Hyper-V" }
+                    [PSCustomObject]@{ Id = "AzureLocal"; Label = "Azure Local" }
+                )
+                $targetDefault = 0
+                if ($CurrentTarget -eq "AzureLocal") { $targetDefault = 1 }
+                $answer = Show-Menu -Title "Select deployment target" -Items $targetItems -SelectedIndex $targetDefault `
+                    -SelectedId $targetId -AllowBack:$canBack `
+                    -Heading "Target platform" -HeadingHint "Where this gold will be deployed - it decides the gold's name prefix" `
+                    -StatusLines ([ordered]@{ distro = $entry.Name })
+                if (Test-BladeAnswer -Value $answer) {
+                    $targetId = $answer
+                    $goto = if ($targetId -eq "AzureLocal") { "azurelocal" } else { "language" }
+                }
+            }
+            "azurelocal" {
+                # Worth saying once, plainly. Build-Vms.ps1 enumerates hv-*.vhdx and nothing
+                # else, so an azl- gold never meets this project's seed machinery: whatever
+                # Azure Local does for cloud-init is what that VM gets. The bake still runs -
+                # it happens on this Hyper-V host - so the kernel, the daemons and the SSH
+                # settings baked in are the only ones such a VM will ever have.
+                #
+                # A blade of its own that waits for Enter, rather than a header followed by
+                # the next blade: the next blade clears the screen, so the note was drawn and
+                # wiped in the same instant and nobody ever read it.
+                $answer = Show-NoteBlade -Title "Azure Local" -AllowBack:$canBack `
+                    -StatusLines ([ordered]@{ distro = $entry.Name }) -Lines @(
+                        "An Azure Local gold is not provisioned by Build-Vms.ps1 - it only builds hv-* golds.",
+                        "No per-VM seed is written for it, and no sidecar manifest: nothing on that path reads one.",
+                        "What the bake puts in is all such a VM carries, so pick the bake options with that in mind."
+                    )
+                if (Test-BladeAnswer -Value $answer) { $goto = "language" }
+            }
+            "language" {
+                # Three separate questions, because on Linux they really are three separate things.
+                #
+                # glibc splits what Windows calls "display language" and "regional format" across
+                # LC_* variables: LANG (and LC_MESSAGES under it) decides what language a program
+                # SPEAKS, while LC_TIME, LC_NUMERIC, LC_MONETARY, LC_PAPER and the rest decide how
+                # it FORMATS. Setting one locale sets both, which is why asking once was wrong -
+                # wanting German dates without German error messages is the normal case, and it is
+                # exactly what a single `locale:` line cannot express.
+                #
+                # All three pick from the same catalog. What differs is which variable each one
+                # ends up in, and that is decided in Get-CloudInitUserData rather than here.
+                $localeItems = @()
+                foreach ($tag in (Get-OrderedLocaleTags)) {
+                    # -Locale, not -LocaleTag. Get-LocaleDisplayName is a simple function, so an
+                    # unknown parameter name is NOT rejected - it goes into $args and the real
+                    # parameter keeps its default, which here meant every row looked up the empty
+                    # string and logged a fallback. The Linux helpers beside it do take -LocaleTag;
+                    # the two spellings sitting next to each other are what made this easy to write.
+                    $localeItems += [PSCustomObject]@{ Id = $tag; Label = "$tag - $(Get-LocaleDisplayName -Locale $tag)" }
+                }
+                # Where the four menus open: data\linux-region.json, unless -Locale or
+                # -KeyboardLayout were given on the command line. Only the starting point - every
+                # entry can still be picked.
+                Import-LinuxRegionFile
+                $startLocale = if ($script:LocaleGiven) { $CurrentLocale } else { $script:LinuxRegion.Locale }
+                $startKeyboard = if ($script:KeyboardGiven) { $CurrentKeyboard } else { $script:LinuxRegion.Keyboard }
+
+                # 1. Language - LANG, so what the system SAYS, and the gold's middle segment.
+                # The shipped file says en-US: English logs stay greppable and every upstream error
+                # message matches what a search engine has seen.
+                $languageDefault = [array]::IndexOf(@($localeItems.Id), $script:LinuxRegion.Language)
+                if ($languageDefault -lt 0) { $languageDefault = 0 }
+                $answer = Show-Menu -Title "Select the system language" -Items $localeItems -SelectedIndex $languageDefault `
+                    -SelectedId $language -AllowBack:$canBack `
+                    -Heading "Language" -HeadingHint "LANG - the language of messages, logs and man pages. Leave it on en-US unless you want translated error text" `
+                    -StatusLines ([ordered]@{ distro = $entry.Name })
+                if (Test-BladeAnswer -Value $answer) {
+                    $language = $answer
+                    $goldName = Get-LinuxGoldName -Entry $entry -Target $targetId -Language $language
+                    $goto = "locale"
+                }
+            }
+            "locale" {
+                # 2. Locale - the LC_* format family, so what the system SHOWS. Dates, decimal
+                # separators, currency, paper size.
+                $localeDefault = [array]::IndexOf(@($localeItems.Id), $startLocale)
+                if ($localeDefault -lt 0) { $localeDefault = 0 }
+                $answer = Show-Menu -Title "Select the regional format" -Items $localeItems -SelectedIndex $localeDefault `
+                    -SelectedId $locale -AllowBack:$canBack `
+                    -Heading "Locale" -HeadingHint "LC_TIME, LC_NUMERIC, LC_MONETARY and the rest - dates, numbers and currency, not the language" `
+                    -StatusLines ([ordered]@{ distro = $entry.Name; language = (Get-LinuxLocaleName -LocaleTag $language) })
+                if (Test-BladeAnswer -Value $answer) {
+                    $locale = $answer
+                    $goto = "keyboard"
+                }
+            }
+            "keyboard" {
+                # 3. Keyboard - the console keymap.
+                $keyboardDefault = [array]::IndexOf(@($localeItems.Id), $startKeyboard)
+                if ($keyboardDefault -lt 0) { $keyboardDefault = [array]::IndexOf(@($localeItems.Id), $locale) }
+                if ($keyboardDefault -lt 0) { $keyboardDefault = 0 }
+                $answer = Show-Menu -Title "Select the console keyboard layout" -Items $localeItems -SelectedIndex $keyboardDefault `
+                    -SelectedId $keyboard -AllowBack:$canBack `
+                    -Heading "Keyboard" -HeadingHint "The console keymap - irrelevant over SSH, it matters at the Hyper-V console" `
+                    -StatusLines ([ordered]@{
+                        distro   = $entry.Name
+                        language = (Get-LinuxLocaleName -LocaleTag $language)
+                        format   = (Get-LinuxLocaleName -LocaleTag $locale)
+                    })
+                if (Test-BladeAnswer -Value $answer) {
+                    $keyboard = $answer
+                    $goto = "timezone"
+                }
+            }
+            "timezone" {
+                # Loaded HERE rather than at the top of this function. It parses a 54 KB catalogue
+                # into 419 objects and logs a line when it is done, and at the top that line landed
+                # on the PREVIOUS menu's screen - so choosing Linux printed a log row, paused, and
+                # only then cleared and drew the next blade. Three paints for one keypress, which
+                # reads as a flicker. Here the pause belongs to the blade that needs the data, and
+                # the log line is cleared by the menu that follows it.
+                Import-LinuxTimeZoneCatalog
+
+                # 419 zones sorted by region put UTC near the bottom and Europe in the middle, which
+                # meant scrolling a long way to reach the one this lab actually uses. The default is
+                # linux-region.json's timeZone when it names one, else the chosen locale's own zone
+                # where that can be worked out, else UTC - and Home/End still reach the ends.
+                $timeZoneDefault = -1
+                if ($script:LinuxRegion.TimeZone) {
+                    $timeZoneDefault = [array]::IndexOf(@($script:LinuxTimeZones.Id), $script:LinuxRegion.TimeZone)
+                    if ($timeZoneDefault -lt 0) { Write-Log "linux-region.json: timeZone '$($script:LinuxRegion.TimeZone)' is not an IANA zone in the catalog - ignored" -Tag "Warn" }
+                }
+                if ($timeZoneDefault -lt 0) { $timeZoneDefault = [array]::IndexOf(@($script:LinuxTimeZones.Id), (Get-DefaultLinuxTimeZone -LocaleTag $locale)) }
+                if ($timeZoneDefault -lt 0) { $timeZoneDefault = [array]::IndexOf(@($script:LinuxTimeZones.Id), "UTC") }
+                if ($timeZoneDefault -lt 0) { $timeZoneDefault = 0 }
+                $answer = Show-Menu -Title "Select the time zone" -Items $script:LinuxTimeZones -SelectedIndex $timeZoneDefault `
+                    -SelectedId $timeZone -AllowBack:$canBack `
+                    -Heading "Time zone" -HeadingHint "IANA name, as cloud-init and systemd want it" `
+                    -StatusLines ([ordered]@{
+                        distro   = $entry.Name
+                        language = (Get-LinuxLocaleName -LocaleTag $language)
+                        format   = (Get-LinuxLocaleName -LocaleTag $locale)
+                        keyboard = (Get-LinuxKeymap -LocaleTag $keyboard)
+                    })
+                if (Test-BladeAnswer -Value $answer) {
+                    $timeZone = $answer
+                    $goto = "vhdx"
+                }
+            }
+            "vhdx" {
+                # The same single-screen form the Windows path uses - size and provisioning type
+                # together - rather than a second way of asking the same two questions. Fixed and
+                # Dynamic mean exactly what they mean for a Windows gold, and both targets take
+                # either: an Azure Local gold is a VHDX like any other.
+                $answer = Show-VhdxConfigForm -Title "Configure VHDX" `
+                    -Subtitle "Size applies to every VM built from this gold" `
+                    -StatusLines ([ordered]@{
+                        distro   = $entry.Name
+                        target   = $targetId
+                        language = (Get-LinuxLocaleName -LocaleTag $language)
+                        format   = (Get-LinuxLocaleName -LocaleTag $locale)
+                        timezone = $timeZone
+                    }) `
+                    -DefaultSizeGB $(if ($diskGB) { $diskGB } else { $entry.DefaultDiskGB }) -MinSizeGB 8 -MaxSizeGB 2048 `
+                    -DefaultType $(if ($vhdType) { $vhdType } else { "Fixed" }) -AllowBack:$canBack
+                if (Test-BladeAnswer -Value $answer) {
+                    $diskGB = $answer.SizeGB
+                    $vhdType = $answer.Type
+                    $goto = "switch"
+                }
+            }
+            "switch" {
+                # The bake boot needs a switch with a route to the distribution mirrors. There is no
+                # way to install a kernel without one, so the question is asked rather than guessed,
+                # and "skip" is an explicit answer rather than something that happens by accident.
+                # Grouped by type, External first: only an External switch reaches the
+                # mirrors without help, so it is the one a bake almost always wants and the
+                # caret starts on it. Internal and Private follow for a lab that routes or
+                # proxies them; Skip sits apart at the bottom.
+                #
+                # $vmSwitch, NOT $switch: inside a switch statement $switch is the automatic
+                # enumerator driving it, and a loop variable of that name replaces it.
+                $allSwitches = @(Get-VMSwitch -ErrorAction SilentlyContinue)
+                $switchItems = @()
+                foreach ($switchType in @("External", "Internal", "Private")) {
+                    $ofType = @($allSwitches | Where-Object { [string]$_.SwitchType -eq $switchType } | Sort-Object -Property Name)
+                    if ($ofType.Count -eq 0) { continue }
+                    if ($switchItems.Count -gt 0) {
+                        $switchItems += [PSCustomObject]@{ Id = "__gap__"; Label = ""; Separator = $true }
+                    }
+                    $switchItems += [PSCustomObject]@{ Id = "__head__"; Label = $switchType; Separator = $true }
+                    foreach ($vmSwitch in $ofType) {
+                        # Indented in the label, as the distribution list does it.
+                        $switchItems += [PSCustomObject]@{ Id = $vmSwitch.Name; Label = ("  " + $vmSwitch.Name) }
+                    }
+                }
+                if ($switchItems.Count -gt 0) {
+                    $switchItems += [PSCustomObject]@{ Id = "__gap__"; Label = ""; Separator = $true }
+                }
+                $switchItems += [PSCustomObject]@{ Id = "__skip__"; Label = "Skip the bake boot - leave the stock kernel and no hyperv-daemons" }
+
+                $answer = Show-Menu -Title "Select a virtual switch for the bake boot" -Items $switchItems `
+                    -SelectedId $switchName -AllowBack:$canBack `
+                    -Heading "Bake network" -HeadingHint "The gold boots once to install $($entry.BakePackages -join ', ') - it needs to reach the mirrors" `
+                    -StatusLines ([ordered]@{ distro = $entry.Name; disk = "$diskGB GB" })
+                if (Test-BladeAnswer -Value $answer) {
+                    $switchName = $answer
+                    # Not a question any more. The answer was yes on every bake that has been
+                    # run here, and a gold that ships packages the image was already shipping
+                    # updates for is a gold that hands every VM built from it the same pending
+                    # upgrade. No bake, no updates - there is no boot to run them in.
+                    $applyUpdates = ($switchName -ne "__skip__")
+                    $goto = if ($switchName -eq "__skip__") { "confirm" } else { "address" }
+                }
+            }
+            "address" {
+                # The bake VM has to reach the distribution mirrors, and a switch alone does not
+                # promise that. A lab with no DHCP leaves apt retrying mirrors it cannot see,
+                # cloud-init's final stage never finishes, power_state never fires, and the VM
+                # sits at a login prompt looking like a hang - which is exactly what it did.
+                $addressItems = @(
+                    [PSCustomObject]@{ Id = "dhcp";   Label = "DHCP - the network hands out an address" }
+                    [PSCustomObject]@{ Id = "static"; Label = "Static address - enter it here" }
+                )
+                $answer = Show-Menu -Title "How does the bake VM get an address?" -Items $addressItems `
+                    -SelectedId $addressChoice -AllowBack:$canBack `
+                    -Heading "Bake addressing" -HeadingHint "It only has to last one boot, but it does have to reach the mirrors" `
+                    -StatusLines ([ordered]@{ distro = $entry.Name; switch = $switchName })
+                if (Test-BladeAnswer -Value $answer) {
+                    $addressChoice = $answer
+                    $bakeUseDhcp = ($addressChoice -eq "dhcp")
+                    $goto = "network"
+                }
+            }
+            "network" {
+                # One field at a time, the whole blade redrawn for each, so Backspace on an
+                # empty field can go to the field before it - and from the first field, to
+                # the blade before this one. Fields already answered stay on screen above
+                # the one being typed. VLAN is asked either way: a tagged port with DHCP
+                # behind it still needs the tag.
+                # @() around the if: an if expression unrolls a one-element array, and the
+                # DHCP list would arrive as the string "vlan" - indexed, its first letter.
+                $fields = @(if ($bakeUseDhcp) { "vlan" } else { "ip", "prefix", "gateway", "dns", "vlan" })
+                $fieldAt = 0
+                $answer = "ok"
+                while ($fieldAt -lt $fields.Count) {
+                    Show-MenuHeader -Title "Bake network" -StatusLines ([ordered]@{
+                        distro     = $entry.Name
+                        switch     = $switchName
+                        addressing = $(if ($bakeUseDhcp) { "DHCP" } else { "static" })
+                    })
+                    Write-Studio -Text "  These settings are thrown away with the bake VM." -Key "muted"
+                    Write-Studio -Text "  The gold keeps none of them - every VM built from it is addressed on its own card." -Key "muted"
+                    Write-Host ""
+                    for ($doneAt = 0; $doneAt -lt $fieldAt; $doneAt++) {
+                        $doneText = switch ($fields[$doneAt]) {
+                            "ip"      { "  IP address: $bakeIpAddress" }
+                            "prefix"  { "  Prefix length: $bakePrefixLength" }
+                            "gateway" { "  Default gateway: $(if ($bakeGateway) { $bakeGateway } else { '(none)' })" }
+                            "dns"     { "  DNS servers: $(if (@($bakeDnsServers).Count -gt 0) { @($bakeDnsServers) -join ' ' } else { '(none)' })" }
+                        }
+                        Write-Studio -Text $doneText -Key "muted"
+                    }
+
+                    Write-BladeFooterAbove -ReserveLines 1 -AllowBack
+                    $fieldAnswer = switch ($fields[$fieldAt]) {
+                        "ip"      { Read-ConsoleIpAddress -Prompt "  IP address" -DefaultValue $bakeIpAddress -AllowBack }
+                        "prefix"  { Read-BoundedInt -Prompt "  Prefix length" -DefaultValue $bakePrefixLength -MinValue 1 -MaxValue 32 -AllowBack }
+                        "gateway" { Read-ConsoleIpAddress -Prompt "  Default gateway (blank for none)" -AllowEmpty -AllowBack }
+                        "dns"     { Read-BladeText -Prompt "  DNS servers (space separated, blank for none)" -AllowBack }
+                        "vlan"    { Read-BoundedInt -Prompt "  VLAN ID (0 for untagged)" -DefaultValue $bakeVlanId -MinValue 0 -MaxValue 4094 -AllowBack }
+                    }
+                    if ($null -eq $fieldAnswer) { $answer = $null; break }
+                    if (Test-MenuBack -Value $fieldAnswer) {
+                        if ($fieldAt -eq 0) { $answer = $script:MenuBackId; break }
+                        $fieldAt--
+                        continue
+                    }
+                    switch ($fields[$fieldAt]) {
+                        "ip"      { $bakeIpAddress = $fieldAnswer }
+                        "prefix"  { $bakePrefixLength = $fieldAnswer }
+                        "gateway" { $bakeGateway = $fieldAnswer }
+                        "dns" {
+                            $bakeDnsServers = @()
+                            foreach ($dnsEntry in @(([string]$fieldAnswer) -split "[\s,]+")) {
+                                $trimmedDns = ([string]$dnsEntry).Trim()
+                                if (-not [string]::IsNullOrWhiteSpace($trimmedDns)) { $bakeDnsServers += $trimmedDns }
+                            }
+                        }
+                        "vlan"    { $bakeVlanId = $fieldAnswer }
+                    }
+                    $fieldAt++
+                }
+                $goto = "review"
+            }
+            "review" {
+                # Review, then continue or fix one field. Typed-in addresses are the one place in
+                # this blade where a single wrong character costs a whole bake - the VM boots,
+                # apt cannot resolve anything, and the run only says so half an hour later. So
+                # they get read back before they are used, and any one of them can be changed
+                # without walking through the other four again.
+                while ($true) {
+                    $dnsShown = if ($bakeDnsServers.Count -gt 0) { $bakeDnsServers -join " " } else { "(none)" }
+                    $gatewayShown = if ([string]::IsNullOrWhiteSpace($bakeGateway)) { "(none)" } else { $bakeGateway }
+                    $vlanShown = if ($bakeVlanId -gt 0) { [string]$bakeVlanId } else { "untagged" }
+
+                    # Settings first, then a blank line, then the way out. Continue sits under
+                    # what it is confirming rather than above it, and it starts selected so the
+                    # common answer is one keypress.
+                    $reviewItems = @()
+                    $reviewItems += [PSCustomObject]@{ Id = "mode"; Label = ("Addressing        {0}" -f $(if ($bakeUseDhcp) { "DHCP" } else { "static" })) }
+                    if (-not $bakeUseDhcp) {
+                        $reviewItems += [PSCustomObject]@{ Id = "ip";      Label = ("IP address        {0}" -f $bakeIpAddress) }
+                        $reviewItems += [PSCustomObject]@{ Id = "prefix";  Label = ("Prefix length     /{0}" -f $bakePrefixLength) }
+                        $reviewItems += [PSCustomObject]@{ Id = "gateway"; Label = ("Default gateway   {0}" -f $gatewayShown) }
+                        $reviewItems += [PSCustomObject]@{ Id = "dns";     Label = ("DNS servers       {0}" -f $dnsShown) }
+                    }
+                    $reviewItems += [PSCustomObject]@{ Id = "vlan"; Label = ("VLAN              {0}" -f $vlanShown) }
+                    $reviewItems += [PSCustomObject]@{ Id = "__gap__"; Label = ""; Separator = $true }
+                    $reviewItems += [PSCustomObject]@{ Id = "__ok__"; Label = "Continue with these settings" }
+
+                    $reviewHint = "Enter on a row to change it, or continue"
+                    if (-not $bakeUseDhcp -and $bakeDnsServers.Count -eq 0) {
+                        # Not a hard block - a mirror named by IP would still work - but apt
+                        # resolves host names, so this is the setting that quietly kills a bake.
+                        $reviewHint = "No DNS server - apt resolves by name, so the bake will almost certainly fail"
+                    }
+
+                    $answer = Show-Menu -Title "Review the bake network" -Items $reviewItems `
+                        -SelectedIndex ($reviewItems.Count - 1) -AllowBack:$canBack `
+                        -Heading "Bake network" -HeadingHint $reviewHint `
+                        -StatusLines ([ordered]@{ distro = $entry.Name; switch = $switchName })
+                    if (-not (Test-BladeAnswer -Value $answer)) { break }
+                    if ($answer -eq "__ok__") {
+                        if (-not $bakeUseDhcp -and [string]::IsNullOrWhiteSpace($bakeIpAddress)) {
+                            # Static with no address is the one combination that cannot proceed:
+                            # netplan would be handed an empty addresses list.
+                            continue
+                        }
+                        break
+                    }
+
+                    # One field edited in place. Backspace on the empty field leaves it as it
+                    # was and comes back here; Esc still cancels the whole wizard.
+                    Show-MenuHeader -Title "Bake network" -StatusLines ([ordered]@{
+                        distro     = $entry.Name
+                        switch     = $switchName
+                        addressing = $(if ($bakeUseDhcp) { "DHCP" } else { "static" })
+                    })
+
+                    $edited = "kept"
+                    switch ($answer) {
+                        "mode" {
+                            # Keep what was typed rather than discarding it: switching back to
+                            # static should not mean typing the address again. Static with no
+                            # address yet asks for one now - Continue would refuse without it.
+                            $bakeUseDhcp = -not $bakeUseDhcp
+                            if (-not $bakeUseDhcp -and [string]::IsNullOrWhiteSpace($bakeIpAddress)) {
+                                Write-BladeFooterAbove -ReserveLines 1 -AllowBack
+                                $edited = Read-ConsoleIpAddress -Prompt "  IP address" -AllowBack
+                                if (Test-BladeAnswer -Value $edited) { $bakeIpAddress = $edited }
+                                elseif (Test-MenuBack -Value $edited) { $bakeUseDhcp = $true }
+                            }
+                        }
+                        "ip" {
+                            Write-BladeFooterAbove -ReserveLines 1 -AllowBack
+                            $edited = Read-ConsoleIpAddress -Prompt "  IP address" -DefaultValue $bakeIpAddress -AllowBack
+                            if (Test-BladeAnswer -Value $edited) { $bakeIpAddress = $edited }
+                        }
+                        "prefix" {
+                            Write-BladeFooterAbove -ReserveLines 1 -AllowBack
+                            $edited = Read-BoundedInt -Prompt "  Prefix length" -DefaultValue $bakePrefixLength -MinValue 1 -MaxValue 32 -AllowBack
+                            if (Test-BladeAnswer -Value $edited) { $bakePrefixLength = $edited }
+                        }
+                        "gateway" {
+                            Write-BladeFooterAbove -ReserveLines 1 -AllowBack
+                            $edited = Read-ConsoleIpAddress -Prompt "  Default gateway (blank for none)" -AllowEmpty -AllowBack
+                            if (Test-BladeAnswer -Value $edited) { $bakeGateway = $edited }
+                        }
+                        "dns" {
+                            Write-BladeFooterAbove -ReserveLines 1 -AllowBack
+                            $edited = Read-BladeText -Prompt "  DNS servers (space separated, blank for none)" -AllowBack
+                            if (Test-BladeAnswer -Value $edited) {
+                                $bakeDnsServers = @()
+                                foreach ($dnsEntry in @(([string]$edited) -split "[\s,]+")) {
+                                    $trimmedDns = ([string]$dnsEntry).Trim()
+                                    if (-not [string]::IsNullOrWhiteSpace($trimmedDns)) { $bakeDnsServers += $trimmedDns }
+                                }
+                            }
+                        }
+                        "vlan" {
+                            Write-BladeFooterAbove -ReserveLines 1 -AllowBack
+                            $edited = Read-BoundedInt -Prompt "  VLAN ID (0 for untagged)" -DefaultValue $bakeVlanId -MinValue 0 -MaxValue 4094 -AllowBack
+                            if (Test-BladeAnswer -Value $edited) { $bakeVlanId = $edited }
                         }
                     }
+                    if ($null -eq $edited) { $answer = $null; break }
                 }
-                "ip" {
-                    Write-BladeFooterAbove -ReserveLines 1
-                    $bakeIpAddress = Read-ConsoleIpAddress -Prompt "  IP address" -DefaultValue $bakeIpAddress
+                if (Test-BladeAnswer -Value $answer) {
+                    $addressChoice = if ($bakeUseDhcp) { "dhcp" } else { "static" }
+                    $goto = "mirror"
                 }
-                "prefix" {
-                    Write-BladeFooterAbove -ReserveLines 1
-                    $bakePrefixLength = Read-BoundedInt -Prompt "  Prefix length" -DefaultValue $bakePrefixLength -MinValue 1 -MaxValue 32
+            }
+            "mirror" {
+                # Which mirror apt talks to. The stock cloud image points at archive.ubuntu.com
+                # or deb.debian.org, and a badly routed one turns a kernel install into a long
+                # wait - which is what a slow bake usually is.
+                #
+                # Asked for the Debian family only. Fedora and Rocky reach their mirrors
+                # through metalink, which already picks by geography and keeps a list to fail
+                # over to; a question whose every answer is worse than the default is not a
+                # question. $bakeMirrorRegion stays "default", which Get-AptMirrorUri turns
+                # into an empty URI, which leaves the apt block out entirely.
+                $goto = "packages"
+                if (-not (Get-LinuxFamilyProfile -Family $entry.Family).OffersMirror) {
+                    $bakeMirrorRegion = "default"
+                    $asked = $false
                 }
-                "gateway" {
-                    Write-BladeFooterAbove -ReserveLines 1
-                    $bakeGateway = Read-ConsoleIpAddress -Prompt "  Default gateway (blank for none)" -AllowEmpty
+                else {
+                    $mirrorItems = @([PSCustomObject]@{ Id = "default"; Label = "Default - archive.ubuntu.com / deb.debian.org" })
+                    foreach ($region in @(Get-AptMirrorCatalog)) {
+                        # NOT $host. That is the automatic variable holding the host object, and
+                        # PowerShell resolves variables dynamically - shadowing it here would hand
+                        # a string to every function called from this scope, including the one
+                        # that reads $Host.UI to decide whether the console can do colour.
+                        $mirrorHost = if ($entry.Distro -eq "ubuntu") { [string]$region.Ubuntu } else { [string]$region.Debian }
+                        # A region with no mirror for THIS distribution is not offered: picking it
+                        # would silently fall back, which looks like the setting did nothing.
+                        if ([string]::IsNullOrWhiteSpace($mirrorHost)) { continue }
+                        $mirrorItems += [PSCustomObject]@{ Id = $region.Code; Label = "$($region.Name)  -  $mirrorHost" }
+                    }
+
+                    # Default from the region the format locale already named - de-DE means
+                    # Germany, and typing that twice is the kind of question a picker should
+                    # answer itself.
+                    $localeCountry = ""
+                    $localeParts = $locale -split "-"
+                    if ($localeParts.Count -ge 2) { $localeCountry = $localeParts[$localeParts.Count - 1].ToLowerInvariant() }
+                    $mirrorDefault = [array]::IndexOf(@($mirrorItems.Id), $localeCountry)
+                    if ($mirrorDefault -lt 0) { $mirrorDefault = 0 }
+
+                    $answer = Show-Menu -Title "Which apt mirror should the bake use?" -Items $mirrorItems -SelectedIndex $mirrorDefault `
+                        -SelectedId $(if ($bakeMirrorRegion -ne "default") { $bakeMirrorRegion } else { "" }) -AllowBack:$canBack `
+                        -Heading "Package mirror" -HeadingHint "Pre-selected from the regional format. It is baked into the gold, so every VM inherits it" `
+                        -StatusLines ([ordered]@{ distro = $entry.Name; switch = $switchName })
+                    if (Test-BladeAnswer -Value $answer) { $bakeMirrorRegion = $answer }
                 }
-                "dns" {
-                    Write-BladeFooterAbove -ReserveLines 1
-                    $dnsRaw = Read-Host "  DNS servers (space separated)"
-                    $bakeDnsServers = @()
-                    foreach ($dnsEntry in @($dnsRaw -split "[\s,]+")) {
-                        $trimmedDns = ([string]$dnsEntry).Trim()
-                        if (-not [string]::IsNullOrWhiteSpace($trimmedDns)) { $bakeDnsServers += $trimmedDns }
+            }
+            "packages" {
+                Show-MenuHeader -Title "Extra packages" -StatusLines ([ordered]@{ distro = $entry.Name; switch = $switchName })
+                Write-Studio -Text "  Anything every VM from this gold should already have." -Key "muted"
+                Write-Studio -Text "  Space separated. Blank for none." -Key "muted"
+                if (@($bakeExtraPackages).Count -gt 0) {
+                    Write-Studio -Text ("  Last answer: {0}" -f (@($bakeExtraPackages) -join " ")) -Key "muted"
+                }
+                Write-Host ""
+                Write-BladeFooterAbove -ReserveLines 1 -AllowBack
+                $answer = Read-BladeText -Prompt "  Extra packages" -AllowBack
+                if (Test-BladeAnswer -Value $answer) {
+                    $bakeExtraPackages = @(([string]$answer) -split "[\s,]+" | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+                    $goto = "features"
+                }
+            }
+            "features" {
+                # Optional features, the Linux counterpart to the Windows picker. Only with a
+                # bake: these are file edits, not package installs, but they need a boot to be
+                # applied, so a skipped bake means a skipped feature.
+                $featureItems = @()
+                # What the bake installs whatever anyone ticks, shown first and locked. It is
+                # the answer to "did the Hyper-V tools get in?" asked BEFORE the build rather
+                # than after it, and on Ubuntu it is also where the azure kernel becomes
+                # visible - the one thing that makes that gold different from the stock image.
+                foreach ($package in @($entry.BakePackages)) {
+                    if ([string]::IsNullOrWhiteSpace([string]$package)) { continue }
+                    $featureItems += [PSCustomObject]@{
+                        Id       = "baked:$package"
+                        Label    = [string]$package
+                        Selected = $true
+                        IsLocked = $true
+                        Section  = "Required"
                     }
                 }
-                "vlan" {
-                    Write-BladeFooterAbove -ReserveLines 1
-                    $bakeVlanId = Read-BoundedInt -Prompt "  VLAN ID (0 for untagged)" -DefaultValue $bakeVlanId -MinValue 0 -MaxValue 4094
-                }
-            }
-        }
-
-        # Which mirror apt talks to. The stock cloud image points at archive.ubuntu.com
-        # or deb.debian.org, and a badly routed one turns a kernel install into a long
-        # wait - which is what a slow bake usually is.
-        #
-        # Asked for the Debian family only. Fedora and Rocky reach their mirrors
-        # through metalink, which already picks by geography and keeps a list to fail
-        # over to; a question whose every answer is worse than the default is not a
-        # question. $bakeMirrorRegion stays "default", which Get-AptMirrorUri turns
-        # into an empty URI, which leaves the apt block out entirely.
-        $bakeMirrorRegion = "default"
-        if ((Get-LinuxFamilyProfile -Family $entry.Family).OffersMirror) {
-            $mirrorItems = @([PSCustomObject]@{ Id = "default"; Label = "Default - archive.ubuntu.com / deb.debian.org" })
-            foreach ($region in @(Get-AptMirrorCatalog)) {
-                # NOT $host. That is the automatic variable holding the host object, and
-                # PowerShell resolves variables dynamically - shadowing it here would hand
-                # a string to every function called from this scope, including the one
-                # that reads $Host.UI to decide whether the console can do colour.
-                $mirrorHost = if ($entry.Distro -eq "ubuntu") { [string]$region.Ubuntu } else { [string]$region.Debian }
-                # A region with no mirror for THIS distribution is not offered: picking it
-                # would silently fall back, which looks like the setting did nothing.
-                if ([string]::IsNullOrWhiteSpace($mirrorHost)) { continue }
-                $mirrorItems += [PSCustomObject]@{ Id = $region.Code; Label = "$($region.Name)  -  $mirrorHost" }
-            }
-
-            # Default from the region the format locale already named - de-DE means
-            # Germany, and typing that twice is the kind of question a picker should
-            # answer itself.
-            $localeCountry = ""
-            $localeParts = $locale -split "-"
-            if ($localeParts.Count -ge 2) { $localeCountry = $localeParts[$localeParts.Count - 1].ToLowerInvariant() }
-            $mirrorDefault = [array]::IndexOf(@($mirrorItems.Id), $localeCountry)
-            if ($mirrorDefault -lt 0) { $mirrorDefault = 0 }
-
-            $bakeMirrorRegion = Show-Menu -Title "Which apt mirror should the bake use?" -Items $mirrorItems -SelectedIndex $mirrorDefault `
-                -Heading "Package mirror" -HeadingHint "Pre-selected from the regional format. It is baked into the gold, so every VM inherits it" `
-                -StatusLines ([ordered]@{ distro = $entry.Name; switch = $switchName })
-            if ($null -eq $bakeMirrorRegion) { return $null }
-        }
-
-        # Not a question any more. The answer was yes on every bake that has been run
-        # here, and a gold that ships packages the image was already shipping updates for
-        # is a gold that hands every VM built from it the same pending upgrade.
-        $applyUpdates = $true
-
-        Show-MenuHeader -Title "Extra packages" -StatusLines ([ordered]@{ distro = $entry.Name; switch = $switchName })
-        Write-Studio -Text "  Anything every VM from this gold should already have." -Key "muted"
-        Write-Studio -Text "  Space separated. Blank for none." -Key "muted"
-        Write-Host ""
-        Write-BladeFooterAbove -ReserveLines 1
-        $extraRaw = Read-Host "  Extra packages"
-        if (-not [string]::IsNullOrWhiteSpace($extraRaw)) {
-            $bakeExtraPackages = @($extraRaw -split "[\s,]+" | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
-        }
-    }
-
-    # Optional features, the Linux counterpart to the Windows picker. Asked even when
-    # the bake is skipped: these are file edits, not package installs, so they cost
-    # nothing and work without a mirror - but they DO need a boot to be applied, so a
-    # skipped bake means a skipped feature, and the picker says so rather than pretending.
-    $bakeFeatures = @()
-    if ($switchName -ne "__skip__") {
-        $featureItems = @()
-        # What the bake installs whatever anyone ticks, shown first and locked. It is
-        # the answer to "did the Hyper-V tools get in?" asked BEFORE the build rather
-        # than after it, and on Ubuntu it is also where the azure kernel becomes
-        # visible - the one thing that makes that gold different from the stock image.
-        foreach ($package in @($entry.BakePackages)) {
-            if ([string]::IsNullOrWhiteSpace([string]$package)) { continue }
-            $featureItems += [PSCustomObject]@{
-                Id       = "baked:$package"
-                Label    = [string]$package
-                Selected = $true
-                IsLocked = $true
-                Section  = "Required"
-            }
-        }
-        foreach ($feature in @(Get-LinuxGoldFeatureCatalog)) {
-            if (-not [string]::IsNullOrWhiteSpace($feature.Distro) -and $feature.Distro -ne $entry.Distro) { continue }
-            if (-not [string]::IsNullOrWhiteSpace($feature.Family) -and $feature.Family -ne $entry.Family) { continue }
-            # Per-release rather than per-distribution: a feature that only exists in
-            # some of a distribution's releases names the golds it works on.
-            if (@($feature.ImageIds).Count -gt 0 -and -not (@($feature.ImageIds) -contains $entry.ImageId)) { continue }
-            $featureItems += [PSCustomObject]@{
-                Id       = $feature.Id
-                Label    = $feature.Label
-                Selected = [bool]$feature.DefaultOn
-                Section  = "Optional"
-            }
-        }
-        if (@($featureItems | Where-Object { -not $_.IsLocked }).Count -gt 0) {
-            $bakeFeatures = Show-MultiSelectMenu -Title "Optional features" -Items $featureItems -AllowEmpty `
-                -Subtitle "Space toggles - baked into the gold, not per VM" `
-                -ContinueLabel "Continue" `
-                -StatusLines ([ordered]@{ distro = $entry.Name; gold = "$goldName.vhdx" })
-            if ($null -eq $bakeFeatures) { return $null }
-        }
-    }
-
-    $outputDirectory = $CurrentOutputDirectory
-    if ([string]::IsNullOrWhiteSpace($outputDirectory)) {
-        $outputDirectory = Join-Path -Path $PSScriptRoot -ChildPath "vhdx"
-    }
-    # Worked out once: the summary shows it and the config carries it, and two
-    # Join-Path calls for one path is one of them waiting to disagree with the other.
-    $cacheDirectory = Join-Path -Path $PSScriptRoot -ChildPath "media"
-
-    # Final confirmation, the same shape the Windows path uses: every setting rendered
-    # above a Continue/Cancel menu, so the last thing before a build that downloads
-    # hundreds of megabytes and boots a VM is a chance to read it back.
-    $renderLinuxSummary = {
-        Write-Studio -Text "  Image" -Key "fg"
-        Write-FastfetchInfoRow -Label "distribution" -Value $entry.Name -LabelWidth 24 -IndentWidth 2
-        Write-FastfetchInfoRow -Label "target"       -Value $targetId -LabelWidth 24 -IndentWidth 2
-        Write-FastfetchInfoRow -Label "gold name"    -Value "$goldName.vhdx" -LabelWidth 24 -IndentWidth 2
-        Write-FastfetchInfoRow -Label "source"       -Value $entry.Url -LabelWidth 24 -IndentWidth 2
-        Write-FastfetchInfoRow -Label "image cache"  -Value $cacheDirectory -LabelWidth 24 -IndentWidth 2
-        Write-FastfetchInfoRow -Label "output"       -Value $outputDirectory -LabelWidth 24 -IndentWidth 2
-        Write-Host ""
-
-        Write-Studio -Text "  Region" -Key "fg"
-        Write-FastfetchInfoRow -Label "language (LANG)" -Value (Get-LinuxLocaleName -LocaleTag $language) -LabelWidth 24 -IndentWidth 2
-        Write-FastfetchInfoRow -Label "format (LC_*)"   -Value (Get-LinuxLocaleName -LocaleTag $locale) -LabelWidth 24 -IndentWidth 2
-        Write-FastfetchInfoRow -Label "keyboard"        -Value (Get-LinuxKeymap -LocaleTag $keyboard) -LabelWidth 24 -IndentWidth 2
-        Write-FastfetchInfoRow -Label "time zone"       -Value $timeZone -LabelWidth 24 -IndentWidth 2
-        Write-Host ""
-
-        Write-Studio -Text "  Disk" -Key "fg"
-        Write-FastfetchInfoRow -Label "gold size" -Value "$diskGB GB" -LabelWidth 24 -IndentWidth 2
-        Write-FastfetchInfoRow -Label "vhdx type" -Value $vhdType -LabelWidth 24 -IndentWidth 2
-        Write-Host ""
-
-        Write-Studio -Text "  Bake" -Key "fg"
-        if ([string]::IsNullOrWhiteSpace($switchName) -or $switchName -eq "__skip__") {
-            Write-FastfetchInfoRow -Label "bake boot" -Value "Skipped - stock kernel, no hyperv-daemons" -LabelWidth 24 -IndentWidth 2
-        }
-        else {
-            Write-FastfetchInfoRow -Label "switch"   -Value $switchName -LabelWidth 24 -IndentWidth 2
-            if ($bakeUseDhcp) {
-                Write-FastfetchInfoRow -Label "addressing" -Value "DHCP" -LabelWidth 24 -IndentWidth 2
-            }
-            else {
-                Write-FastfetchInfoRow -Label "addressing" -Value "$bakeIpAddress/$bakePrefixLength" -LabelWidth 24 -IndentWidth 2
-                Write-FastfetchInfoRow -Label "gateway" -Value $(if ([string]::IsNullOrWhiteSpace($bakeGateway)) { "(none)" } else { $bakeGateway }) -LabelWidth 24 -IndentWidth 2
-                Write-FastfetchInfoRow -Label "dns" -Value $(if (@($bakeDnsServers).Count -gt 0) { @($bakeDnsServers) -join " " } else { "(none)" }) -LabelWidth 24 -IndentWidth 2
-            }
-            Write-FastfetchInfoRow -Label "vlan" -Value $(if ($bakeVlanId -gt 0) { [string]$bakeVlanId } else { "untagged" }) -LabelWidth 24 -IndentWidth 2
-
-            # Only where it was asked. A row reading "distribution default" beside a
-            # Fedora gold invites the question of where the setting is, and the answer
-            # is that there is no setting - metalink picked the mirror.
-            if ((Get-LinuxFamilyProfile -Family $entry.Family).OffersMirror) {
-                $mirrorShown = Get-AptMirrorUri -Entry $entry -RegionCode $bakeMirrorRegion
-                if ([string]::IsNullOrWhiteSpace($mirrorShown)) { $mirrorShown = "distribution default" }
-                Write-FastfetchInfoRow -Label "apt mirror" -Value $mirrorShown -LabelWidth 24 -IndentWidth 2
-            }
-
-            Write-FastfetchInfoRow -Label "installs" -Value (@($entry.BakePackages) -join ", ") -LabelWidth 24 -IndentWidth 2
-            $languagePackShown = Get-LinuxLanguagePack -Entry $entry -LanguageTag $language
-            if (-not [string]::IsNullOrWhiteSpace($languagePackShown)) {
-                Write-FastfetchInfoRow -Label "language pack" -Value $languagePackShown -LabelWidth 24 -IndentWidth 2
-            }
-            if (@($bakeExtraPackages).Count -gt 0) {
-                Write-FastfetchInfoRow -Label "extra packages" -Value (@($bakeExtraPackages) -join ", ") -LabelWidth 24 -IndentWidth 2
-            }
-            Write-FastfetchInfoRow -Label "apply updates" -Value "Yes - full package upgrade" -LabelWidth 24 -IndentWidth 2
-            $featureShown = "none"
-            if (@($bakeFeatures).Count -gt 0) {
-                $featureLabels = @()
                 foreach ($feature in @(Get-LinuxGoldFeatureCatalog)) {
-                    if (@($bakeFeatures) -contains $feature.Id) { $featureLabels += $feature.Id }
+                    if (-not [string]::IsNullOrWhiteSpace($feature.Distro) -and $feature.Distro -ne $entry.Distro) { continue }
+                    if (-not [string]::IsNullOrWhiteSpace($feature.Family) -and $feature.Family -ne $entry.Family) { continue }
+                    # Per-release rather than per-distribution: a feature that only exists in
+                    # some of a distribution's releases names the golds it works on.
+                    if (@($feature.ImageIds).Count -gt 0 -and -not (@($feature.ImageIds) -contains $entry.ImageId)) { continue }
+                    $featureItems += [PSCustomObject]@{
+                        Id       = $feature.Id
+                        Label    = $feature.Label
+                        Selected = [bool]$feature.DefaultOn
+                        Section  = "Optional"
+                    }
                 }
-                $featureShown = $featureLabels -join ", "
+                $goto = "confirm"
+                if (@($featureItems | Where-Object { -not $_.IsLocked }).Count -eq 0) {
+                    $bakeFeatures = @()
+                    $asked = $false
+                }
+                else {
+                    if ($null -ne $featureAnswer) {
+                        foreach ($featureItem in $featureItems) {
+                            if (-not $featureItem.IsLocked) { $featureItem.Selected = (@($featureAnswer) -contains $featureItem.Id) }
+                        }
+                    }
+                    $answer = Show-MultiSelectMenu -Title "Optional features" -Items $featureItems -AllowEmpty `
+                        -Heading "Features" -HeadingHint "Baked into the gold, not per VM - Required is installed whatever is ticked" `
+                        -AllowBack:$canBack `
+                        -StatusLines ([ordered]@{ distro = $entry.Name; gold = "$goldName.vhdx" })
+                    if (Test-BladeAnswer -Value $answer) {
+                        $featureAnswer = $answer
+                        $bakeFeatures = $answer
+                    }
+                }
             }
-            Write-FastfetchInfoRow -Label "features" -Value $featureShown -LabelWidth 24 -IndentWidth 2
-        }
-        Write-Host ""
-        Write-Studio -Text ("  " + ("-" * 62)) -Key "muted"
-        Write-Host ""
-    }
+            "confirm" {
+                # A skipped bake leaves nothing for the bake questions to have set.
+                if ($switchName -eq "__skip__") {
+                    $bakeExtraPackages = @()
+                    $bakeFeatures = @()
+                }
+                $outputDirectory = $CurrentOutputDirectory
+                if ([string]::IsNullOrWhiteSpace($outputDirectory)) {
+                    $outputDirectory = Join-Path -Path $PSScriptRoot -ChildPath "vhdx"
+                }
+                # Worked out once: the summary shows it and the config carries it, and two
+                # Join-Path calls for one path is one of them waiting to disagree with the other.
+                $cacheDirectory = Join-Path -Path $PSScriptRoot -ChildPath "media"
 
-    $confirmItems = @(
-        [PSCustomObject]@{ Id = "continue"; Label = "Continue - start the build" }
-        [PSCustomObject]@{ Id = "cancel";   Label = "Cancel" }
-    )
-    $decision = Show-Menu -Title "Confirm build settings" -Subtitle "Review everything below, then continue" `
-        -Items $confirmItems -SelectedIndex 0 -PreItems $renderLinuxSummary
-    if ($decision -ne "continue") { return $null }
+                # Final confirmation, the same shape the Windows path uses: every setting rendered
+                # above a Continue/Cancel menu, so the last thing before a build that downloads
+                # hundreds of megabytes and boots a VM is a chance to read it back.
+                $renderLinuxSummary = {
+                    Write-Studio -Text "  Image" -Key "fg"
+                    Write-FastfetchInfoRow -Label "distribution" -Value $entry.Name -LabelWidth 24 -IndentWidth 2
+                    Write-FastfetchInfoRow -Label "target"       -Value $targetId -LabelWidth 24 -IndentWidth 2
+                    Write-FastfetchInfoRow -Label "gold name"    -Value "$goldName.vhdx" -LabelWidth 24 -IndentWidth 2
+                    Write-FastfetchInfoRow -Label "source"       -Value $entry.Url -LabelWidth 24 -IndentWidth 2
+                    Write-FastfetchInfoRow -Label "image cache"  -Value $cacheDirectory -LabelWidth 24 -IndentWidth 2
+                    Write-FastfetchInfoRow -Label "output"       -Value $outputDirectory -LabelWidth 24 -IndentWidth 2
+                    Write-Host ""
+
+                    Write-Studio -Text "  Region" -Key "fg"
+                    Write-FastfetchInfoRow -Label "language (LANG)" -Value (Get-LinuxLocaleName -LocaleTag $language) -LabelWidth 24 -IndentWidth 2
+                    Write-FastfetchInfoRow -Label "format (LC_*)"   -Value (Get-LinuxLocaleName -LocaleTag $locale) -LabelWidth 24 -IndentWidth 2
+                    Write-FastfetchInfoRow -Label "keyboard"        -Value (Get-LinuxKeymap -LocaleTag $keyboard) -LabelWidth 24 -IndentWidth 2
+                    Write-FastfetchInfoRow -Label "time zone"       -Value $timeZone -LabelWidth 24 -IndentWidth 2
+                    Write-Host ""
+
+                    Write-Studio -Text "  Disk" -Key "fg"
+                    Write-FastfetchInfoRow -Label "gold size" -Value "$diskGB GB" -LabelWidth 24 -IndentWidth 2
+                    Write-FastfetchInfoRow -Label "vhdx type" -Value $vhdType -LabelWidth 24 -IndentWidth 2
+                    Write-Host ""
+
+                    Write-Studio -Text "  Bake" -Key "fg"
+                    if ([string]::IsNullOrWhiteSpace($switchName) -or $switchName -eq "__skip__") {
+                        Write-FastfetchInfoRow -Label "bake boot" -Value "Skipped - stock kernel, no hyperv-daemons" -LabelWidth 24 -IndentWidth 2
+                    }
+                    else {
+                        Write-FastfetchInfoRow -Label "switch"   -Value $switchName -LabelWidth 24 -IndentWidth 2
+                        if ($bakeUseDhcp) {
+                            Write-FastfetchInfoRow -Label "addressing" -Value "DHCP" -LabelWidth 24 -IndentWidth 2
+                        }
+                        else {
+                            Write-FastfetchInfoRow -Label "addressing" -Value "$bakeIpAddress/$bakePrefixLength" -LabelWidth 24 -IndentWidth 2
+                            Write-FastfetchInfoRow -Label "gateway" -Value $(if ([string]::IsNullOrWhiteSpace($bakeGateway)) { "(none)" } else { $bakeGateway }) -LabelWidth 24 -IndentWidth 2
+                            Write-FastfetchInfoRow -Label "dns" -Value $(if (@($bakeDnsServers).Count -gt 0) { @($bakeDnsServers) -join " " } else { "(none)" }) -LabelWidth 24 -IndentWidth 2
+                        }
+                        Write-FastfetchInfoRow -Label "vlan" -Value $(if ($bakeVlanId -gt 0) { [string]$bakeVlanId } else { "untagged" }) -LabelWidth 24 -IndentWidth 2
+
+                        # Only where it was asked. A row reading "distribution default" beside a
+                        # Fedora gold invites the question of where the setting is, and the answer
+                        # is that there is no setting - metalink picked the mirror.
+                        if ((Get-LinuxFamilyProfile -Family $entry.Family).OffersMirror) {
+                            $mirrorShown = Get-AptMirrorUri -Entry $entry -RegionCode $bakeMirrorRegion
+                            if ([string]::IsNullOrWhiteSpace($mirrorShown)) { $mirrorShown = "distribution default" }
+                            Write-FastfetchInfoRow -Label "apt mirror" -Value $mirrorShown -LabelWidth 24 -IndentWidth 2
+                        }
+
+                        Write-FastfetchInfoRow -Label "installs" -Value (@($entry.BakePackages) -join ", ") -LabelWidth 24 -IndentWidth 2
+                        $languagePackShown = Get-LinuxLanguagePack -Entry $entry -LanguageTag $language
+                        if (-not [string]::IsNullOrWhiteSpace($languagePackShown)) {
+                            Write-FastfetchInfoRow -Label "language pack" -Value $languagePackShown -LabelWidth 24 -IndentWidth 2
+                        }
+                        if (@($bakeExtraPackages).Count -gt 0) {
+                            Write-FastfetchInfoRow -Label "extra packages" -Value (@($bakeExtraPackages) -join ", ") -LabelWidth 24 -IndentWidth 2
+                        }
+                        Write-FastfetchInfoRow -Label "apply updates" -Value "Yes - full package upgrade" -LabelWidth 24 -IndentWidth 2
+                        $featureShown = "none"
+                        if (@($bakeFeatures).Count -gt 0) {
+                            $featureLabels = @()
+                            foreach ($feature in @(Get-LinuxGoldFeatureCatalog)) {
+                                if (@($bakeFeatures) -contains $feature.Id) { $featureLabels += $feature.Id }
+                            }
+                            $featureShown = $featureLabels -join ", "
+                        }
+                        Write-FastfetchInfoRow -Label "features" -Value $featureShown -LabelWidth 24 -IndentWidth 2
+                    }
+                    Write-Host ""
+                    Write-Studio -Text ("  " + ("-" * 62)) -Key "muted"
+                    Write-Host ""
+                }
+
+                $confirmItems = @(
+                    [PSCustomObject]@{ Id = "continue"; Label = "Continue - start the build" }
+                    [PSCustomObject]@{ Id = "cancel";   Label = "Cancel" }
+                )
+                $answer = Show-Menu -Title "Confirm build settings" -Subtitle "Review everything below" `
+                    -Items $confirmItems -SelectedIndex 0 -PreItems $renderLinuxSummary -AllowBack:$canBack
+                if ($answer -eq "cancel") { return $null }
+                if (Test-BladeAnswer -Value $answer) { $goto = "done" }
+            }
+        }
+
+        if (-not $asked) { $step = $goto; continue }
+        if ($null -eq $answer) { return $null }
+        if (Test-MenuBack -Value $answer) {
+            # Off the first blade: the caller's own first blade gets it.
+            if ($history.Count -eq 0) { return $script:MenuBackId }
+            $step = $history.Pop()
+            continue
+        }
+        $history.Push($step)
+        $step = $goto
+        if ($step -eq "done") { break }
+    }
 
     return [PSCustomObject]@{
         OsFamily        = "Linux"

@@ -1040,11 +1040,13 @@ function Show-GoldLanguageForm {
     # list reads as the whole build rather than the subset that happens to be ambiguous.
     # The cursor skips those - there is nothing there to change.
     #
-    # Returns a map of VM name -> language slug, or $null if the operator backed out.
+    # Returns a map of VM name -> language slug, $null if the operator cancelled, or
+    # $script:MenuBackId for Backspace.
     param(
         [object[]]$Rows,
         [string[]]$CommonLanguages,
-        [System.Collections.IDictionary]$StatusLines
+        [System.Collections.IDictionary]$StatusLines,
+        [switch]$AllowBack
     )
 
     $allRows = @($CommonLanguages)
@@ -1065,7 +1067,8 @@ function Show-GoldLanguageForm {
         foreach ($language in $allRows) {
             Write-Host ("  {0}  ({1})" -f (Get-LanguageTagFromSlug -Slug $language), $language)
         }
-        $raw = Read-Host "Gold language for every VM (tag or slug, empty cancels)"
+        $raw = Read-Host "Gold language for every VM (tag or slug, empty cancels$(if ($AllowBack) { ', B goes back' }))"
+        if ($AllowBack -and ([string]$raw).Trim() -match "^[Bb]$") { return $script:MenuBackId }
         $picked = (($raw -replace "[^A-Za-z0-9]", "")).ToLowerInvariant()
         if ([string]::IsNullOrWhiteSpace($picked)) { return $null }
         $map = @{}
@@ -1092,15 +1095,17 @@ function Show-GoldLanguageForm {
         }
 
         if (-not $repainted) {
-            Show-MenuHeader -Title "Choose the gold image language" -StatusLines $StatusLines `
-                -Subtitle "More than one language is on disk for these images"
+            Show-MenuHeader -Title "Choose the gold image language" -StatusLines $StatusLines
+            Write-Studio -Text "  Gold language" -Key "fg"
+            Write-Studio -Text "  More than one language is on disk for these images" -Key "muted"
+            Write-Host ""
             $anchor = Get-MenuCursorAnchor
         }
 
         $cursor = 0
 
         if ($allRows.Count -gt 0) {
-            Write-Studio -Text "  Every VM" -Key "fg"
+            Write-Studio -Text "  Every VM" -Key "accent"
             Write-Host ""
             foreach ($language in $allRows) {
                 $label = "Build all VMs with {0}" -f (Get-LanguageTagFromSlug -Slug $language)
@@ -1117,7 +1122,7 @@ function Show-GoldLanguageForm {
             Write-Host ""
         }
 
-        Write-Studio -Text "  Pick per VM" -Key "fg"
+        Write-Studio -Text "  Pick per VM" -Key "accent"
         Write-Host ""
         $nameWidth = 1
         foreach ($row in $Rows) {
@@ -1190,9 +1195,7 @@ function Show-GoldLanguageForm {
         }
 
         Write-Host ""
-        Write-Studio -Text ("  " + ("-" * 62)) -Key "muted"
-        Write-Studio -Text "  Up/Down move   Left/Right change language   Enter continue   Esc/Q cancel" -Key "muted"
-        Write-Host ""
+        Write-BladeLegend -Keys @("Up/Down move", "Left/Right pick", "Enter continue") -AllowBack:$AllowBack
 
         # Read when the frame is COMPLETE, never half way through it. A frame taller
         # than the window scrolls as its last lines are written, so a top measured
@@ -1253,6 +1256,9 @@ function Show-GoldLanguageForm {
             }
             return $map
         }
+        if ($virtualKey -eq 8 -and $AllowBack) {
+            return $script:MenuBackId
+        }
         if ($virtualKey -eq 27 -or $charKey -eq "q" -or $charKey -eq "Q") {
             return $null
         }
@@ -1287,7 +1293,7 @@ function Show-GoldLanguagePicker {
     }
 
     $choice = Show-Menu -Title "Choose a gold image" `
-        -Subtitle "More than one language is on disk for this image" `
+        -Heading "Gold image" -HeadingHint "More than one language is on disk for this image" `
         -Items $items `
         -StatusLines ([ordered]@{ vm = $ServerName; image = $ImageId })
 
@@ -1314,14 +1320,17 @@ function Resolve-GoldLanguagePlan {
     # It has to happen before preflight rather than during the build, because preflight
     # resolves the same golds - left to the build, the ambiguity fails preflight and the
     # build never reaches the point where it could ask.
+    #
+    # Returns "asked", "none" (nothing to ask), $null (cancelled) or $script:MenuBackId.
     param(
         [object[]]$Servers,
         [object[]]$GoldImages,
-        [switch]$Interactive
+        [switch]$Interactive,
+        [switch]$AllowBack
     )
 
-    if (-not $Interactive) { return }
-    if (-not [string]::IsNullOrWhiteSpace([string]$script:GoldLanguageParameter)) { return }
+    if (-not $Interactive) { return "none" }
+    if (-not [string]::IsNullOrWhiteSpace([string]$script:GoldLanguageParameter)) { return "none" }
 
     $configured = Get-ConfiguredLanguageSlug -Defaults $script:ConfigRoot.defaults
     $rows = @()
@@ -1342,7 +1351,12 @@ function Resolve-GoldLanguagePlan {
 
         $languages = @(($candidates | ForEach-Object { (Get-GoldNameParts -BaseName $_.BaseName).Language }) | Sort-Object -Unique)
 
-        $default = if (-not [string]::IsNullOrWhiteSpace($configured) -and $languages -contains $configured) {
+        # An earlier answer wins - the form reached again through Back opens on it.
+        $earlier = [string]$script:GoldLanguageByServer[$name.ToLowerInvariant()]
+        $default = if (-not [string]::IsNullOrWhiteSpace($earlier) -and $languages -contains $earlier) {
+            $earlier
+        }
+        elseif (-not [string]::IsNullOrWhiteSpace($configured) -and $languages -contains $configured) {
             $configured
         }
         else {
@@ -1368,21 +1382,18 @@ function Resolve-GoldLanguagePlan {
             -not (-not [string]::IsNullOrWhiteSpace($configured) -and
                 @($_.Languages | Where-Object { $_ -eq $configured }).Count -eq 1)
         })
-    if ($open.Count -eq 0) { return }
+    if ($open.Count -eq 0) { return "none" }
 
     # "Build all VMs with X" is offered for any language at least one open row can take.
     # A locked row cannot follow it, which is what the coverage line under the list says.
     $common = @((($open | ForEach-Object { $_.Languages }) | Sort-Object -Unique))
 
-    $result = Show-GoldLanguageForm -Rows $rows -CommonLanguages $common -StatusLines ([ordered]@{
+    $result = Show-GoldLanguageForm -Rows $rows -CommonLanguages $common -AllowBack:$AllowBack -StatusLines ([ordered]@{
             vms       = "$($rows.Count) need a language"
             languages = ((($rows | ForEach-Object { $_.Languages }) | Sort-Object -Unique) -join ", ")
         })
 
-    if ($null -eq $result) {
-        Write-Log "No gold language chosen - preflight will report the ambiguity" -Tag "Warn"
-        return
-    }
+    if (-not (Test-BladeAnswer -Value $result)) { return $result }
 
     foreach ($key in @($result.Keys)) {
         $script:GoldLanguageByServer[[string]$key] = [string]$result[$key]
@@ -1391,6 +1402,7 @@ function Resolve-GoldLanguagePlan {
             "{0}={1}" -f $_.Name, (Get-LanguageTagFromSlug -Slug $script:GoldLanguageByServer[$_.Key])
         }) -join ", "
     Write-Log "Gold language chosen: $summary" -Tag "Info"
+    return "asked"
 }
 
 function Resolve-GoldVhdxPath {
@@ -2952,10 +2964,22 @@ function Resolve-FodPlans {
     #>
     param(
         [object[]]$Servers,
-        [switch]$Interactive
+        [switch]$Interactive,
+        # Backspace on the first medium's blade returns $script:MenuBackId.
+        [switch]$AllowBack
     )
+    # Returns "asked" when at least one blade was shown, "none" when nothing needed
+    # asking, $null when the operator cancelled, or $script:MenuBackId.
 
+    # The last answers, kept to preselect each blade when it is reached again through
+    # Back. Only a starting cursor - the map itself is rebuilt from scratch.
+    $previous = $script:FodPlanMap
+    if ($null -eq $previous) { $previous = @{} }
     $script:FodPlanMap = @{}
+
+    # Every medium this selection needs, gathered first and asked after, so Back on
+    # one medium's blade can return to the one before it.
+    $questions = @()
 
     # --- Server Core App Compatibility, grouped by Windows Server release ---
     $appCompatVms = @($Servers | Where-Object {
@@ -2972,59 +2996,83 @@ function Resolve-FodPlans {
     foreach ($key in @($byRelease.Keys)) {
         $release = $key.Substring("appcompat:".Length)
         $releaseLabel = if ($release -eq "*") { "this gold image" } else { "Windows Server $release" }
-
-        if (-not $Interactive.IsPresent) {
-            $script:FodPlanMap[$key] = @{ Mode = "Online" }
-            Write-Log "App Compatibility ($releaseLabel): guest installs at first boot" -Tag "Info"
-            continue
+        $questions += [pscustomobject]@{
+            Key        = $key
+            OnlineNote = "App Compatibility ($releaseLabel): guest installs at first boot"
+            Arguments  = @{
+                Title         = "Server Core App Compatibility"
+                MediumLabel   = "$releaseLabel Languages and Optional Features ISO"
+                Subject       = "App Compatibility ($releaseLabel)"
+                VmList        = ($byRelease[$key] -join ", ")
+                OnlineLabel   = "Install in guest    from Windows Update at first boot"
+                OnlineWarning = "minutes, needs internet"
+                Notes         = @(
+                    "Installing in the guest adds minutes to every VM's first boot, and needs",
+                    "internet - or a WSUS configured to allow optional content."
+                )
+            }
         }
-
-        $script:FodPlanMap[$key] = Get-FodMediumInteractive `
-            -Title "Server Core App Compatibility" `
-            -MediumLabel "$releaseLabel Languages and Optional Features ISO" `
-            -Subject "App Compatibility ($releaseLabel)" `
-            -VmList ($byRelease[$key] -join ", ") `
-            -OnlineLabel "Install in guest    from Windows Update at first boot" `
-            -OnlineWarning "minutes, needs internet" `
-            -Notes @(
-                "Installing in the guest adds minutes to every VM's first boot, and needs",
-                "internet - or a WSUS configured to allow optional content."
-            )
     }
 
     # --- Windows 11 RSAT capabilities, one medium for every client VM ---
     $rsatVms = @($Servers | Where-Object {
             $null -ne $_ -and $null -ne $_.rsatCapabilities -and @($_.rsatCapabilities).Count -gt 0
         })
-    if ($rsatVms.Count -eq 0) { return }
-
-    $rsatNames = @($rsatVms | ForEach-Object { Get-ServerComputerName -Server $_ })
-    $rsatCount = @($rsatVms | ForEach-Object { @($_.rsatCapabilities).Count } | Measure-Object -Sum).Sum
-
-    if (-not $Interactive.IsPresent) {
-        $script:FodPlanMap["rsat"] = @{ Mode = "Online" }
-        Write-Log "RSAT: guests install $rsatCount capability(ies) at first boot" -Tag "Info"
-        return
+    if ($rsatVms.Count -gt 0) {
+        $rsatNames = @($rsatVms | ForEach-Object { Get-ServerComputerName -Server $_ })
+        $rsatCount = @($rsatVms | ForEach-Object { @($_.rsatCapabilities).Count } | Measure-Object -Sum).Sum
+        $questions += [pscustomobject]@{
+            Key        = "rsat"
+            OnlineNote = "RSAT: guests install $rsatCount capability(ies) at first boot"
+            Arguments  = @{
+                Title         = "Windows 11 RSAT capabilities"
+                MediumLabel   = "Windows 11 Languages and Optional Features ISO"
+                Subject       = "RSAT"
+                VmList        = ($rsatNames -join ", ")
+                Extra         = ([ordered]@{ "capabilities" = "$rsatCount to install" })
+                OnlineLabel   = "Install in guest    SLOW - one Windows Update download each"
+                OnlineWarning = "one download per item"
+                Notes         = @(
+                    "Each capability is fetched separately at first boot, so this is slow. A WSUS",
+                    "without optional content configured fails all of them."
+                )
+            }
+        }
     }
 
-    $script:FodPlanMap["rsat"] = Get-FodMediumInteractive `
-        -Title "Windows 11 RSAT capabilities" `
-        -MediumLabel "Windows 11 Languages and Optional Features ISO" `
-        -Subject "RSAT" `
-        -VmList ($rsatNames -join ", ") `
-        -Extra ([ordered]@{ "capabilities" = "$rsatCount to install" }) `
-        -OnlineLabel "Install in guest    SLOW - one Windows Update download each" `
-        -OnlineWarning "one download per item" `
-        -Notes @(
-            "Each capability is fetched separately at first boot, so this is slow. A WSUS",
-            "without optional content configured fails all of them."
-        )
+    if ($questions.Count -eq 0) { return "none" }
+
+    if (-not $Interactive.IsPresent) {
+        foreach ($question in $questions) {
+            $script:FodPlanMap[$question.Key] = @{ Mode = "Online" }
+            Write-Log $question.OnlineNote -Tag "Info"
+        }
+        return "none"
+    }
+
+    $at = 0
+    while ($at -lt $questions.Count) {
+        $question = $questions[$at]
+        $arguments = $question.Arguments
+        $plan = Get-FodMediumInteractive @arguments -Current $previous[$question.Key] -AllowBack:($AllowBack -or $at -gt 0)
+        if ($null -eq $plan) { return $null }
+        if (Test-MenuBack -Value $plan) {
+            if ($at -eq 0) { return $script:MenuBackId }
+            $at--
+            continue
+        }
+        $script:FodPlanMap[$question.Key] = $plan
+        $previous[$question.Key] = $plan
+        $at++
+    }
+    return "asked"
 }
 
 function Get-FodMediumInteractive {
     <#
       One menu per Features on Demand medium that has to be sourced.
-      Returns the plan hashtable for $script:FodPlanMap.
+      Returns the plan hashtable for $script:FodPlanMap, $null when the operator
+      cancels, or $script:MenuBackId.
     #>
     param(
         [string]$Title,
@@ -3037,7 +3085,10 @@ function Get-FodMediumInteractive {
         # The caveat, in lines the caller has already broken. It goes above the list
         # rather than into a row or the header: a menu row is one line by definition,
         # and the header column is half a screen narrower than this one.
-        [string[]]$Notes = @()
+        [string[]]$Notes = @(),
+        # The plan this medium got last time, when the blade is reached through Back.
+        [hashtable]$Current,
+        [switch]$AllowBack
     )
 
     while ($true) {
@@ -3056,9 +3107,9 @@ function Get-FodMediumInteractive {
             [pscustomobject]@{ Id = "skip";   Label = "Skip                do not install these on the VMs above" }
         )
 
+        # The caveat is a paragraph above; the question itself is the heading right over
+        # the rows, the same place every other blade puts it.
         $note = {
-            Write-Studio -Text "  Needs the $MediumLabel." -Key "fg"
-            Write-Host ""
             foreach ($line in $Notes) {
                 if ([string]::IsNullOrWhiteSpace($line)) { Write-Host "" }
                 else { Write-Studio -Text "  $line" -Key "muted" }
@@ -3066,9 +3117,17 @@ function Get-FodMediumInteractive {
             if ($Notes.Count -gt 0) { Write-Host "" }
         }
 
-        $choice = Show-Menu -Title $Title -StatusLines $status -Items $items -PreItems $note
+        $lastMode = if ($null -ne $Current) { ([string]$Current.Mode).ToLowerInvariant() } else { "" }
+        $lastId = switch ($lastMode) { "offline" { "iso" } "online" { "online" } "skip" { "skip" } default { "" } }
+        $choice = Show-Menu -Title $Title -StatusLines $status -Items $items -PreItems $note `
+            -Heading "Installation source" -HeadingHint "Needs the $MediumLabel" `
+            -SelectedId $lastId -AllowBack:$AllowBack
 
-        if ($null -eq $choice -or $choice -eq "online") {
+        # Esc cancels, the way the legend says. It used to fall through to the online
+        # install - a cancel key that quietly picked one of the three answers.
+        if ($null -eq $choice) { return $null }
+        if (Test-MenuBack -Value $choice) { return $choice }
+        if ($choice -eq "online") {
             Write-Log "$Subject : installing online in the guest at first boot" -Tag "Info"
             return @{ Mode = "Online" }
         }
@@ -3077,10 +3136,12 @@ function Get-FodMediumInteractive {
             return @{ Mode = "Skip" }
         }
 
+        # Backspace off the top of the folder tree comes back to this menu; Esc
+        # cancels, as it does everywhere else.
         $isoPath = Show-IsoFilePicker -StartPath (Get-DefaultIsoBrowseRoot) `
-            -Title "Select the $MediumLabel" `
-            -Subtitle "Enter opens folder / selects .iso - Esc goes back"
-        if ($null -eq $isoPath) { continue }
+            -Title "Select the $MediumLabel" -AllowBack
+        if ($null -eq $isoPath) { return $null }
+        if (Test-MenuBack -Value $isoPath) { continue }
 
         $isoRoot = $null
         try {
@@ -6780,6 +6841,72 @@ function Get-MenuWindowTop {
     catch { return $null }
 }
 
+# ---------------------------[ Blade Navigation ]---------------------------
+# Every blade answers one of three ways: a value, $null (Esc/Q - the whole wizard is
+# cancelled, as it always was) or $script:MenuBackId (Backspace - step back one blade).
+# Back is a string rather than a second return channel so a blade that is not offered
+# it never produces it, and a caller that does not ask for it never has to look.
+$script:MenuBackId = "__back__"
+
+function Test-MenuBack {
+    param($Value)
+    return ($Value -is [string] -and $Value -eq $script:MenuBackId)
+}
+
+function Test-BladeAnswer {
+    # True for a real answer - not a cancel, not a step back. An empty array from a
+    # multi-select is an answer: "continue with none of these".
+    param($Value)
+    if ($null -eq $Value) { return $false }
+    return -not (Test-MenuBack -Value $Value)
+}
+
+function Get-BladeLegend {
+    <#
+        The key legend under a blade, as one line.
+
+        One builder for every blade so none can leave it out - which is how several
+        ended up with a closing rule and nothing under it. Only the keys that belong to
+        the blade are passed; Backspace and Esc are appended here, always last and
+        always spelt the same.
+
+        Always ONE line: the blades pass few enough keys that the longest legend fits
+        an 80-column console. A key that is there but not worth the width - PgUp/PgDn,
+        Home/End, Q beside Esc - still works and is simply not listed.
+    #>
+    param(
+        [string[]]$Keys = @(),
+        [switch]$AllowBack,
+        # No cursor keys (ISE, redirected console): typed commands instead of keys.
+        [switch]$LineMode
+    )
+
+    $parts = @($Keys | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+    if ($LineMode) {
+        if ($AllowBack) { $parts += "B back" }
+        $parts += "Q cancel"
+    }
+    else {
+        if ($AllowBack) { $parts += "Backspace back" }
+        $parts += "Esc cancel"
+    }
+    return ($parts -join "   ")
+}
+
+function Write-BladeLegend {
+    # The closing rule, the legend, and the blank line under it - the foot of every
+    # blade. The caller writes the blank line ABOVE the rule, as every blade already did.
+    param(
+        [string[]]$Keys = @(),
+        [switch]$AllowBack,
+        [switch]$LineMode
+    )
+
+    Write-Studio -Text ("  " + ("-" * 62)) -Key "muted"
+    Write-Studio -Text ("  " + (Get-BladeLegend -Keys $Keys -AllowBack:$AllowBack -LineMode:$LineMode)) -Key "muted"
+    Write-Host ""
+}
+
 function Show-Menu {
     param(
         [string]$Title,
@@ -6787,23 +6914,99 @@ function Show-Menu {
         [int]$SelectedIndex = 0,
         [System.Collections.IDictionary]$StatusLines,
         [string]$Subtitle,
-        [scriptblock]$PreItems
+        [scriptblock]$PreItems,
+        # Field label printed immediately above the option list, same shape as the
+        # VHDX form. The fastfetch header alone is too far from the list to read as
+        # a question - without this, pickers get mistaken for something else.
+        [string]$Heading,
+        [string]$HeadingHint,
+        # Backspace returns $script:MenuBackId. Off on a wizard's first blade, where
+        # there is nothing to go back to.
+        [switch]$AllowBack,
+        # Wins over SelectedIndex when it names an item: a blade revisited through
+        # Back opens on the answer it was given, not on its default.
+        [string]$SelectedId
     )
 
     if (-not $Items -or $Items.Count -eq 0) {
         throw "Show-Menu requires at least one item."
     }
+    if (-not [string]::IsNullOrWhiteSpace($SelectedId)) {
+        $idAt = [array]::IndexOf(@($Items | ForEach-Object { [string]$_.Id }), $SelectedId)
+        if ($idAt -ge 0) { $SelectedIndex = $idAt }
+    }
+
+    # An item carrying Separator = $true is drawn but never lands under the caret: it is
+    # a blank line or a plain label used to group a long list. Navigation steps over it,
+    # so the arrow keys never stop on something that cannot be chosen.
+    $isSelectable = {
+        param([int]$At)
+        if ($At -lt 0 -or $At -ge $Items.Count) { return $false }
+        return -not [bool]$Items[$At].Separator
+    }
+    # $Step is ALWAYS passed parenthesised at the call sites: a bare -1 is read as a
+    # parameter name, lands in $args, and leaves $Step at zero - a walk that never walks.
+    $nextSelectable = {
+        param([int]$From, [int]$Step)
+        $at = $From
+        # One full lap at most - a list that is nothing but separators has no answer,
+        # and walking for ever looking for one is the wrong way to say so.
+        #
+        # The counter is $hops and NOT $step: PowerShell variable names are case
+        # insensitive, so a `for ($step = 0; ...)` here is the same variable as the
+        # $Step parameter and zeroes it on the loop's first statement. The walk then
+        # adds nothing each time round and every caret movement silently does nothing.
+        for ($hops = 0; $hops -lt $Items.Count; $hops++) {
+            $at = $at + $Step
+            if ($at -lt 0) { $at = $Items.Count - 1 }
+            if ($at -ge $Items.Count) { $at = 0 }
+            if (& $isSelectable $at) { return $at }
+        }
+        return $From
+    }
 
     $index = $SelectedIndex
     if ($index -lt 0) { $index = 0 }
     if ($index -ge $Items.Count) { $index = $Items.Count - 1 }
+    if (-not (& $isSelectable $index)) { $index = & $nextSelectable $index 1 }
 
     $useRawUi = Test-MenuHostSupported
+    $maxVisible = 16
 
-        # Header and anything above the list stay put while it is walked - they are
-        # drawn once and the keypress repaints only what is below them.
-        $anchor = $null
-        $windowTop = $null
+    # Type to find, on a list long enough to page - 251 locales and 419 time zones are
+    # a long walk by arrow key. Letters build a search shown under the list, and every
+    # one moves the caret to the best match: a label that starts with it, then a word
+    # inside a label that does (Europe/Berlin for "ber", "(UTC+01:00) Amsterdam,
+    # Berlin" for "berlin"), then the text anywhere. The search stays until Up/Down
+    # clears it; Backspace edits it, as in a text field, and steps back a blade only
+    # once it is empty. Q is a letter here, so only Esc cancels.
+    $findable = $useRawUi -and ($Items.Count -gt $maxVisible)
+    $findText = ""
+    $findMatch = {
+        param([string]$Text)
+        $needle = $Text.Trim().ToLowerInvariant()
+        if ($needle.Length -eq 0) { return -1 }
+        foreach ($tier in 1..3) {
+            for ($at = 0; $at -lt $Items.Count; $at++) {
+                if (-not (& $isSelectable $at)) { continue }
+                $label = ([string]$Items[$at].Label).Trim().ToLowerInvariant()
+                $hit = switch ($tier) {
+                    1 { $label.StartsWith($needle) }
+                    2 { @($label -split "[^a-z0-9+]+" | Where-Object { $_.StartsWith($needle) }).Count -gt 0 }
+                    3 { $label.Contains($needle) }
+                }
+                if ($hit) { return $at }
+            }
+        }
+        return -1
+    }
+
+    # The header and the heading are the same on every pass, so they are written once
+    # and the list below them is what a keypress rewrites. $anchor is where that list
+    # starts; a null one means "draw the whole screen", which is also what happens when
+    # the host cannot place a cursor or the buffer has scrolled under us.
+    $anchor = $null
+    $windowTop = $null
 
     while ($true) {
         $repainted = $false
@@ -6816,6 +7019,7 @@ function Show-Menu {
                 $anchor = $null
             }
         }
+
         if (-not $repainted) {
             Show-MenuHeader -Title $Title -StatusLines $StatusLines -Subtitle $Subtitle
 
@@ -6823,13 +7027,49 @@ function Show-Menu {
                 & $PreItems
             }
 
+            if (-not [string]::IsNullOrWhiteSpace($Heading)) {
+                Write-Studio -Text "  $Heading" -Key "fg"
+                if (-not [string]::IsNullOrWhiteSpace($HeadingHint)) {
+                    Write-Studio -Text "  $HeadingHint" -Key "muted"
+                }
+                Write-Host ""
+            }
+
             $anchor = Get-MenuCursorAnchor
         }
 
-        for ($i = 0; $i -lt $Items.Count; $i++) {
+        $windowStart = 0
+        if ($Items.Count -gt $maxVisible) {
+            $windowStart = $index - [math]::Floor($maxVisible / 2)
+            if ($windowStart -lt 0) { $windowStart = 0 }
+            if (($windowStart + $maxVisible) -gt $Items.Count) {
+                $windowStart = $Items.Count - $maxVisible
+            }
+        }
+        $windowEnd = [Math]::Min(($windowStart + $maxVisible - 1), ($Items.Count - 1))
+
+        if ($windowStart -gt 0) {
+            Write-Studio -Text "    ..." -Key "muted"
+        }
+
+        for ($i = $windowStart; $i -le $windowEnd; $i++) {
             $item  = $Items[$i]
             $label = if ($item.Label) { [string]$item.Label } else { [string]$item }
             $selected = ($i -eq $index)
+
+            if ($item.Separator) {
+                # Read the label off the item, NOT from $label above. That line falls
+                # back to [string]$item when Label is empty - which is what lets a menu
+                # be given plain strings instead of objects - and a blank separator has
+                # exactly that empty Label, so it was rendering as the object's own
+                # ToString: "@{Id=__gap__; Label=; Separator=True}".
+                $separatorText = [string]$item.Label
+                # Two spaces of indent so a separator that carries text lines up with
+                # the rows around it, and a blank one is simply a blank line.
+                if ([string]::IsNullOrWhiteSpace($separatorText)) { Write-Host "" }
+                else { Write-Studio -Text "  $separatorText" -Key "accent" }
+                continue
+            }
 
             if ($selected) {
                 Write-Studio -Text "  > " -Key "accent" -NoNewline
@@ -6841,39 +7081,96 @@ function Show-Menu {
             }
         }
 
+        if ($windowEnd -lt ($Items.Count - 1)) {
+            Write-Studio -Text "    ..." -Key "muted"
+        }
+
+        if ($findable -and $findText.Length -gt 0) {
+            Write-Host ""
+            Write-Studio -Text "  find: " -Key "muted" -NoNewline
+            Write-Studio -Text $findText -Key "accent" -NoNewline
+            if ((& $findMatch $findText) -lt 0) { Write-Studio -Text "   no match" -Key "muted" } else { Write-Host "" }
+        }
+
         Write-Host ""
-        Write-Studio -Text ("  " + ("-" * 62)) -Key "muted"
-        if ($useRawUi) {
-            Write-Studio -Text "  Up/Down move   Enter select   Esc/Q cancel" -Key "muted"
+        if ($findable) {
+            Write-BladeLegend -Keys @("Up/Down move", "type to find", "Enter select") -AllowBack:$AllowBack
+        }
+        elseif ($useRawUi) {
+            Write-BladeLegend -Keys @("Up/Down move", "Enter select") -AllowBack:$AllowBack
         }
         else {
-            Write-Studio -Text "  Enter number + Enter   (Q to cancel)" -Key "muted"
+            Write-BladeLegend -Keys @("Enter number + Enter") -AllowBack:$AllowBack -LineMode
         }
-        Write-Host ""
 
         # Read when the frame is COMPLETE, never half way through it. A frame taller
         # than the window scrolls as its last lines are written, so a top measured
         # before the list was drawn always disagrees with the one measured after - and
-        # the guard then declared a scroll on every keypress and redrew the whole
-        # screen, which is the flicker coming back on exactly the tall blades.
+        # the guard then declared a scroll on every single keypress and redrew the
+        # whole screen. That is the flicker coming back on exactly the tall blades:
+        # the build summary, a long feature list. Measured here the number settles
+        # after the first paint and the repaint path is used from then on.
         $windowTop = Get-MenuWindowTop
+
         if ($useRawUi) {
             $key = $Host.UI.RawUI.ReadKey("NoEcho,IncludeKeyDown")
             $virtualKey = [int]$key.VirtualKeyCode
             $charKey = [string]$key.Character
 
             if ($virtualKey -eq 38) {
-                $index = if ($index -le 0) { $Items.Count - 1 } else { $index - 1 }
+                $findText = ""
+                $index = & $nextSelectable $index (-1)
                 continue
             }
             if ($virtualKey -eq 40) {
-                $index = if ($index -ge ($Items.Count - 1)) { 0 } else { $index + 1 }
+                $findText = ""
+                $index = & $nextSelectable $index 1
+                continue
+            }
+            if ($virtualKey -eq 33) {
+                $target = [Math]::Max(0, $index - $maxVisible)
+                if (& $isSelectable $target) { $index = $target }
+                else { $index = & $nextSelectable $target 1 }
+                continue
+            }
+            if ($virtualKey -eq 34) {
+                $target = [Math]::Min($Items.Count - 1, $index + $maxVisible)
+                if (& $isSelectable $target) { $index = $target }
+                else { $index = & $nextSelectable $target (-1) }
+                continue
+            }
+            if ($virtualKey -eq 36) {
+                $index = if (& $isSelectable 0) { 0 } else { & $nextSelectable 0 1 }
+                continue
+            }
+            if ($virtualKey -eq 35) {
+                $last = $Items.Count - 1
+                $index = if (& $isSelectable $last) { $last } else { & $nextSelectable $last (-1) }
                 continue
             }
             if ($virtualKey -eq 13) {
+                if (-not (& $isSelectable $index)) { continue }
                 return $Items[$index].Id
             }
-            if ($virtualKey -eq 27 -or $charKey -eq "q" -or $charKey -eq "Q") {
+            if ($virtualKey -eq 8 -and $findText.Length -gt 0) {
+                $findText = $findText.Substring(0, $findText.Length - 1)
+                $found = & $findMatch $findText
+                if ($found -ge 0) { $index = $found }
+                continue
+            }
+            if ($virtualKey -eq 8 -and $AllowBack) {
+                return $script:MenuBackId
+            }
+            if ($virtualKey -eq 27) {
+                return $null
+            }
+            if ($findable -and [int]$key.Character -ge 32) {
+                $findText += [string]$key.Character
+                $found = & $findMatch $findText
+                if ($found -ge 0) { $index = $found }
+                continue
+            }
+            if ($charKey -eq "q" -or $charKey -eq "Q") {
                 return $null
             }
         }
@@ -6881,9 +7178,10 @@ function Show-Menu {
             $raw = Read-Host "Select"
             if ([string]::IsNullOrWhiteSpace($raw)) { continue }
             if ($raw -match "^[Qq]$") { return $null }
+            if ($AllowBack -and $raw -match "^[Bb]$") { return $script:MenuBackId }
             if ($raw -match "^\d+$") {
                 $num = [int]$raw
-                if ($num -ge 1 -and $num -le $Items.Count) {
+                if ($num -ge 1 -and $num -le $Items.Count -and (& $isSelectable ($num - 1))) {
                     return $Items[$num - 1].Id
                 }
             }
@@ -6891,11 +7189,41 @@ function Show-Menu {
     }
 }
 
+function Wait-BladeContinue {
+    <#
+        The foot of a blade drawn under log output rather than under a fresh header - the
+        rule and the legend, then a key. It never clears the screen: what is above it
+        (a failed preflight, say) is the thing to read. Returns $true for Enter and
+        $false for Esc.
+    #>
+    param([string[]]$Keys = @("Enter continue"))
+
+    Write-Host ""
+    if (-not (Test-MenuHostSupported)) {
+        Write-BladeLegend -Keys $Keys -LineMode
+        $raw = Read-Host
+        return -not ($raw -match "^[Qq]$")
+    }
+
+    Write-BladeLegend -Keys $Keys
+    while ($true) {
+        $key = $Host.UI.RawUI.ReadKey("NoEcho,IncludeKeyDown")
+        $virtualKey = [int]$key.VirtualKeyCode
+        if ($virtualKey -eq 13) { return $true }
+        if ($virtualKey -eq 27) { return $false }
+    }
+}
+
 function Show-MultiSelectMenu {
     param(
         [string]$Title,
         [object[]]$Items,
-        [System.Collections.IDictionary]$StatusLines
+        [System.Collections.IDictionary]$StatusLines,
+        # Label and hint right above the rows, as Show-Menu draws them.
+        [string]$Heading,
+        [string]$HeadingHint,
+        # Backspace returns $script:MenuBackId - see Show-Menu.
+        [switch]$AllowBack
     )
 
     if (-not $Items -or $Items.Count -eq 0) {
@@ -6911,7 +7239,9 @@ function Show-MultiSelectMenu {
     $index = 0
     $selected = @{}
     foreach ($item in $Items) {
-        $selected[[string]$item.Id] = $false
+        # An item may arrive ticked - a blade revisited through Back shows what was
+        # picked last time.
+        $selected[[string]$item.Id] = [bool]$item.Selected
     }
 
     $useRawUi = Test-MenuHostSupported
@@ -6933,7 +7263,15 @@ function Show-MultiSelectMenu {
             }
         }
         if (-not $repainted) {
-            Show-MenuHeader -Title $Title -StatusLines $StatusLines -Subtitle "Space toggles selection"
+            Show-MenuHeader -Title $Title -StatusLines $StatusLines
+
+            if (-not [string]::IsNullOrWhiteSpace($Heading)) {
+                Write-Studio -Text "  $Heading" -Key "fg"
+                if (-not [string]::IsNullOrWhiteSpace($HeadingHint)) {
+                    Write-Studio -Text "  $HeadingHint" -Key "muted"
+                }
+                Write-Host ""
+            }
 
             $anchor = Get-MenuCursorAnchor
         }
@@ -6970,14 +7308,12 @@ function Show-MultiSelectMenu {
         }
 
         Write-Host ""
-        Write-Studio -Text ("  " + ("-" * 62)) -Key "muted"
         if ($useRawUi) {
-            Write-Studio -Text "  Up/Down move   Space toggle   Enter done   Esc/Q cancel" -Key "muted"
+            Write-BladeLegend -Keys @("Up/Down move", "Space toggle", "Enter continue") -AllowBack:$AllowBack
         }
         else {
-            Write-Studio -Text "  Number toggles, Enter alone confirms, Q cancels" -Key "muted"
+            Write-BladeLegend -Keys @("Number toggles", "blank Enter continues") -AllowBack:$AllowBack -LineMode
         }
-        Write-Host ""
 
         # Read when the frame is COMPLETE, never half way through it. A frame taller
         # than the window scrolls as its last lines are written, so a top measured
@@ -7016,6 +7352,9 @@ function Show-MultiSelectMenu {
                 }
                 return $chosen
             }
+            if ($virtualKey -eq 8 -and $AllowBack) {
+                return $script:MenuBackId
+            }
             if ($virtualKey -eq 27 -or $charKey -eq "q" -or $charKey -eq "Q") {
                 return $null
             }
@@ -7023,6 +7362,7 @@ function Show-MultiSelectMenu {
         else {
             $raw = Read-Host "Toggle number / empty Enter to confirm"
             if ($raw -match "^[Qq]$") { return $null }
+            if ($AllowBack -and $raw -match "^[Bb]$") { return $script:MenuBackId }
             if ([string]::IsNullOrWhiteSpace($raw)) {
                 $chosen = @()
                 foreach ($item in $Items) {
@@ -7140,11 +7480,14 @@ function Get-DefaultIsoBrowseRoot {
 }
 
 function Show-IsoFilePicker {
-    # Arrow-key file browser: drives -> folders -> select a .iso file.
+    # Arrow-key file browser: drives -> folders -> select a .iso file. Backspace climbs
+    # a folder; on the drive list, where there is nothing left to climb, it steps back a
+    # blade instead ($script:MenuBackId) when -AllowBack is set.
     param(
         [string]$StartPath = ":DRIVES",
         [string]$Title = "Select ISO file",
-        [string]$Subtitle = "Enter opens folder / selects .iso"
+        [string]$Subtitle = "",
+        [switch]$AllowBack
     )
 
     $currentPath = $StartPath
@@ -7222,16 +7565,20 @@ function Show-IsoFilePicker {
 
         # Closed the same way every other blade is: one blank line, then the rule, then
         # what the keys do. Without it the list simply stopped in the middle of the
-        # screen with nothing under it.
+        # screen with nothing under it. Backspace means "up a folder" until there is no
+        # folder left, so the legend says which one it is right now.
         Write-Host ""
-        Write-Studio -Text ("  " + ("-" * 62)) -Key "muted"
+        $atTop = ($currentPath -eq ":DRIVES")
         if ($useRawUi) {
-            Write-Studio -Text "  Up/Down move   Enter open/select   Backspace up   Esc cancel" -Key "muted"
+            $pickerKeys = @("Up/Down move", "Enter open/select")
+            if (-not $atTop) { $pickerKeys += "Backspace up a folder" }
+            Write-BladeLegend -Keys $pickerKeys -AllowBack:($AllowBack -and $atTop)
         }
         else {
-            Write-Studio -Text "  Enter a number, or blank to cancel." -Key "muted"
+            $pickerKeys = @("Number + Enter selects")
+            if (-not $atTop) { $pickerKeys += "B up a folder" }
+            Write-BladeLegend -Keys $pickerKeys -AllowBack:($AllowBack -and $atTop) -LineMode
         }
-        Write-Host ""
 
         $chosen = $null
         # Read when the frame is COMPLETE, never half way through it. A frame taller
@@ -7242,17 +7589,49 @@ function Show-IsoFilePicker {
         $windowTop = Get-MenuWindowTop
         if ($useRawUi) {
             $key = $Host.UI.RawUI.ReadKey("NoEcho,IncludeKeyDown")
-            switch ($key.VirtualKeyCode) {
-                38 { $index--; continue }              # Up
-                40 { $index++; continue }              # Down
-                27 { return $null }                    # Esc
-                13 { $chosen = $entries[$index] }      # Enter
-                default { continue }
+            $virtualKey = [int]$key.VirtualKeyCode
+            $charKey = [string]$key.Character
+            # Plain ifs rather than a switch on the key code: `continue` inside a switch
+            # moves the switch on, not the loop, so the old Up/Down arms fell through to
+            # the code under it with no row chosen - harmless only because nothing there
+            # matched a null row. Same shape as the New-Vhdx.ps1 copy now.
+            if ($virtualKey -eq 38) {
+                $index = if ($index -le 0) { $entries.Count - 1 } else { $index - 1 }
+                continue
             }
+            if ($virtualKey -eq 40) {
+                $index = if ($index -ge ($entries.Count - 1)) { 0 } else { $index + 1 }
+                continue
+            }
+            if ($virtualKey -eq 8) {
+                # Backspace = go up, and off the top of the tree = back a blade.
+                if ($atTop) {
+                    if ($AllowBack) { return $script:MenuBackId }
+                    continue
+                }
+                $parent = Split-Path -Path $currentPath -Parent
+                $currentPath = if ([string]::IsNullOrWhiteSpace($parent) -or $parent -eq $currentPath) { ":DRIVES" } else { $parent }
+                $index = 0
+                continue
+            }
+            if ($virtualKey -eq 27 -or $charKey -eq "q" -or $charKey -eq "Q") { return $null }
+            if ($virtualKey -ne 13) { continue }
+            $chosen = $entries[$index]
         }
         else {
             $raw = Read-Host "Selection"
-            if ([string]::IsNullOrWhiteSpace($raw)) { return $null }
+            if ([string]::IsNullOrWhiteSpace($raw)) { continue }
+            if ($raw -match '^[Qq]$') { return $null }
+            if ($raw -match '^[Bb]$') {
+                if ($atTop) {
+                    if ($AllowBack) { return $script:MenuBackId }
+                    continue
+                }
+                $parent = Split-Path -Path $currentPath -Parent
+                $currentPath = if ([string]::IsNullOrWhiteSpace($parent) -or $parent -eq $currentPath) { ":DRIVES" } else { $parent }
+                $index = 0
+                continue
+            }
             if ($raw -notmatch '^\d+$') { continue }
             $num = [int]$raw
             if ($num -lt 1 -or $num -gt $entries.Count) { continue }
@@ -8410,9 +8789,13 @@ function Get-BuildMenuStatusLines {
 }
 
 function Read-SelectedServersInteractive {
+    # The picked servers, $null for cancel, or $script:MenuBackId.
     param(
         [object[]]$Servers,
-        [System.Collections.IDictionary]$StatusLines
+        [System.Collections.IDictionary]$StatusLines,
+        # Ticked when the blade opens - what was picked last time, reached through Back.
+        [object[]]$Preselected = @(),
+        [switch]$AllowBack
     )
 
     # Grouped under the config each machine came from, and only when more than one is
@@ -8430,15 +8813,19 @@ function Read-SelectedServersInteractive {
             $section = if ($null -ne $source) { $source.Name } else { "(no config)" }
         }
         $items += [pscustomobject]@{
-            Id      = [string]$i
-            Label   = (Get-ServerMenuLabel -Server $Servers[$i])
-            Section = $section
+            Id       = [string]$i
+            Label    = (Get-ServerMenuLabel -Server $Servers[$i])
+            Section  = $section
+            # Reference equality: the same server objects come back round, so -contains
+            # finds exactly the ones that were picked.
+            Selected = (@($Preselected) -contains $Servers[$i])
         }
     }
 
-    $picked = Show-MultiSelectMenu -Title "Select virtual machines to build" -Items $items -StatusLines $StatusLines
-    if ($null -eq $picked) {
-        return $null
+    $picked = Show-MultiSelectMenu -Title "Select virtual machines to build" -Items $items -StatusLines $StatusLines `
+        -Heading "Virtual machines" -HeadingHint "Every ticked VM is built with the settings its config gives it" -AllowBack:$AllowBack
+    if (-not (Test-BladeAnswer -Value $picked)) {
+        return $picked
     }
 
     $result = @()
@@ -8446,6 +8833,49 @@ function Read-SelectedServersInteractive {
         $result += $Servers[[int]$idx]
     }
     return $result
+}
+
+function Get-BuildScope {
+    <#
+        The configs a selection touches and the VHD Sets that come with it. One group per
+        config: everything below that depends on a config - paths, gold folder, VHD Sets,
+        naming - is resolved per group. A VHD Set belongs to one config and names members
+        from that same config, so the sets in scope are gathered per group rather than
+        from a single root.
+    #>
+    param(
+        [object[]]$Servers,
+        [object[]]$Sources,
+        [object]$FallbackConfig
+    )
+
+    $buildGroups = @(Group-ServersByConfigSource -Servers $Servers -Sources $Sources)
+    if ($buildGroups.Count -gt 1) {
+        Write-Log ("Selection spans {0} configs" -f $buildGroups.Count) -Tag "Info"
+        foreach ($group in $buildGroups) {
+            Write-Log ("  {0} - {1} VM(s)" -f $group.Source.Name, @($group.Servers).Count) -Tag "Info"
+        }
+    }
+
+    $vhdSetsInScope = @()
+    $declaredSets = 0
+    foreach ($group in $buildGroups) {
+        $groupConfig = if ($null -ne $group.Source) { $group.Source.Config } else { $FallbackConfig }
+        $declared = @($groupConfig.vhdSets)
+        $declaredSets += $declared.Count
+        $vhdSetsInScope += @(Select-VhdSetsForServers -VhdSets $declared -Servers $group.Servers)
+    }
+    if ($declaredSets -gt 0 -and $vhdSetsInScope.Count -eq 0) {
+        Write-Log "Skipping $declaredSets VHD Set(s) - no selected members" -Tag "Info"
+    }
+    elseif ($declaredSets -gt $vhdSetsInScope.Count) {
+        Write-Log "VHD Sets in scope: $($vhdSetsInScope.Count) of $declaredSets" -Tag "Info"
+    }
+
+    return [pscustomobject]@{
+        Groups  = $buildGroups
+        VhdSets = $vhdSetsInScope
+    }
 }
 
 # ---------------------------[ Script Start ]---------------------------
@@ -8642,326 +9072,358 @@ try {
 
     $statusLines = Get-BuildMenuStatusLines -Servers $allServers -GoldImages $goldImages -Defaults $defaults -Sources $sources
 
-    while ($true) {
-        if ($interactive) {
-            $action = $null
-            $selectedServers = @()
+    # Slow host (prep ALL disks first) is CLI-only - see -SlowHost in the parameter block.
+    $useSlowHost = $SlowHost.IsPresent
+    $doStart = -not $SkipStart.IsPresent
+    $scope = $null
 
-            $configWord = if ($sources.Count -gt 1) { "{0} configs" -f $sources.Count } else { "the config" }
-            $menuItems = @(
-                [pscustomobject]@{ Id = "all";      Label = ("Build all VMs       provision every server in {0} ({1})" -f $configWord, $allServers.Count) }
-                [pscustomobject]@{ Id = "selected"; Label = "Build selected      pick one or more VMs" }
-                [pscustomobject]@{ Id = "quit";     Label = "Quit" }
-            )
+    if ($interactive) {
+        # A loop over named blades, the same shape New-Vhdx.ps1's wizards have, so that
+        # Backspace can step back. $history holds the blades actually shown: the FOD and
+        # gold language blades appear only when the selection needs them, and Back steps
+        # over them when they did not. Preflight is a step with no blade - it runs on
+        # every pass forward, so going back and changing the selection re-checks it.
+        #
+        # Esc quits from any blade, the way the legend says - the same as on the first
+        # blade, and the same as New-Vhdx.ps1. Backspace is the way back.
+        $history = New-Object System.Collections.Generic.Stack[string]
+        $step = "menu"
+        $menuChoice = $null
+        $action = "Build"
 
-            $menuTitle = if ($sources.Count -gt 1) { "Build VMs" } else { "Build VMs from $($sources[0].Name)" }
-            $choice = Show-Menu -Title $menuTitle -Items $menuItems -StatusLines $statusLines
-            if ($null -eq $choice -or $choice -eq "quit") {
+        while ($step -ne "build") {
+            $canBack = ($history.Count -gt 0)
+            $asked = $true
+            $answer = $null
+            $goto = $step
+
+            switch ($step) {
+                "menu" {
+                    $configWord = if ($sources.Count -gt 1) { "{0} configs" -f $sources.Count } else { "the config" }
+                    $menuItems = @(
+                        [pscustomobject]@{ Id = "all";      Label = ("Build all VMs       provision every server in {0} ({1})" -f $configWord, $allServers.Count) }
+                        [pscustomobject]@{ Id = "selected"; Label = "Build selected      pick one or more VMs" }
+                        [pscustomobject]@{ Id = "quit";     Label = "Quit" }
+                    )
+
+                    $menuTitle = if ($sources.Count -gt 1) { "Build VMs" } else { "Build VMs from $($sources[0].Name)" }
+                    $answer = Show-Menu -Title $menuTitle -Items $menuItems -StatusLines $statusLines -SelectedId $menuChoice `
+                        -Heading "What to build" -HeadingHint ("Every VM in {0}, or a pick of them" -f $configWord)
+                    if ($null -eq $answer -or $answer -eq "quit") {
+                        Write-Log "Cancelled by user" -Tag "Info"
+                        Complete-Script -ExitCode 0
+                    }
+                    $menuChoice = $answer
+                    if ($answer -eq "all") {
+                        $selectedServers = @($allServers)
+                        $goto = "fod"
+                    }
+                    else {
+                        $goto = "pick"
+                    }
+                }
+                "pick" {
+                    $answer = Read-SelectedServersInteractive -Servers $allServers -StatusLines $statusLines `
+                        -Preselected $selectedServers -AllowBack
+                    if (Test-BladeAnswer -Value $answer) {
+                        $selectedServers = @($answer)
+                        $goto = "fod"
+                    }
+                }
+                "fod" {
+                    # Decide where the Server Core App Compatibility and RSAT media come from
+                    # before anything is checked or built - asked once per medium when no
+                    # offline source is configured.
+                    $answer = Resolve-FodPlans -Servers $selectedServers -Interactive -AllowBack:$canBack
+                    if ($answer -eq "none") { $asked = $false }
+                    $goto = "language"
+                }
+                "language" {
+                    # Same idea for the gold language: preflight resolves golds too, so an image
+                    # that exists in more than one language has to be settled before it runs
+                    # rather than during the build it would otherwise abort.
+                    $answer = Resolve-GoldLanguagePlan -Servers $selectedServers -GoldImages $goldImages -Interactive -AllowBack:$canBack
+                    if ($answer -eq "none") { $asked = $false }
+                    $goto = "preflight"
+                }
+                "preflight" {
+                    $asked = $false
+                    Write-Log "$action | $($selectedServers.Count) server(s) | slow host=$useSlowHost" -Tag "Info"
+                    $scope = Get-BuildScope -Servers $selectedServers -Sources $sources -FallbackConfig $config
+                    $vhdSetsInScope = $scope.VhdSets
+                    $passed = Invoke-BuildPreflightForGroups -Groups $scope.Groups -VhdSets $vhdSetsInScope `
+                        -FallbackDefaults $defaults -FallbackVhdxDirectory $vhdxDirectory `
+                        -FallbackVmPath $vmPath -FallbackVhdPath $vhdPath
+                    if ($passed) {
+                        $goto = "summary"
+                    }
+                    else {
+                        Write-Log "Build aborted - preflight failed" -Tag "Error"
+                        if (-not (Wait-BladeContinue -Keys @("Enter back to the menu"))) {
+                            Write-Log "Cancelled by user" -Tag "Info"
+                            Complete-Script -ExitCode 0
+                        }
+                        $history.Clear()
+                        $goto = "menu"
+                    }
+                }
+                "summary" {
+                    $vmSummaries = @($selectedServers | ForEach-Object {
+                            [pscustomobject]@{
+                                Name = (Get-HyperVVmName -Server $_)
+                                Rows = @(Get-ServerSummaryRows -Server $_ -Defaults $defaults -GoldImages $goldImages `
+                                        -VhdSets $vhdSetsInScope)
+                                Line = (Get-ServerSummaryCompactLine -Server $_)
+                            }
+                        })
+
+                    # This screen is the last stop before anything is written, so mirror every row
+                    # into the log - a condensed on-screen view then still has a full record.
+                    foreach ($summary in $vmSummaries) {
+                        foreach ($row in $summary.Rows) {
+                            Write-Log ("Summary $($summary.Name) | $($row.Name): $($row.Value)") -Tag "Info"
+                        }
+                    }
+
+                    $vhdSetRows = @($vhdSetsInScope | ForEach-Object {
+                            $set = $_
+                            $attachTo = @()
+                            if ($set.attachTo) { $attachTo = @($set.attachTo | Where-Object { -not [string]::IsNullOrWhiteSpace([string]$_) }) }
+                            $setLabel = ([string]$set.name).Trim()
+                            if ([string]::IsNullOrWhiteSpace($setLabel)) { $setLabel = "VHD Set" }
+                            $sizeGb = if ($null -ne $set.sizeGB) { [int]$set.sizeGB } else { 0 }
+                            $setType = if ([string]::IsNullOrWhiteSpace([string]$set.type)) { "Fixed" } else { [string]$set.type }
+                            [pscustomobject]@{
+                                Name  = $setLabel
+                                Value = ("{0} GB {1} - shared with {2}" -f $sizeGb, $setType, ($attachTo -join ", "))
+                            }
+                        })
+
+                    $fodRows = @($script:FodPlanMap.Keys | Sort-Object | ForEach-Object {
+                            $key = $_
+                            $plan = $script:FodPlanMap[$key]
+                            $fodLabel = if ($key -eq "rsat") { "RSAT (Windows 11)" }
+                                elseif ($key -eq "appcompat:*") { "App Compat (gold image)" }
+                                else { "App Compat (Windows Server $($key.Substring('appcompat:'.Length)))" }
+                            $fodValue = switch ([string]$plan.Mode) {
+                                "Offline" { "Offline - $(Split-Path -Leaf ([string]$plan.Iso))" }
+                                "Skip" { "Skipped" }
+                                default { "Online in guest at first boot" }
+                            }
+                            [pscustomobject]@{ Name = $fodLabel; Value = $fodValue }
+                        })
+
+                    $placementRows = @()
+                    foreach ($volume in @(Get-StoragePlacementVolumes -Defaults $defaults)) {
+                        $freeBytes = Get-PathVolumeFreeBytes -Path $volume.VhdPath
+                        $freeText = if ($null -eq $freeBytes) { "free space unreadable" } else { "{0} GB free" -f [math]::Round($freeBytes / 1GB) }
+                        $sameRoot = $volume.VmPath -eq $volume.VhdPath
+                        $pathText = if ($sameRoot) { $volume.VmPath } else { "{0}  +  {1}" -f $volume.VmPath, $volume.VhdPath }
+                        $placementRows += [pscustomobject]@{
+                            Name  = "volume {0}" -f ($volume.Index + 1)
+                            Value = "{0}  ({1})" -f $pathText, $freeText
+                        }
+                    }
+
+                    # The body sits under the same header and separator every other page has, so
+                    # keep an eye on the height and drop to one line per VM when it will not fit.
+                    $windowHeight = 40
+                    try {
+                        $windowHeight = [int]$Host.UI.RawUI.WindowSize.Height
+                    }
+                    catch {
+                        $windowHeight = 40
+                    }
+                    if ($windowHeight -lt 24) { $windowHeight = 24 }
+
+                    $buildLines = 7
+                    if ($useSlowHost) { $buildLines++ }
+                    if ($placementRows.Count -gt 0) { $buildLines++ }
+                    # header (logo height + frame) + build block + VM heading + menu/footer.
+                    $fixedHeight = 18 + $buildLines + 2 + 8
+                    if ($placementRows.Count -gt 0) { $fixedHeight += $placementRows.Count + 3 }
+                    if ($vhdSetRows.Count -gt 0) { $fixedHeight += $vhdSetRows.Count + 3 }
+                    if ($fodRows.Count -gt 0) { $fixedHeight += $fodRows.Count + 3 }
+                    $detailHeight = 0
+                    foreach ($summary in $vmSummaries) { $detailHeight += $summary.Rows.Count + 2 }
+                    # A single VM always gets its full block - the worst case is scrolling past the
+                    # header to see it, and that one VM is the whole point of the screen.
+                    $showVmDetail = ((($fixedHeight + $detailHeight) -le $windowHeight) -or ($vmSummaries.Count -eq 1))
+
+                    $renderBuildSummary = {
+                        # Every section reads the same: heading, blank line, then its rows.
+                        Write-Studio -Text "  Build" -Key "fg"
+                        Write-Host ""
+                        Write-FastfetchInfoRow -Label "gold folder" -Value $vhdxDirectory -LabelWidth 20 -IndentWidth 4
+                        $pathLabelSuffix = if ($placementRows.Count -gt 0) { " (fallback)" } else { "" }
+                        Write-FastfetchInfoRow -Label ("vm path" + $pathLabelSuffix) -Value $vmPath -LabelWidth 20 -IndentWidth 4
+                        Write-FastfetchInfoRow -Label ("vhd path" + $pathLabelSuffix) -Value $vhdPath -LabelWidth 20 -IndentWidth 4
+                        if ($placementRows.Count -gt 0) {
+                            Write-FastfetchInfoRow -Label "placement" -Value ("automatic - {0} volume(s), most free space wins" -f $placementRows.Count) -LabelWidth 20 -IndentWidth 4
+                        }
+                        if ($useSlowHost) {
+                            Write-FastfetchInfoRow -Label "slow host" -Value "Yes" -LabelWidth 20 -IndentWidth 4
+                        }
+                        Write-FastfetchInfoRow -Label "start after create" -Value $(if ($doStart) { "Yes" } else { "No" }) -LabelWidth 20 -IndentWidth 4
+                        Write-Host ""
+
+                        Write-Studio -Text "  Virtual machines ($($vmSummaries.Count))" -Key "fg"
+                        if ($showVmDetail) {
+                            foreach ($summary in $vmSummaries) {
+                                Write-Host ""
+                                Write-Studio -Text ("    " + $summary.Name) -Key "fg"
+                                foreach ($row in $summary.Rows) {
+                                    Write-FastfetchInfoRow -Label $row.Name -Value $row.Value -LabelWidth 13 -IndentWidth 6
+                                }
+                            }
+                        }
+                        else {
+                            Write-Studio -Text "    condensed - the window is too short for the full blocks (it is all in the log)" -Key "muted"
+                            foreach ($summary in $vmSummaries) {
+                                Write-FastfetchInfoRow -Label $summary.Name -Value $summary.Line -LabelWidth 20 -IndentWidth 4
+                            }
+                        }
+
+                        # Set names and FOD labels vary wildly in length - size the label column to
+                        # the section instead of letting a long one shove its colon out of line.
+                        if ($placementRows.Count -gt 0) {
+                            Write-Host ""
+                            Write-Studio -Text "  Storage placement ($($placementRows.Count))" -Key "fg"
+                            Write-Host ""
+                            $placementLabelWidth = Get-SectionLabelWidth -Rows $placementRows
+                            foreach ($row in $placementRows) {
+                                Write-FastfetchInfoRow -Label $row.Name -Value $row.Value -LabelWidth $placementLabelWidth -IndentWidth 4
+                            }
+                        }
+                        if ($vhdSetRows.Count -gt 0) {
+                            Write-Host ""
+                            Write-Studio -Text "  VHD Sets ($($vhdSetRows.Count))" -Key "fg"
+                            Write-Host ""
+                            $vhdSetLabelWidth = Get-SectionLabelWidth -Rows $vhdSetRows
+                            foreach ($row in $vhdSetRows) {
+                                Write-FastfetchInfoRow -Label $row.Name -Value $row.Value -LabelWidth $vhdSetLabelWidth -IndentWidth 4
+                            }
+                        }
+                        if ($fodRows.Count -gt 0) {
+                            Write-Host ""
+                            Write-Studio -Text "  Features on Demand" -Key "fg"
+                            Write-Host ""
+                            $fodLabelWidth = Get-SectionLabelWidth -Rows $fodRows
+                            foreach ($row in $fodRows) {
+                                Write-FastfetchInfoRow -Label $row.Name -Value $row.Value -LabelWidth $fodLabelWidth -IndentWidth 4
+                            }
+                        }
+
+                        Write-Host ""
+                        Write-Studio -Text ("  " + ("-" * 62)) -Key "muted"
+                        Write-Host ""
+                    }
+
+                    $summaryStatus = [ordered]@{}
+                    foreach ($key in $statusLines.Keys) { $summaryStatus[$key] = $statusLines[$key] }
+                    $summaryStatus["selected"] = ("{0} of {1} in config" -f $selectedServers.Count, $allServers.Count)
+
+                    $summaryItems = @(
+                        [pscustomobject]@{ Id = "continue"; Label = ("Start build of {0} VM(s)" -f $selectedServers.Count) }
+                        [pscustomobject]@{ Id = "cancel";   Label = "Cancel" }
+                    )
+                    $answer = Show-Menu -Title "Confirm build settings" -Subtitle "Review everything below" `
+                        -Items $summaryItems -SelectedIndex 0 -StatusLines $summaryStatus -PreItems $renderBuildSummary `
+                        -AllowBack:$canBack
+                    if ($answer -eq "cancel") {
+                        Write-Log "Cancelled by user at build summary" -Tag "Info"
+                        Complete-Script -ExitCode 0
+                    }
+                    if (Test-BladeAnswer -Value $answer) {
+                        $goto = "build"
+                    }
+                }
+            }
+
+            if (-not $asked) { $step = $goto; continue }
+            if ($null -eq $answer) {
                 Write-Log "Cancelled by user" -Tag "Info"
                 Complete-Script -ExitCode 0
             }
-
-            switch ($choice) {
-                "all" {
-                    $action = "Build"
-                    $selectedServers = @($allServers)
-                }
-                "selected" {
-                    $picked = Read-SelectedServersInteractive -Servers $allServers -StatusLines $statusLines
-                    if ($null -eq $picked) { continue }
-                    $selectedServers = @($picked)
-                    $action = "Build"
-                }
-            }
-
-            # No confirm step here on purpose - the detailed "Confirm build settings"
-            # summary below is the single place a build is approved.
-        }
-
-        # Slow host (prep ALL disks first) is CLI-only - see -SlowHost in the parameter block.
-        $useSlowHost = $SlowHost.IsPresent
-
-        Write-Log "$action | $($selectedServers.Count) server(s) | slow host=$useSlowHost" -Tag "Info"
-
-        # One group per config the selection touches. Everything below that depends on
-        # a config - paths, gold folder, VHD Sets, naming - is resolved per group.
-        $buildGroups = @(Group-ServersByConfigSource -Servers $selectedServers -Sources $sources)
-        if ($buildGroups.Count -gt 1) {
-            Write-Log ("Selection spans {0} configs" -f $buildGroups.Count) -Tag "Info"
-            foreach ($group in $buildGroups) {
-                Write-Log ("  {0} - {1} VM(s)" -f $group.Source.Name, @($group.Servers).Count) -Tag "Info"
-            }
-        }
-
-        # A VHD Set belongs to one config and names members from that same config, so
-        # the sets in scope are gathered per group rather than from a single root.
-        $vhdSetsInScope = @()
-        $declaredSets = 0
-        foreach ($group in $buildGroups) {
-            $groupConfig = if ($null -ne $group.Source) { $group.Source.Config } else { $config }
-            $declared = @($groupConfig.vhdSets)
-            $declaredSets += $declared.Count
-            $vhdSetsInScope += @(Select-VhdSetsForServers -VhdSets $declared -Servers $group.Servers)
-        }
-        if ($declaredSets -gt 0 -and $vhdSetsInScope.Count -eq 0) {
-            Write-Log "Skipping $declaredSets VHD Set(s) - no selected members" -Tag "Info"
-        }
-        elseif ($declaredSets -gt $vhdSetsInScope.Count) {
-            Write-Log "VHD Sets in scope: $($vhdSetsInScope.Count) of $declaredSets" -Tag "Info"
-        }
-
-        # Decide where the Server Core App Compatibility FOD comes from before anything is
-        # checked or built. Interactive runs get asked once per Windows Server release when
-        # no offline source is configured; unattended runs stay silent and defer to the guest.
-        Resolve-FodPlans -Servers $selectedServers -Interactive:$interactive
-
-        # Same idea for the gold language: preflight resolves golds too, so an image that
-        # exists in more than one language has to be settled before it runs rather than
-        # during the build it would otherwise abort.
-        Resolve-GoldLanguagePlan -Servers $selectedServers -GoldImages $goldImages -Interactive:$interactive
-
-        if ($action -eq "Check") {
-            $passed = Invoke-BuildPreflightForGroups -Groups $buildGroups -VhdSets $vhdSetsInScope `
-                -FallbackDefaults $defaults -FallbackVhdxDirectory $vhdxDirectory `
-                -FallbackVmPath $vmPath -FallbackVhdPath $vhdPath
-            if ($interactive) {
-                Write-Host ""
-                Read-Host "Press Enter to return to the menu"
+            if (Test-MenuBack -Value $answer) {
+                if ($history.Count -gt 0) { $step = $history.Pop() }
                 continue
             }
+            $history.Push($step)
+            $step = $goto
+        }
+    }
+    else {
+        Write-Log "$action | $($selectedServers.Count) server(s) | slow host=$useSlowHost" -Tag "Info"
+
+        # An unattended run cannot ask: FOD media fall back to the guest's online install,
+        # and an ambiguous gold language is left for preflight to report.
+        [void](Resolve-FodPlans -Servers $selectedServers)
+        [void](Resolve-GoldLanguagePlan -Servers $selectedServers -GoldImages $goldImages)
+
+        $scope = Get-BuildScope -Servers $selectedServers -Sources $sources -FallbackConfig $config
+        $vhdSetsInScope = $scope.VhdSets
+        $passed = Invoke-BuildPreflightForGroups -Groups $scope.Groups -VhdSets $vhdSetsInScope `
+            -FallbackDefaults $defaults -FallbackVhdxDirectory $vhdxDirectory `
+            -FallbackVmPath $vmPath -FallbackVhdPath $vhdPath
+
+        if ($action -eq "Check") {
             if ($passed) {
                 Complete-Script -ExitCode 0
             }
             Complete-Script -ExitCode 1
         }
-
-        # Build path: preflight first, then provision
-        $passed = Invoke-BuildPreflightForGroups -Groups $buildGroups -VhdSets $vhdSetsInScope `
-            -FallbackDefaults $defaults -FallbackVhdxDirectory $vhdxDirectory `
-            -FallbackVmPath $vmPath -FallbackVhdPath $vhdPath
         if (-not $passed) {
             Write-Log "Build aborted - preflight failed" -Tag "Error"
-            if ($interactive) {
-                Write-Host ""
-                Read-Host "Press Enter to return to the menu"
-                continue
-            }
             Complete-Script -ExitCode 1
         }
-
-        $doStart = -not $SkipStart.IsPresent
-
-        if ($interactive) {
-            $vmSummaries = @($selectedServers | ForEach-Object {
-                    [pscustomobject]@{
-                        Name = (Get-HyperVVmName -Server $_)
-                        Rows = @(Get-ServerSummaryRows -Server $_ -Defaults $defaults -GoldImages $goldImages `
-                                -VhdSets $vhdSetsInScope)
-                        Line = (Get-ServerSummaryCompactLine -Server $_)
-                    }
-                })
-
-            # This screen is the last stop before anything is written, so mirror every row
-            # into the log - a condensed on-screen view then still has a full record.
-            foreach ($summary in $vmSummaries) {
-                foreach ($row in $summary.Rows) {
-                    Write-Log ("Summary $($summary.Name) | $($row.Name): $($row.Value)") -Tag "Info"
-                }
-            }
-
-            $vhdSetRows = @($vhdSetsInScope | ForEach-Object {
-                    $set = $_
-                    $attachTo = @()
-                    if ($set.attachTo) { $attachTo = @($set.attachTo | Where-Object { -not [string]::IsNullOrWhiteSpace([string]$_) }) }
-                    $setLabel = ([string]$set.name).Trim()
-                    if ([string]::IsNullOrWhiteSpace($setLabel)) { $setLabel = "VHD Set" }
-                    $sizeGb = if ($null -ne $set.sizeGB) { [int]$set.sizeGB } else { 0 }
-                    $setType = if ([string]::IsNullOrWhiteSpace([string]$set.type)) { "Fixed" } else { [string]$set.type }
-                    [pscustomobject]@{
-                        Name  = $setLabel
-                        Value = ("{0} GB {1} - shared with {2}" -f $sizeGb, $setType, ($attachTo -join ", "))
-                    }
-                })
-
-            $fodRows = @($script:FodPlanMap.Keys | Sort-Object | ForEach-Object {
-                    $key = $_
-                    $plan = $script:FodPlanMap[$key]
-                    $fodLabel = if ($key -eq "rsat") { "RSAT (Windows 11)" }
-                        elseif ($key -eq "appcompat:*") { "App Compat (gold image)" }
-                        else { "App Compat (Windows Server $($key.Substring('appcompat:'.Length)))" }
-                    $fodValue = switch ([string]$plan.Mode) {
-                        "Offline" { "Offline - $(Split-Path -Leaf ([string]$plan.Iso))" }
-                        "Skip" { "Skipped" }
-                        default { "Online in guest at first boot" }
-                    }
-                    [pscustomobject]@{ Name = $fodLabel; Value = $fodValue }
-                })
-
-            $placementRows = @()
-            foreach ($volume in @(Get-StoragePlacementVolumes -Defaults $defaults)) {
-                $freeBytes = Get-PathVolumeFreeBytes -Path $volume.VhdPath
-                $freeText = if ($null -eq $freeBytes) { "free space unreadable" } else { "{0} GB free" -f [math]::Round($freeBytes / 1GB) }
-                $sameRoot = $volume.VmPath -eq $volume.VhdPath
-                $pathText = if ($sameRoot) { $volume.VmPath } else { "{0}  +  {1}" -f $volume.VmPath, $volume.VhdPath }
-                $placementRows += [pscustomobject]@{
-                    Name  = "volume {0}" -f ($volume.Index + 1)
-                    Value = "{0}  ({1})" -f $pathText, $freeText
-                }
-            }
-
-            # The body sits under the same header and separator every other page has, so
-            # keep an eye on the height and drop to one line per VM when it will not fit.
-            $windowHeight = 40
-            try {
-                $windowHeight = [int]$Host.UI.RawUI.WindowSize.Height
-            }
-            catch {
-                $windowHeight = 40
-            }
-            if ($windowHeight -lt 24) { $windowHeight = 24 }
-
-            $buildLines = 7
-            if ($useSlowHost) { $buildLines++ }
-            if ($placementRows.Count -gt 0) { $buildLines++ }
-            # header (logo height + frame) + build block + VM heading + menu/footer.
-            $fixedHeight = 18 + $buildLines + 2 + 8
-            if ($placementRows.Count -gt 0) { $fixedHeight += $placementRows.Count + 3 }
-            if ($vhdSetRows.Count -gt 0) { $fixedHeight += $vhdSetRows.Count + 3 }
-            if ($fodRows.Count -gt 0) { $fixedHeight += $fodRows.Count + 3 }
-            $detailHeight = 0
-            foreach ($summary in $vmSummaries) { $detailHeight += $summary.Rows.Count + 2 }
-            # A single VM always gets its full block - the worst case is scrolling past the
-            # header to see it, and that one VM is the whole point of the screen.
-            $showVmDetail = ((($fixedHeight + $detailHeight) -le $windowHeight) -or ($vmSummaries.Count -eq 1))
-
-            $renderBuildSummary = {
-                # Every section reads the same: heading, blank line, then its rows.
-                Write-Studio -Text "  Build" -Key "fg"
-                Write-Host ""
-                Write-FastfetchInfoRow -Label "gold folder" -Value $vhdxDirectory -LabelWidth 20 -IndentWidth 4
-                $pathLabelSuffix = if ($placementRows.Count -gt 0) { " (fallback)" } else { "" }
-                Write-FastfetchInfoRow -Label ("vm path" + $pathLabelSuffix) -Value $vmPath -LabelWidth 20 -IndentWidth 4
-                Write-FastfetchInfoRow -Label ("vhd path" + $pathLabelSuffix) -Value $vhdPath -LabelWidth 20 -IndentWidth 4
-                if ($placementRows.Count -gt 0) {
-                    Write-FastfetchInfoRow -Label "placement" -Value ("automatic - {0} volume(s), most free space wins" -f $placementRows.Count) -LabelWidth 20 -IndentWidth 4
-                }
-                if ($useSlowHost) {
-                    Write-FastfetchInfoRow -Label "slow host" -Value "Yes" -LabelWidth 20 -IndentWidth 4
-                }
-                Write-FastfetchInfoRow -Label "start after create" -Value $(if ($doStart) { "Yes" } else { "No" }) -LabelWidth 20 -IndentWidth 4
-                Write-Host ""
-
-                Write-Studio -Text "  Virtual machines ($($vmSummaries.Count))" -Key "fg"
-                if ($showVmDetail) {
-                    foreach ($summary in $vmSummaries) {
-                        Write-Host ""
-                        Write-Studio -Text ("    " + $summary.Name) -Key "fg"
-                        foreach ($row in $summary.Rows) {
-                            Write-FastfetchInfoRow -Label $row.Name -Value $row.Value -LabelWidth 13 -IndentWidth 6
-                        }
-                    }
-                }
-                else {
-                    Write-Studio -Text "    condensed - the window is too short for the full blocks (it is all in the log)" -Key "muted"
-                    foreach ($summary in $vmSummaries) {
-                        Write-FastfetchInfoRow -Label $summary.Name -Value $summary.Line -LabelWidth 20 -IndentWidth 4
-                    }
-                }
-
-                # Set names and FOD labels vary wildly in length - size the label column to
-                # the section instead of letting a long one shove its colon out of line.
-                if ($placementRows.Count -gt 0) {
-                    Write-Host ""
-                    Write-Studio -Text "  Storage placement ($($placementRows.Count))" -Key "fg"
-                    Write-Host ""
-                    $placementLabelWidth = Get-SectionLabelWidth -Rows $placementRows
-                    foreach ($row in $placementRows) {
-                        Write-FastfetchInfoRow -Label $row.Name -Value $row.Value -LabelWidth $placementLabelWidth -IndentWidth 4
-                    }
-                }
-                if ($vhdSetRows.Count -gt 0) {
-                    Write-Host ""
-                    Write-Studio -Text "  VHD Sets ($($vhdSetRows.Count))" -Key "fg"
-                    Write-Host ""
-                    $vhdSetLabelWidth = Get-SectionLabelWidth -Rows $vhdSetRows
-                    foreach ($row in $vhdSetRows) {
-                        Write-FastfetchInfoRow -Label $row.Name -Value $row.Value -LabelWidth $vhdSetLabelWidth -IndentWidth 4
-                    }
-                }
-                if ($fodRows.Count -gt 0) {
-                    Write-Host ""
-                    Write-Studio -Text "  Features on Demand" -Key "fg"
-                    Write-Host ""
-                    $fodLabelWidth = Get-SectionLabelWidth -Rows $fodRows
-                    foreach ($row in $fodRows) {
-                        Write-FastfetchInfoRow -Label $row.Name -Value $row.Value -LabelWidth $fodLabelWidth -IndentWidth 4
-                    }
-                }
-
-                Write-Host ""
-                Write-Studio -Text ("  " + ("-" * 62)) -Key "muted"
-                Write-Host ""
-            }
-
-            $summaryStatus = [ordered]@{}
-            foreach ($key in $statusLines.Keys) { $summaryStatus[$key] = $statusLines[$key] }
-            $summaryStatus["selected"] = ("{0} of {1} in config" -f $selectedServers.Count, $allServers.Count)
-
-            $summaryItems = @(
-                [pscustomobject]@{ Id = "continue"; Label = ("Start build of {0} VM(s)" -f $selectedServers.Count) }
-                [pscustomobject]@{ Id = "cancel";   Label = "Cancel - back to menu" }
-            )
-            $summaryDecision = Show-Menu -Title "Confirm build settings" -Subtitle "Review everything below, then continue" `
-                -Items $summaryItems -SelectedIndex 0 -StatusLines $summaryStatus -PreItems $renderBuildSummary
-            if ($summaryDecision -ne "continue") {
-                Write-Log "Cancelled by user at build summary" -Tag "Info"
-                continue
-            }
-        }
-
-        $vhdSetMap = Initialize-VhdSets -VhdSets $vhdSetsInScope -VhdRoot $vhdPath
-
-        # One group at a time, each with the naming rules, catalogue root, gold folder
-        # and paths its own config asked for. A failure in one group does not stop the
-        # others: the machines in a different config have nothing to do with it.
-        $ok = $true
-        $manyGroups = ($buildGroups.Count -gt 1)
-        foreach ($group in $buildGroups) {
-            $groupDefaults = $defaults
-            $groupGolds = $goldImages
-
-            if ($null -ne $group.Source) {
-                Set-ActiveConfigSource -Source $group.Source
-                $resolved = Resolve-ConfigSourcePaths -Source $group.Source `
-                    -FallbackVmPath $vmPath -FallbackVhdPath $vhdPath
-                $groupDefaults = $group.Source.Defaults
-                $groupGolds = @(Get-HyperVGoldImages -VhdxDirectory $resolved.VhdxDirectory)
-                if ($buildGroups.Count -gt 1) {
-                    Write-Log ("Building {0} VM(s) from '{1}'" -f @($group.Servers).Count, $group.Source.Name) -Tag "Info"
-                }
-            }
-
-            $groupOk = Invoke-BuildServers -Defaults $groupDefaults -Servers $group.Servers `
-                -GoldImages $groupGolds -VhdSetMap $vhdSetMap -DoStart:$doStart -SlowHost:$useSlowHost `
-                -PartOfLargerRun:$manyGroups
-            if (-not $groupOk) { $ok = $false }
-        }
-
-        # Said once, about the run, after every config has had its turn.
-        if ($manyGroups) {
-            if ($ok) {
-                Write-Log ("All selected servers provisioned - {0} configs" -f $buildGroups.Count) -Tag "Ok"
-            }
-            else {
-                Write-Log "Some servers failed - see the errors above" -Tag "Error"
-            }
-        }
-
-        if ($ok) {
-            Complete-Script -ExitCode 0
-        }
-        Complete-Script -ExitCode 1
     }
+
+    $buildGroups = @($scope.Groups)
+    $vhdSetsInScope = @($scope.VhdSets)
+
+    $vhdSetMap = Initialize-VhdSets -VhdSets $vhdSetsInScope -VhdRoot $vhdPath
+
+    # One group at a time, each with the naming rules, catalogue root, gold folder
+    # and paths its own config asked for. A failure in one group does not stop the
+    # others: the machines in a different config have nothing to do with it.
+    $ok = $true
+    $manyGroups = ($buildGroups.Count -gt 1)
+    foreach ($group in $buildGroups) {
+        $groupDefaults = $defaults
+        $groupGolds = $goldImages
+
+        if ($null -ne $group.Source) {
+            Set-ActiveConfigSource -Source $group.Source
+            $resolved = Resolve-ConfigSourcePaths -Source $group.Source `
+                -FallbackVmPath $vmPath -FallbackVhdPath $vhdPath
+            $groupDefaults = $group.Source.Defaults
+            $groupGolds = @(Get-HyperVGoldImages -VhdxDirectory $resolved.VhdxDirectory)
+            if ($buildGroups.Count -gt 1) {
+                Write-Log ("Building {0} VM(s) from '{1}'" -f @($group.Servers).Count, $group.Source.Name) -Tag "Info"
+            }
+        }
+
+        $groupOk = Invoke-BuildServers -Defaults $groupDefaults -Servers $group.Servers `
+            -GoldImages $groupGolds -VhdSetMap $vhdSetMap -DoStart:$doStart -SlowHost:$useSlowHost `
+            -PartOfLargerRun:$manyGroups
+        if (-not $groupOk) { $ok = $false }
+    }
+
+    # Said once, about the run, after every config has had its turn.
+    if ($manyGroups) {
+        if ($ok) {
+            Write-Log ("All selected servers provisioned - {0} configs" -f $buildGroups.Count) -Tag "Ok"
+        }
+        else {
+            Write-Log "Some servers failed - see the errors above" -Tag "Error"
+        }
+    }
+
+    if ($ok) {
+        Complete-Script -ExitCode 0
+    }
+    Complete-Script -ExitCode 1
 }
 catch {
     Write-Log $_.Exception.Message -Tag "Error"
