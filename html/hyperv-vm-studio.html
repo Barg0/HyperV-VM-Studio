@@ -2426,9 +2426,9 @@ Object.keys(USERNAME_THEMES).forEach(tid => {
 });
 
 
-/** Matches New-Vhdx.ps1 Get-ImageNameSlug / Get-VhdxFileName (Target HyperV).
- *  The id here IS the token New-Vhdx.ps1 bakes into the gold file name and the one
- *  Build-Vms.ps1 matches on: hv-{language}-{id}.vhdx, e.g. hv-enus-ws2025-standard-core.vhdx.
+/** Matches New-Vhdx.ps1 Get-ImageNameSlug / Get-GoldImageId.
+ *  The id here IS the imageId New-Vhdx.ps1 writes into each gold's .vhdx.json sidecar
+ *  and the one Build-Vms.ps1 matches on, e.g. ws2025-standard-core.
  *  Keep the ids identical in all three places or a config exports an image nothing resolves.
  */
 const IMAGE_CATALOG = [
@@ -4799,7 +4799,7 @@ function normalizeServerIdentityRefs(s, catalogs) {
 }
 
 /* Linux golds were briefly named hv-ubuntu-2604 and so on, with the whole name as the
-   id. They now follow the Windows shape - hv-enus-ubuntu2604.vhdx, id "ubuntu2604" -
+   id. They now follow the Windows shape - id "ubuntu2604", like any other imageId -
    and without this map an old design would resolve through findImage's fallback and
    come back as a Windows Server VM, silently. A wrong image is worse than an error. */
 const LEGACY_IMAGE_IDS = {
@@ -4827,7 +4827,7 @@ const state = {
   themeId: DEFAULT_THEME_ID,
   stateModalMode: "save",
   defaults: {
-    vhdxDirectory: "vhdx",
+    goldDirectory: "golds",
     vmPath: "",
     vhdPath: "",
     availableSwitches: [],
@@ -5511,7 +5511,7 @@ function namingSuffixForServer(s) {
 
 function buildConfig() {
   const defaults = {
-    vhdxDirectory: state.defaults.vhdxDirectory || "vhdx",
+    goldDirectory: state.defaults.goldDirectory || "golds",
     vmPath: state.defaults.vmPath || "",
     vhdPath: state.defaults.vhdPath || "",
     availableSwitches: [...(state.defaults.availableSwitches || [])].filter(Boolean),
@@ -5787,7 +5787,7 @@ function buildConfig() {
 function sampleConfigDocument() {
   return {
     defaults: {
-      vhdxDirectory: "vhdx",
+      goldDirectory: "golds",
       availableSwitches: ["vExternal"],
       locale: "default",
       keyboardLayout: "default",
@@ -6014,7 +6014,7 @@ function decodeState(text) {
   if (!trimmed.startsWith(STATE_PREFIX)) throw new Error("State must start with " + STATE_PREFIX);
   const parsed = JSON.parse(decodeURIComponent(escape(atob(trimmed.slice(STATE_PREFIX.length)))));
   state.defaults = Object.assign({
-    vhdxDirectory: "vhdx",
+    goldDirectory: "golds",
     vmPath: "",
     vhdPath: "",
     availableSwitches: [],
@@ -6759,15 +6759,16 @@ function renderOverview() {
             <li><strong>Deployment target</strong> — choose Hyper-V.</li>
             <li><strong>Editions</strong> — tick every Datacenter / Standard, Desktop / Core variant you want out of this ISO.
             Each ticked box becomes its own gold file.</li>
-            <li><strong>Output folder</strong> — where the golds land, <code>vhdx\\</code> by default.</li>
+            <li><strong>Output folder</strong> — where the golds land, <code>golds\\</code> by default.</li>
             <li><strong>Locale and keyboard</strong>, then <strong>time zone</strong> — baked into the image.</li>
             <li><strong>Optional features</strong>, then <strong>disk size and type</strong>.</li>
             <li><strong>Confirm</strong> — a review screen lists everything before a single byte is written.</li>
           </ul>
-          <p>You get files such as <code>hv-enus-ws2025-datacenter-desktop.vhdx</code> &mdash; the prefix says how it will be
-          used, then the image language, then the image itself. Each has a matching <code>.vhdx.json</code> beside it recording
-          what was baked in. Bake the same image in two languages and both survive, under their own names; Build-Vms.ps1 asks
-          which one a machine should use when it finds more than one.</p>
+          <p>You get files such as <code>hv-3f9a2c1e.vhdx</code> &mdash; the prefix says how it will be used, the rest is
+          the start of the disk's SHA-256. Each has a matching <code>.vhdx.json</code> sidecar beside it saying what it is:
+          image, language, Windows build, disk size and type, region, source ISO, full hash. Every bake gets its own name, so
+          rebakes in another language, build or disk size sit side by side; Build-Vms.ps1 shows them in a picker when an
+          image has more than one, and takes the newest build when nobody is there to ask.</p>
           <p>Repeat this step only for a new edition or a fresher patch level.</p>
         `)}
 
@@ -7120,12 +7121,12 @@ function renderGeneral() {
         </select>`)}
       </div>`, "", true)}
 
-    ${gsCard("gs-paths", "storage.svg", "Paths", "Gold VHDX, VM/VHD paths, SxS source", `
+    ${gsCard("gs-paths", "storage.svg", "Paths", "Gold, VM/VHD paths, SxS source", `
       <div class="grid-2" style="align-items:start">
         ${field(fieldLabel("vm.svg", "VM path"), pathField("vmPath", d.vmPath, "blank = Hyper-V host default", `class="keep-border ${inv("d:vmPath")}"${invAria("d:vmPath")}`))}
         ${field(fieldLabel("disk.svg", "VHD path"), pathField("vhdPath", d.vhdPath, "blank = Hyper-V host default", `class="keep-border ${inv("d:vhdPath")}"${invAria("d:vhdPath")}`))}
-        ${field(fieldLabel("gold-image.svg", "Gold VHDX directory"), pathField("vhdxDirectory", d.vhdxDirectory, "", `class="keep-border ${inv("d:vhdxDirectory")}"${invAria("d:vhdxDirectory")}`) +
-          `<span class="hint">Default <code>vhdx</code> → $PSScriptRoot\\vhdx</span>`)}
+        ${field(fieldLabel("gold-image.svg", "Gold directory"), pathField("goldDirectory", d.goldDirectory, "", `class="keep-border ${inv("d:goldDirectory")}"${invAria("d:goldDirectory")}`) +
+          `<span class="hint">Default <code>golds</code> → $PSScriptRoot\\golds</span>`)}
         ${field(fieldLabel("iso-media.svg", "SxS source path (.NET 3.5)"), pathField("sxsSourcePath", d.sxsSourcePath || "", "e.g. E:\\sources\\sxs", `class="keep-border ${inv("d:sxsSourcePath")}"${invAria("d:sxsSourcePath")}`) +
           `<span class="hint">ISO <code>sources\\sxs</code> when installing NET-Framework-Core</span>`)}
       </div>
@@ -8111,11 +8112,11 @@ function renderServerCard(s) {
                   </button>
                 </div>` : ""}
               </div>
-              <span class="hint">${isCustom ? "Enter the gold filename hint on the right" : esc(img.id)}</span>`;
+              <span class="hint">${isCustom ? "Enter a gold id or file name on the right" : esc(img.id)}</span>`;
               })())}
               ${isCustomImage
-                ? field("Custom image hint", `<input data-s="${esc(s._id)}" data-k="imageHint" value="${esc(s.imageHint||"")}" placeholder="only for custom gold names" class="${inv(`s:${s._id}:imageHint`)}"${invAria(`s:${s._id}:imageHint`)}>
-                  <span class="hint">Partial or full gold filename — used instead of catalog imageId matching</span>`)
+                ? field("Custom image hint", `<input data-s="${esc(s._id)}" data-k="imageHint" value="${esc(s.imageHint||"")}" placeholder="gold id or file name" class="${inv(`s:${s._id}:imageHint`)}"${invAria(`s:${s._id}:imageHint`)}>
+                  <span class="hint">Gold id (3f9a2c1e) or partial file name — used instead of catalog imageId matching</span>`)
                 : ""}
           </div>
         </div>
@@ -9125,12 +9126,12 @@ function validate() {
   };
   lintPath(d.vmPath, "VM path", "General Settings › Paths", "d:vmPath");
   lintPath(d.vhdPath, "VHD path", "General Settings › Paths", "d:vhdPath");
-  lintPath(d.vhdxDirectory, "Gold VHDX directory", "General Settings › Paths", "d:vhdxDirectory");
+  lintPath(d.goldDirectory, "Gold directory", "General Settings › Paths", "d:goldDirectory");
   lintPath(d.sxsSourcePath, "SxS source path", "General Settings › Paths", "d:sxsSourcePath");
 
   /* --- Host paths and global defaults --- */
-  if (!String(d.vhdxDirectory || "").trim()) {
-    err("Gold VHDX directory is empty — Build-Vms.ps1 cannot find the source images.", "General Settings › Paths", "d:vhdxDirectory");
+  if (!String(d.goldDirectory || "").trim()) {
+    err("Gold directory is empty — Build-Vms.ps1 cannot find the source images.", "General Settings › Paths", "d:goldDirectory");
   }
   if (!switches.length) {
     err("No vSwitch defined — every VM needs one to attach to.", "Networks › Available vSwitches", "switches");
@@ -9554,7 +9555,7 @@ function reviewGeneralRows() {
   const nm = namingDefaults();
   const cluster = d.cluster || {};
   return kvGrid(
-    kvRow("Gold VHDX directory", d.vhdxDirectory) +
+    kvRow("Gold directory", d.goldDirectory) +
     kvRow("VM path", d.vmPath || "Hyper-V host default") +
     kvRow("VHD path", d.vhdPath || "Hyper-V host default") +
     (storagePlacementActive()
@@ -12078,7 +12079,7 @@ function buildObjectPsSnippet(kind, ref) {
       `# Image: ${img.label} (imageId ${img.id})`,
       `$Name = '${name}'`,
       `$Folder = '${folder}'  # leaf folder under $VmRoot / $VhdRoot`,
-      `$GoldPath = 'C:\\Gold\\hv-<language>-${img.id}.vhdx'  # Build-Vms.ps1 picks the language`,
+      `$GoldPath = 'C:\\golds\\hv-<id>.vhdx'  # Build-Vms.ps1 picks the gold for ${img.id} from the sidecars`,
       `$VmRoot = 'D:\\Hyper-V\\VMs'`,
       `$VhdRoot = 'D:\\Hyper-V\\VHDs'`,
       `$OsVhd = Join-Path $VhdRoot "${folder}\\disk-${shortName.replace(/-/g, "")}-c.vhdx"`,

@@ -94,7 +94,7 @@ at a drive that is already mounted.
 | Target | You get |
 |--------|---------|
 | **Hyper-V** | `hv-*.vhdx` — the input for `Build-Vms.ps1` |
-| **Azure Local** | `azl-*.vhdx` — upload as an Azure Local VM image; locale and time zone are applied at the VM's first boot so Arc provisioning can't overwrite them |
+| **Azure Local** | `golds\azl\azl-*.vhdx` — upload as an Azure Local VM image; locale and time zone are applied at the VM's first boot so Arc provisioning can't overwrite them. Its trimmed sidecar carries what the upload needs, including `azureImageName`, a ready `--name` |
 
 **Editions** — a multi-select over every index the ISO carries. Build the ones you will
 actually deploy.
@@ -177,44 +177,108 @@ gold takes a few minutes; budget up to 45 for sysprep on slower storage.
 A few things ride along without being asked. Server golds get the AVMA client key matching
 their version and edition baked in — **Datacenter** and **Standard** for 2016–2025, plus
 **Azure Edition** — so guests activate against a licensed host on their own and OOBE never
-stops at the product key screen. Every Hyper-V gold gets
-a <picture><source media="(prefers-color-scheme: dark)" srcset=".github/assets/icons/answer-file-dark.svg"><img src=".github/assets/icons/answer-file-light.svg" width="16" alt=""></picture> `.vhdx.json` sidecar recording the baked locale, keyboard, time zone
-and image language — the studio's "Default" locale reads it back later. On the **Azure Local**
+stops at the product key screen. Every gold gets
+a <picture><source media="(prefers-color-scheme: dark)" srcset=".github/assets/icons/answer-file-dark.svg"><img src=".github/assets/icons/answer-file-light.svg" width="16" alt=""></picture> `.vhdx.json` sidecar saying what it is — image, Windows build, language, baked locale,
+keyboard and time zone, disk size and type, source ISO, SHA-256 — the studio's "Default" locale
+reads it back later, and `Build-Vms.ps1` finds golds through it. On the **Azure Local**
 target the locale settings travel inside the image instead, applied once at the deployed VM's
 first boot by a payload that deletes itself afterwards.
 
 ```text
-[ run   ] Applying image index 5 from 'E:\sources\install.wim'
+[ info  ] Building 1 gold:
+[ info  ]   index 5  Windows 11 Enterprise multi-session
+[ run   ] Hashing 'enus-w11-25h2-sep2026.iso' (SHA-256)
+[ o.k.  ] SHA-256 4897d068cb4c3b0de12d62f4828e26cb6360215f97873f8642039a4eb932c21c (0:04)
+
+[ info  ] Gold 1 of 1: w11-enterprise-ms (index 5) -> 'bake-hv-7c41e09a.vhdx'
+[ run   ] Applying image index 5
 [ o.k.  ] Index 5 can become 'ServerRdsh' - continuing
-[ run   ] Starting temporary VM to run sysprep
-[ o.k.  ] VM 'sysprep-hv-enus-w11-enterprise-ms' has shut down (sysprep complete)
+[ o.k.  ] Apply phase done (1:49)
+[ run   ] Creating 'bake-hv-7c41e09a' (4 vCPU, 4 GB, offline)
+[ run   ] Starting 'bake-hv-7c41e09a' - sysprep, up to 45 min
+[ o.k.  ] Sysprep complete (1:30) - removing 'bake-hv-7c41e09a'
 [ run   ] Changing offline edition to 'ServerRdsh'
-[ run   ] Applying offline customization to 'D:\deploy\vhdx\hv-enus-w11-enterprise-ms.vhdx'
-[ info  ] Wrote gold image manifest 'D:\deploy\vhdx\hv-enus-w11-enterprise-ms.vhdx.json'
-[ o.k.  ] 1 image(s) built
+[ o.k.  ] Offline customization done (0:05)
+[ o.k.  ] SHA-256 3f9a2c1e9b4d07a1c56e2f8a90b3d4e5f60718293a4b5c6d7e8f9012a3b4c5d6 (0:08)
+[ o.k.  ] Gold 'golds\hv-3f9a2c1e.vhdx' + sidecar
+[ info  ] Runtime hv-3f9a2c1e: 4:27
+
+[ o.k.  ] Built 1 gold:
+[ o.k.  ]   hv-3f9a2c1e  w11-enterprise-ms  26100.6584  en-US  64 GB Dynamic  4:27
 ```
 
 ### <picture><source media="(prefers-color-scheme: dark)" srcset=".github/assets/icons/language-dark.png"><img src=".github/assets/icons/language-light.png" width="20" alt=""></picture> Gold names, decoded
 
-`hv-enus-ws2025-datacenter-core.vhdx` — three parts:
+`hv-3f9a2c1e.vhdx` — two parts:
 
 | Part | Means |
 |------|-------|
 | `hv` / `azl` | Built for Hyper-V / Azure Local |
-| `enus` | Image language (`en-US`) |
-| `ws2025-datacenter-core` | The image id — the same string the studio and `config.json` use |
+| `3f9a2c1e` | The gold's id: the first 8 hex digits of the finished disk's SHA-256 |
 
-Bake the same edition in two languages and both live side by side; `Build-Vms.ps1` asks which
-one to use.
+Everything else lives in the sidecar beside it:
+
+```json
+{
+  "schema": 2,
+  "id": "3f9a2c1e",
+  "sha256": "3f9a2c1e9b…",
+  "buildId": "7c41e09a",
+  "label": "",
+  "osFamily": "windows",
+  "imageId": "ws2025-datacenter-core",
+  "displayName": "Windows Server 2025 Datacenter",
+  "build": "10.0.26100.33438",
+  "language": "en-US",
+  "locale": "de-DE",
+  "keyboardLayout": "de-DE",
+  "timeZone": "W. Europe Standard Time",
+  "imageIndex": 3,
+  "editionId": "ServerDatacenterCor",
+  "evaluation": false,
+  "generalized": true,
+  "activation": "avma",
+  "requiresTpm": false,
+  "secureBootTemplate": "MicrosoftWindows",
+  "bakeOptions": { "rdp": true, "ping": true, "suppressServerManagerAtLogon": true, "edgeBaseline": false },
+  "sourceMedia": "enus-ws2025-sep2026.iso",
+  "sourceMediaSha256": "d0b1…",
+  "bakeHost": "HV-01",
+  "scriptSha256": "c7a8…",
+  "vhdType": "Dynamic",
+  "diskSizeGB": 64,
+  "createdUtc": "2026-10-03T07:52:02Z"
+}
+```
+
+An Azure Local gold goes to `golds\azl\` and gets a trimmed sidecar: what tells golds apart
+and what `az stack-hci-vm image create` and the VM create after it want — `osFamily` for
+`--os-type`, `generation`, `secureBoot`, `requiresTpm`, `generalized`, `rdp`, the region it
+applies at first boot, plus `azureImageName` (e.g. `ws2025-datacenter-core-26100-33438-en-us`)
+as a ready `--name`. Everything only `Build-Vms.ps1` reads is left out. *Show golds* and
+*Clean up golds* list them in their own group; the gold picker never offers them.
+
+A Linux sidecar has the same core with `kernel`, `updatesApplied`, `features`, `distro`,
+`family` and the cloud image's URL and checksum instead of the Windows-only fields. `label` is
+the one field meant to change after the bake: press **L** in *Show golds* to set it, and it
+shows in the gold picker beside the gold. Evaluation editions and golds built with
+`-SkipSysprep` are flagged in both places and warned about in preflight.
+
+`imageId` is the same string the studio and `config.json` use. A gold is built under a short
+working name (`bake-hv-7c41e09a.vhdx` — a random build id that also names the temporary
+VM and the bake log, and is kept as `buildId` in the sidecar) and only renamed and given its
+sidecar once it is finished, so a failed run never leaves something that looks like a gold.
+Every bake hashes differently: rebake in another language, on a newer ISO or with another disk
+size and the new gold sits beside the old one. `Build-Vms.ps1` lets you pick between them.
 
 <pre>
-<picture><source media="(prefers-color-scheme: dark)" srcset=".github/assets/icons/gold-image-dark.png"><img src=".github/assets/icons/gold-image-light.png" width="16" alt=""></picture> vhdx\
-├─ <picture><source media="(prefers-color-scheme: dark)" srcset=".github/assets/icons/storage-dark.png"><img src=".github/assets/icons/storage-light.png" width="16" alt=""></picture> hv-enus-ws2025-datacenter-desktop.vhdx
-├─ <picture><source media="(prefers-color-scheme: dark)" srcset=".github/assets/icons/files-dark.png"><img src=".github/assets/icons/files-light.png" width="16" alt=""></picture> hv-enus-ws2025-datacenter-desktop.vhdx.json
-├─ <picture><source media="(prefers-color-scheme: dark)" srcset=".github/assets/icons/storage-dark.png"><img src=".github/assets/icons/storage-light.png" width="16" alt=""></picture> hv-dede-ws2025-datacenter-desktop.vhdx
-├─ <picture><source media="(prefers-color-scheme: dark)" srcset=".github/assets/icons/files-dark.png"><img src=".github/assets/icons/files-light.png" width="16" alt=""></picture> hv-dede-ws2025-datacenter-desktop.vhdx.json
-├─ <picture><source media="(prefers-color-scheme: dark)" srcset=".github/assets/icons/storage-dark.png"><img src=".github/assets/icons/storage-light.png" width="16" alt=""></picture> hv-enus-w11-enterprise-ms.vhdx
-└─ <picture><source media="(prefers-color-scheme: dark)" srcset=".github/assets/icons/files-dark.png"><img src=".github/assets/icons/files-light.png" width="16" alt=""></picture> hv-enus-w11-enterprise-ms.vhdx.json
+<picture><source media="(prefers-color-scheme: dark)" srcset=".github/assets/icons/gold-image-dark.png"><img src=".github/assets/icons/gold-image-light.png" width="16" alt=""></picture> golds\
+├─ <picture><source media="(prefers-color-scheme: dark)" srcset=".github/assets/icons/storage-dark.png"><img src=".github/assets/icons/storage-light.png" width="16" alt=""></picture> hv-3f9a2c1e.vhdx           ws2025-datacenter-desktop, en-US, 26100.4061
+├─ <picture><source media="(prefers-color-scheme: dark)" srcset=".github/assets/icons/files-dark.png"><img src=".github/assets/icons/files-light.png" width="16" alt=""></picture> hv-3f9a2c1e.vhdx.json
+├─ <picture><source media="(prefers-color-scheme: dark)" srcset=".github/assets/icons/storage-dark.png"><img src=".github/assets/icons/storage-light.png" width="16" alt=""></picture> hv-a71b03d4.vhdx           ws2025-datacenter-desktop, de-DE, 26100.1742
+├─ <picture><source media="(prefers-color-scheme: dark)" srcset=".github/assets/icons/files-dark.png"><img src=".github/assets/icons/files-light.png" width="16" alt=""></picture> hv-a71b03d4.vhdx.json
+├─ <picture><source media="(prefers-color-scheme: dark)" srcset=".github/assets/icons/storage-dark.png"><img src=".github/assets/icons/storage-light.png" width="16" alt=""></picture> hv-0c1d2e3f.vhdx           w11-enterprise-ms, en-US, 26100.4061
+└─ <picture><source media="(prefers-color-scheme: dark)" srcset=".github/assets/icons/files-dark.png"><img src=".github/assets/icons/files-light.png" width="16" alt=""></picture> hv-0c1d2e3f.vhdx.json
 </pre>
 
 <details>
@@ -288,7 +352,10 @@ host keys — which is the Linux half of what sysprep does for Windows.
 | yay (AUR helper) | Arch only. `yay` built from the AUR (`yay-bin`), plus `git` and `base-devel` so it can build AUR packages |
 | Pac-Man progress bar and colour | Arch only. `ILoveCandy` and `Color` in `pacman.conf` — coloured output, and the download bar becomes Pac-Man eating dots |
 
-Gold names follow the Windows pattern: `hv-enus-ubuntu2604.vhdx`.
+Gold names follow the Windows pattern: `hv-<hash>.vhdx`, with a sidecar whose `imageId` is
+`ubuntu2604` and whose `build` is the distribution version (the baked kernel is recorded too).
+The rename and the sidecar happen after the bake, so a gold whose bake failed is left as a
+`bake-hv-*.vhdx` that `Build-Vms.ps1` never offers.
 
 Not everything works on every distribution, and the studio knows which — it greys out what a
 VM cannot have rather than letting the build find out:
@@ -347,7 +414,7 @@ the UI language the image shipped with.
 #### <picture><source media="(prefers-color-scheme: dark)" srcset=".github/assets/icons/storage-dark.png"><img src=".github/assets/icons/storage-light.png" width="18" alt=""></picture> Paths
 
 Where things land on the host: the **VM path** (Hyper-V config folders), the **VHD path** (the
-disks), the **gold VHDX directory** (blank means the `vhdx\` folder next to the scripts), and
+disks), the **gold directory** (blank means the `golds\` folder next to the scripts), and
 the **SxS source** for .NET 3.5. All four sit behind a pencil — repointing where every machine
 gets written should take a deliberate click, not a stray one.
 
@@ -643,9 +710,35 @@ Download <picture><source media="(prefers-color-scheme: dark)" srcset=".github/a
 .\Build-Vms.ps1
 ```
 
-Run it next to `config.json`. The menu offers **Build all VMs**, **Build selected** — a
-multi-select over the machines in the config — and **Check**, which runs the full preflight
-without touching the host. Every build runs the same preflight anyway before creating anything.
+Run it next to `config.json`. The home menu is grouped by what each entry acts on. Every row
+says what it would touch right now, so you can see from the menu when a cleanup is due:
+
+```text
+  Virtual machines
+  > Build all           every VM in servers.json (22)
+    Build selected      pick one or more
+    Check config        preflight every VM, change nothing
+
+  Gold images
+    Show golds          14 gold(s) of 9 image(s), 312.4 GiB
+    Clean up golds      2 older, 1 leftover - 61.0 GiB to reclaim
+
+    Quit
+```
+
+- **Build all** / **Build selected** — every VM, or a multi-select over them.
+- **Check config** — the full preflight for every VM without touching the host, then back home.
+  Every build runs the same preflight anyway before it creates anything.
+- **Show golds** — every file in the gold folder, grouped by image and newest first: id,
+  language, build, disk, bake date, size, status. The pane under the table shows the highlighted
+  gold's region, source ISO or kernel, hash, and which VMs use it — the ones that would build
+  from it today, and any existing VM whose disk is a differencing child of it.
+- **Clean up golds** — the same table with ticks. Pre-ticked are only what is safe and stale:
+  an older build or bake of the same image, language and disk size/type, a `bake-*.vhdx` from
+  a bake that never finished, and a sidecar whose disk is gone. A gold that an
+  existing VM is built on, or a file another process has open, is shown but cannot be ticked.
+  The confirm screen lists every file and opens on *Keep*, and each file is checked again just
+  before it is deleted.
 
 <img src=".github/assets/blades/build-vms.webp" width="860" alt="Build-Vms.ps1: menu, preflight, VMs created and started">
 
@@ -659,13 +752,21 @@ warnings don't.
 
 Two questions may come up before it runs:
 
-- <picture><source media="(prefers-color-scheme: dark)" srcset=".github/assets/icons/language-dark.svg"><img src=".github/assets/icons/language-light.svg" width="16" alt=""></picture> **Gold language** — if a gold exists in more than one language, one card
-  settles it for the whole run: build everything with one language, or pick per VM with the
-  arrow keys. VMs whose image exists in only one language are shown locked, and the card says
-  which machines an "every VM" choice does not reach.
+- <picture><source media="(prefers-color-scheme: dark)" srcset=".github/assets/icons/language-dark.svg"><img src=".github/assets/icons/language-light.svg" width="16" alt=""></picture> **Gold images** — if an image has more than one gold (another language,
+  build or disk size), one card settles it for the whole run: the newest gold of each image, one
+  language everywhere it exists, or per VM with Left/Right. Each row shows language, build, disk,
+  bake date and id; the pane under the list shows the highlighted gold's full sidecar. VMs with a
+  single gold are shown locked. Unattended, the newest build wins (`-GoldId` pins one).
+
+  ```text
+  Pick per VM                              lang   build       disk          baked       id
+    > dc-01   ws2025-datacenter-core  < en-US  26100.4061  127 GB fixed  2026-09-30  3f9a2c1e >   1 of 2
+      fs-01   ws2025-datacenter-core  < de-DE  26100.1742  60 GB dyn     2026-09-12  a71b03d4 >   2 of 2
+      lx-01   ubuntu2604                en-US  26.04       32 GB dyn     2026-09-25  0c1d2e3f     only gold
+  ```
 - <picture><source media="(prefers-color-scheme: dark)" srcset=".github/assets/icons/fod-dark.png"><img src=".github/assets/icons/fod-light.png" width="16" alt=""></picture> **Features on Demand** — see below.
 
-<!-- SCREENSHOT: gold language card -->
+<!-- SCREENSHOT: gold picker card -->
 
 ### <picture><source media="(prefers-color-scheme: dark)" srcset=".github/assets/icons/fod-dark.png"><img src=".github/assets/icons/fod-light.png" width="20" alt=""></picture> Features on Demand — RSAT and the App Compatibility pack
 
@@ -729,7 +830,7 @@ and onboards the VM itself, so the secret never enters the guest.
 <summary><b>Example run log</b> — two of four VMs, a Win11 client and a Server Core DC</summary>
 
 ```text
-2026-08-30 14:52:42 [ info  ] Server 'avd-01' -> gold 'D:\deploy\vhdx\hv-dede-w11-enterprise-ms.vhdx' (imageId=w11-enterprise-ms)
+2026-08-30 14:52:42 [ info  ] Server 'avd-01' -> gold 'D:\deploy\golds\hv-a71b03d4.vhdx' (imageId=w11-enterprise-ms)
 2026-08-30 14:52:42 [ run   ] Copying gold image to 'D:\vhd\avd-01\disk-avd01-c.vhdx'
 2026-08-30 14:52:42 [ run   ] Creating Gen2 VM 'avd-01' (8 GB / 4 CPU)
 2026-08-30 14:52:43 [ run   ] VLAN 10 set on 'avd-01'
@@ -746,7 +847,7 @@ and onboards the VM itself, so the secret never enters the guest.
 2026-08-30 14:52:44 [ info  ] Client image - Win11 OOBE skips applied
 2026-08-30 14:52:44 [ run   ] Starting VM 'avd-01'
 2026-08-30 14:52:45 [ o.k.  ] Provisioned 'avd-01' successfully
-2026-08-30 14:52:47 [ info  ] Server 'dc-01' -> gold 'D:\deploy\vhdx\hv-enus-ws2025-datacenter-core.vhdx' (imageId=ws2025-datacenter-core)
+2026-08-30 14:52:47 [ info  ] Server 'dc-01' -> gold 'D:\deploy\golds\hv-3f9a2c1e.vhdx' (imageId=ws2025-datacenter-core)
 2026-08-30 14:52:47 [ run   ] Copying gold image to 'D:\vhd\dc-01\disk-dc01-c.vhdx'
 2026-08-30 14:52:47 [ run   ] Creating Gen2 VM 'dc-01' (4 GB / 2 CPU)
 2026-08-30 14:52:48 [ run   ] VLAN 10 set on 'dc-01'
@@ -786,7 +887,8 @@ The menu is the intended way in. For a build that has become routine:
 .\Build-Vms.ps1 -CheckOnly                          # validate, change nothing
 .\Build-Vms.ps1 -BuildAll                           # everything in config.json
 .\Build-Vms.ps1 -VmName 'dc-01','app-01' -SkipStart # some VMs, left off
-.\Build-Vms.ps1 -BuildAll -GoldLanguage enus        # answer the language question up front
+.\Build-Vms.ps1 -BuildAll -GoldLanguage en-US       # prefer en-US golds where an image has several
+.\Build-Vms.ps1 -BuildAll -GoldId 3f9a2c1e          # pin that gold for VMs of its imageId
 .\Build-Vms.ps1 -BuildAll -SlowHost                 # slow storage mode
 .\Build-Vms.ps1 -BuildAll -ArcServicePrincipalPath .\arc-deploy.json
 .\Build-Vms.ps1 -ConfigPath 'D:\Lab\config.json' -BuildAll
@@ -822,7 +924,7 @@ Same menu style as `Build-Vms.ps1`.
 ├─ <picture><source media="(prefers-color-scheme: dark)" srcset=".github/assets/icons/integration-dark.png"><img src=".github/assets/icons/integration-light.png" width="16" alt=""></picture> guest-files\                first-boot payloads injected per VM
 ├─ <picture><source media="(prefers-color-scheme: dark)" srcset=".github/assets/icons/update-dark.png"><img src=".github/assets/icons/update-light.png" width="16" alt=""></picture> toolbox\                    migrate / convert / remove
 ├─ <picture><source media="(prefers-color-scheme: dark)" srcset=".github/assets/icons/iso-media-dark.png"><img src=".github/assets/icons/iso-media-light.png" width="16" alt=""></picture> media\                      your ISOs, cloud image cache
-├─ <picture><source media="(prefers-color-scheme: dark)" srcset=".github/assets/icons/gold-image-dark.png"><img src=".github/assets/icons/gold-image-light.png" width="16" alt=""></picture> vhdx\                       built golds
+├─ <picture><source media="(prefers-color-scheme: dark)" srcset=".github/assets/icons/gold-image-dark.png"><img src=".github/assets/icons/gold-image-light.png" width="16" alt=""></picture> golds\                      built golds
 └─ <picture><source media="(prefers-color-scheme: dark)" srcset=".github/assets/icons/monitor-dark.png"><img src=".github/assets/icons/monitor-light.png" width="16" alt=""></picture> logs\                       one timestamped log per run
 </pre>
 
@@ -844,8 +946,8 @@ Guest: `C:\ProgramData\VmDeployLogs\GuestProvision.log`, same format.
 | Symptom | Fix |
 |---------|-----|
 | `Config not found` | Export from the studio, save next to `Build-Vms.ps1` |
-| `No gold image for imageId=…` | Build that edition with `New-Vhdx.ps1`; check `vhdx\` |
-| `More than one gold image for imageId=…` | Interactive: pick in the language card. Unattended: `-GoldLanguage` or set the studio locale |
+| `No gold image for imageId=…` | Build that edition with `New-Vhdx.ps1`; check `golds\` and that each gold has its `.vhdx.json` |
+| Wrong gold picked unattended | Several golds for one image: the newest build wins. Pin one with `-GoldId`, or prefer a language with `-GoldLanguage` / the studio locale |
 | Linux bake log: `BAKE-PKG <name> MISSING` | The gold came out without that package — usually a mirror the bake VM could not reach. Check the bake switch and addressing, then bake again |
 | Linux bake: `The package manager failed during the bake` | apt or dnf errored, so the gold may be missing updates. The `distros[ERROR]` line above it says which step; usually a mirror the bake VM could not reach. Fix the network or pick another mirror, then bake again |
 | Linux VM `did not power off` | cloud-init is still working or failed. Log in on the Hyper-V console and read `/var/log/cloud-init-output.log`; the seed stays attached until you remove it |
@@ -856,6 +958,7 @@ Guest: `C:\ProgramData\VmDeployLogs\GuestProvision.log`, same format.
 | Anything else | The log names the step that failed — host log first, then the guest log |
 
 ```powershell
-Get-ChildItem .\vhdx -Filter 'hv-*.vhdx' | Select-Object Name, Length, LastWriteTime
+Get-ChildItem .\golds -Filter 'hv-*.vhdx.json' | ForEach-Object { Get-Content $_.FullName -Raw | ConvertFrom-Json } |
+    Format-Table id, imageId, language, build, diskSizeGB, vhdType, createdUtc
 Get-VMSwitch | Format-Table Name, SwitchType
 ```

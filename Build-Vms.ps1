@@ -1,10 +1,11 @@
 ﻿<#
 .SYNOPSIS
-    Creates Hyper-V Gen2 VMs from golden hv-*.vhdx images using config.json.
+    Creates Hyper-V Gen2 VMs from the gold images New-Vhdx.ps1 builds, using config.json.
 
 .DESCRIPTION
     Reads config.json (designed in html\hyperv-vm-studio.html), resolves gold
-    images from vhdx\ by imageId (New-Vhdx naming) or optional imageHint, creates
+    images from golds\ by imageId (read from each gold's sidecar) or optional imageHint
+    (a gold id or file name), asks which gold when an image has several, creates
     OS disks (full copy by default, or differencing), optional data disks and
     VHD Sets, injects offline unattend.xml, optionally installs Windows roles /
     RSAT offline (and, opt-in per VM on Windows 11 client images, removes a
@@ -78,8 +79,11 @@ param (
     [Parameter(HelpMessage = "Service principal secret for Arc SP auth (prefer -ArcServicePrincipalPath).")]
     [string]$ArcServicePrincipalSecret,
 
-    [Parameter(HelpMessage = "Gold image language to use when more than one is on disk, as it appears in the file name (e.g. enus, dede).")]
-    [string]$GoldLanguage
+    [Parameter(HelpMessage = "Gold image language to prefer when an image has golds in more than one (e.g. en-US, de-DE).")]
+    [string]$GoldLanguage,
+
+    [Parameter(HelpMessage = "Gold ids to use, from the sidecar or the file name (e.g. 3f9a2c1e or hv-3f9a2c1e). Each pins the gold for VMs of its imageId.")]
+    [string[]]$GoldId
 )
 
 # ---------------------------[ Script Start Timestamp ]---------------------------
@@ -121,18 +125,18 @@ $global:ProgressPreference = "SilentlyContinue"
 $logFileDirectory = Join-Path -Path $PSScriptRoot -ChildPath "logs\build-vms"
 $logFile          = Join-Path -Path $logFileDirectory -ChildPath $logFileName
 
-# ---------------------------[ Gold Image Language ]---------------------------
-# Which language wins when a gold exists in more than one. The parameter is the
-# operator's up-front answer; ForRun is the same answer given mid-run through the
-# picker, which is why it is separate - one is an instruction, the other a choice
-# made once and then honoured for the rest of the run.
+# ---------------------------[ Gold Choice ]---------------------------
+# Which gold wins when an image has more than one on disk - other languages, builds,
+# disk sizes. -GoldId and -GoldLanguage are the operator's up-front instructions; the
+# config's locale is a preference after them; the newest build is the last word.
+$script:GoldIdParameter       = @($GoldId | ForEach-Object { ([string]$_ -split ",") } |
+        ForEach-Object { $_.Trim().ToLowerInvariant() -replace "^(hv|azl)-", "" } | Where-Object { $_ })
 $script:GoldLanguageParameter = (($GoldLanguage -replace "[^A-Za-z0-9]", "")).ToLowerInvariant()
-$script:GoldLanguageForRun    = ""
-# VM name -> language, answered once up front for every image that has more than one
-# language on disk. Preflight resolves the same golds the build does, so the question has
-# to be settled before it runs - otherwise the ambiguity reads as a failure and the build
-# never reaches the point where it could ask.
-$script:GoldLanguageByServer  = @{}
+# VM name -> gold path, answered once up front in the gold picker. Preflight resolves
+# the same golds the build does, so the question is settled before it runs.
+$script:GoldByServer          = @{}
+# Server|imageId pairs whose "newest of N" choice has been logged once already.
+$script:GoldNewestLogged      = @{}
 
 # ---------------------------[ Naming Options ]---------------------------
 # Overwritten from config defaults.naming by Set-NamingOptionsFromDefaults.
@@ -242,8 +246,8 @@ function Format-LogPathsForConsole {
         matters is which file, and where it sits relative to the toolkit.
 
         A path under the script's own folder becomes the part below it - so
-        D:\Tools\HyperV-Scripts\vhdx\hv-enus-ubuntu2604.vhdx reads as
-        vhdx\hv-enus-ubuntu2604.vhdx. Anything else keeps its root and its last two
+        D:\Tools\HyperV-Scripts\golds\hv-3f9a2c1e.vhdx reads as
+        golds\hv-3f9a2c1e.vhdx. Anything else keeps its root and its last two
         segments with an ellipsis between - D:\...\Images\gold.vhdx - which is enough
         to recognise a path without spelling it out.
 
@@ -355,23 +359,31 @@ function Write-Log {
     $logMessage = "$timestamp [ $rawTag ] $Message"
 
     if ($enableLogFile) {
-        # -ErrorAction Stop is what makes the catch below a catch. Without it Add-Content
-        # reports a locked file as a NON-TERMINATING error, which walks straight past
-        # try/catch and prints the whole red block to the console - from nothing worse
-        # than somebody tailing the log in another window.
-        #
-        # A lock on a log file is transient by nature, so it is retried rather than simply
-        # swallowed: catching it alone would drop the line silently, which is a worse
-        # failure than the noise it replaced. Three attempts, briefly spaced; after that
-        # the line is lost and the run carries on, because logging must never block it.
-        for ($attempt = 1; $attempt -le 3; $attempt++) {
+        # Appended through a FileStream that shares read AND write, so a reader tailing the
+        # log never blocks it. Something else can still hold the file for a moment: on
+        # 2026-10-03 two New-Vhdx lines vanished in the second after a VHDX was dismounted,
+        # past three 120 ms retries of the Add-Content this replaced. So a line is never
+        # dropped any more - what cannot be written now waits in $script:LogPending and
+        # goes in, in order, ahead of the next line that can. Logging still never blocks
+        # the run: a few short retries, then on.
+        if ($null -eq $script:LogPending) { $script:LogPending = New-Object System.Collections.Generic.List[string] }
+        $script:LogPending.Add($logMessage)
+        for ($attempt = 1; $attempt -le 5; $attempt++) {
             try {
-                Add-Content -Path $logFile -Value $logMessage -Encoding UTF8 -ErrorAction Stop
+                $stream = [System.IO.File]::Open($logFile, [System.IO.FileMode]::Append, [System.IO.FileAccess]::Write,
+                    ([System.IO.FileShare]::ReadWrite -bor [System.IO.FileShare]::Delete))
+                try {
+                    $bytes = [System.Text.Encoding]::UTF8.GetBytes((($script:LogPending -join "`r`n") + "`r`n"))
+                    $stream.Write($bytes, 0, $bytes.Length)
+                }
+                finally {
+                    $stream.Dispose()
+                }
+                $script:LogPending.Clear()
                 break
             }
             catch {
-                if ($attempt -eq 3) { break }
-                Start-Sleep -Milliseconds 120
+                if ($attempt -lt 5) { Start-Sleep -Milliseconds 100 }
             }
         }
     }
@@ -873,19 +885,225 @@ function Select-StoragePlacementVolume {
 }
 
 function Get-HyperVGoldImages {
-    param([string]$VhdxDirectory)
+    # Every gold in the folder, read from its sidecar. New-Vhdx.ps1 names a gold after
+    # its hash (hv-3f9a2c1e.vhdx), so the name says nothing and the sidecar beside it
+    # says everything: imageId, language, build, disk. A gold is a record built from
+    # that, not a file name parsed.
+    #
+    # A .vhdx WITHOUT a schema-2 sidecar is still listed, as a custom gold: it can be
+    # picked by imageHint and nothing else, because there is nothing to match an
+    # imageId against. Working disks (bake-*.vhdx) are skipped, and
+    # so are Azure Local golds - they go to Azure Local, not to this script. Only the
+    # gold inventory passes -IncludeAzureLocal, to list golds\azl\ beside the rest.
+    param(
+        [string]$GoldDirectory,
+        [switch]$IncludeAzureLocal
+    )
 
-    if (-not (Test-Path -LiteralPath $VhdxDirectory)) {
-        throw "VHDX directory not found: $VhdxDirectory"
+    if (-not (Test-Path -LiteralPath $GoldDirectory)) {
+        throw "Gold directory not found: $GoldDirectory"
+    }
+    if ($null -eq $script:GoldWarned) { $script:GoldWarned = @{} }
+
+    $golds = @()
+    $files = @(Get-ChildItem -LiteralPath $GoldDirectory -Filter "*.vhdx" -File -ErrorAction Stop |
+            Where-Object { $_.Name -notmatch "^bake-.*\.vhdx$" })
+    foreach ($file in $files) {
+        $manifest = Get-GoldImageManifest -GoldPath $file.FullName
+        $isGold = ($null -ne $manifest -and [int]$manifest.schema -ge 2 -and
+            -not [string]::IsNullOrWhiteSpace([string]$manifest.imageId))
+        if ($isGold -and [string]$manifest.target -eq "AzureLocal" -and -not $IncludeAzureLocal) { continue }
+        if (-not $isGold -and -not $script:GoldWarned.ContainsKey($file.FullName)) {
+            $script:GoldWarned[$file.FullName] = $true
+            Write-Log "'$($file.Name)' has no gold sidecar - usable only through a custom imageHint" -Tag "Debug"
+        }
+
+        $language = if ($isGold) { [string]$manifest.language } else { "" }
+        $build = if ($isGold) { [string]$manifest.build } else { "" }
+        $created = [datetime]::MinValue
+        if ($isGold -and -not [string]::IsNullOrWhiteSpace([string]$manifest.createdUtc)) {
+            [void][datetime]::TryParse([string]$manifest.createdUtc, [System.Globalization.CultureInfo]::InvariantCulture,
+                [System.Globalization.DateTimeStyles]::AdjustToUniversal, [ref]$created)
+        }
+
+        $golds += [pscustomobject]@{
+            FullName     = $file.FullName
+            Name         = $file.Name
+            BaseName     = $file.BaseName
+            Length       = $file.Length
+            IsCustom     = (-not $isGold)
+            Id           = $(if ($isGold) { [string]$manifest.id } else { $file.BaseName })
+            ImageId      = $(if ($isGold) { ([string]$manifest.imageId).ToLowerInvariant() } else { "" })
+            OsFamily     = $(if ($isGold) { [string]$manifest.osFamily } else { "" })
+            DisplayName  = $(if ($isGold) { [string]$manifest.displayName } else { $file.Name })
+            Language     = $language
+            LanguageSlug = (($language -replace "[^A-Za-z0-9]", "")).ToLowerInvariant()
+            Build        = $build
+            BuildVersion = (ConvertTo-GoldBuildVersion -Build $build)
+            DiskSizeGB   = $(if ($isGold) { [int]$manifest.diskSizeGB } else { 0 })
+            VhdType      = $(if ($isGold) { [string]$manifest.vhdType } else { "" })
+            CreatedUtc   = $created
+            IsAzureLocal = ($isGold -and [string]$manifest.target -eq "AzureLocal")
+            Label        = $(if ($isGold) { ([string]$manifest.label).Trim() } else { "" })
+            Evaluation   = ($isGold -and [bool]$manifest.evaluation)
+            # Only an explicit false counts: a field that is missing says nothing.
+            NotGeneralized = ($isGold -and $null -ne $manifest.generalized -and -not [bool]$manifest.generalized)
+            Manifest     = $manifest
+        }
+    }
+    return $golds
+}
+
+function ConvertTo-GoldBuildVersion {
+    # A sidecar's build as something that sorts: 10.0.26100.4061 as itself, a Linux
+    # "24.04" as 24.4, a bare "13" as 13.0. Anything that is not a version at all -
+    # Arch's "rolling" - sorts below every real one and leaves the bake date to decide.
+    param([string]$Build)
+
+    $text = ([string]$Build).Trim()
+    if ($text -match "^\d+$") { $text = "$text.0" }
+    $version = $null
+    if ([version]::TryParse($text, [ref]$version)) { return $version }
+    return [version]"0.0"
+}
+
+function Get-GoldCandidates {
+    # The golds for one imageId, newest first: highest build, then the latest bake.
+    # Custom golds never appear here - they have no imageId to match.
+    param(
+        [object[]]$GoldImages,
+        [string]$ImageId
+    )
+
+    $key = ([string]$ImageId).Trim().ToLowerInvariant()
+    return @($GoldImages |
+            Where-Object { -not $_.IsCustom -and $_.ImageId -eq $key } |
+            Sort-Object -Property @{ Expression = { $_.BuildVersion }; Descending = $true },
+                                  @{ Expression = { $_.CreatedUtc }; Descending = $true })
+}
+
+function Format-GoldBuild {
+    # What the picker shows as a build. Windows drops the "10.0." every build since
+    # 2015 shares, leaving 26100.4061; Linux shows its distribution version as is.
+    param([object]$Gold)
+
+    $build = [string]$Gold.Build
+    if ([string]::IsNullOrWhiteSpace($build)) { return "?" }
+    return ($build -replace "^10\.0\.", "")
+}
+
+function Format-GoldDisk {
+    param([object]$Gold)
+
+    if ([int]$Gold.DiskSizeGB -le 0) { return "?" }
+    $type = switch ([string]$Gold.VhdType) { "Fixed" { "fixed" } "Dynamic" { "dyn" } default { [string]$Gold.VhdType } }
+    return ("{0} GB {1}" -f $Gold.DiskSizeGB, $type).Trim()
+}
+
+function Format-GoldDate {
+    param([object]$Gold)
+
+    if ($Gold.CreatedUtc -eq [datetime]::MinValue) { return "?" }
+    return $Gold.CreatedUtc.ToLocalTime().ToString("yyyy-MM-dd")
+}
+
+function Format-GoldSummary {
+    # One line naming a gold, for log lines and the review page:
+    # hv-3f9a2c1e (en-US, 26100.4061, 127 GB fixed, 2026-09-30)
+    param([object]$Gold)
+
+    if ($Gold.IsCustom) { return [string]$Gold.Name }
+    return "{0} ({1}, {2}, {3}, {4})" -f $Gold.BaseName, $Gold.Language, (Format-GoldBuild -Gold $Gold),
+        (Format-GoldDisk -Gold $Gold), (Format-GoldDate -Gold $Gold)
+}
+
+function Get-GoldDetailLines {
+    <#
+        What the gold picker and Show golds print under their table for one gold: the
+        line pairs below, as text + palette key. One builder so the two panes can never
+        drift apart. Every line is there for a gold that has the field and skipped for
+        one that does not.
+    #>
+    param([object]$Gold)
+
+    $m = $Gold.Manifest
+    $lines = @()
+    $title = "{0}  {1}" -f $Gold.Id, $Gold.DisplayName
+    if ($Gold.Label) { $title += "  - " + $Gold.Label }
+    $lines += [pscustomobject]@{ Text = $title; Key = "fg" }
+
+    $region = @("build $($Gold.Build)", "$($Gold.Language) UI")
+    if ($m.locale) { $region += "$($m.locale) format" }
+    if ($m.keyboardLayout) { $region += "$($m.keyboardLayout) keyboard" }
+    if ($m.timeZone) { $region += [string]$m.timeZone }
+    $lines += [pscustomobject]@{ Text = ($region -join ", "); Key = "muted" }
+
+    # The things that make a gold behave differently - flagged, not just listed.
+    $traits = @()
+    if ($m.editionId) { $traits += [string]$m.editionId }
+    if ($Gold.Evaluation) { $traits += "EVALUATION (180 days)" }
+    if ($Gold.NotGeneralized) { $traits += "NOT generalized" }
+    if ($m.activation -and [string]$m.activation -ne "none") { $traits += "activation $($m.activation)" }
+    if ($m.kernel) { $traits += "kernel $($m.kernel)" }
+    if ($null -ne $m.updatesApplied) { $traits += $(if ([bool]$m.updatesApplied) { "updates applied" } else { "no updates" }) }
+    if ($traits.Count -gt 0) {
+        $warn = ($Gold.Evaluation -or $Gold.NotGeneralized)
+        $lines += [pscustomobject]@{ Text = ($traits -join ", "); Key = $(if ($warn) { "warn" } else { "muted" }) }
     }
 
-    return @(Get-ChildItem -LiteralPath $VhdxDirectory -Filter "hv-*.vhdx" -File -ErrorAction Stop)
+    $baked = @()
+    if ($m.bakeOptions) {
+        foreach ($option in $m.bakeOptions.PSObject.Properties) {
+            if ([bool]$option.Value) { $baked += $option.Name }
+        }
+    }
+    if ($m.features) { $baked += @($m.features) }
+    if ($baked.Count -gt 0) { $lines += [pscustomobject]@{ Text = ("baked: " + ($baked -join ", ")); Key = "muted" } }
+
+    if ($m.azureImageName) { $lines += [pscustomobject]@{ Text = ("Azure Local image name: " + $m.azureImageName); Key = "accent" } }
+
+    $origin = @()
+    if ($m.imageIndex) { $origin += "index $($m.imageIndex)" }
+    if ($m.editionUpgrade) { $origin += "from $($m.sourceEdition)" }
+    if ($m.sourceMedia) { $origin += [string]$m.sourceMedia }
+    if ($m.bakeHost) { $origin += "baked on $($m.bakeHost)" }
+    if ($m.buildId) { $origin += "build $($m.buildId)" }
+    if ($m.sha256) { $origin += "sha256 $(([string]$m.sha256).Substring(0, 16))..." }
+    $lines += [pscustomobject]@{ Text = ($origin -join ", "); Key = "muted" }
+    return $lines
+}
+
+function Set-GoldLabel {
+    # The one field in a sidecar meant to change after the bake. Everything else in it
+    # describes the disk and stays as New-Vhdx.ps1 wrote it.
+    param(
+        [object]$Gold,
+        [string]$Label
+    )
+
+    $path = "$($Gold.FullName).json"
+    $manifest = Get-Content -LiteralPath $path -Raw -Encoding UTF8 | ConvertFrom-Json
+    $manifest | Add-Member -NotePropertyName "label" -NotePropertyValue $Label.Trim() -Force
+    [System.IO.File]::WriteAllText($path, ($manifest | ConvertTo-Json -Depth 5) + "`n", (New-Object System.Text.UTF8Encoding($false)))
+    if ($null -ne $script:GoldManifestCache) { $script:GoldManifestCache[$Gold.FullName.ToLowerInvariant()] = $manifest }
+    $Gold.Label = $Label.Trim()
+    $Gold.Manifest = $manifest
+    Write-Log "Label of '$($Gold.Name)': '$($Label.Trim())'" -Tag "Info"
+}
+
+function Get-GoldByPath {
+    param(
+        [object[]]$GoldImages,
+        [string]$GoldPath
+    )
+
+    return @($GoldImages | Where-Object { $_.FullName -eq $GoldPath }) | Select-Object -First 1
 }
 
 function Get-ImageIdMatchRules {
-    # Mirrors the studio's IMAGE_CATALOG and the imageIds New-Vhdx.ps1 bakes into gold
-    # file names (<hv|azl>-<language>-<imageId>.vhdx). The id in the file name IS the id
-    # in config.json, so resolving a gold is an exact comparison - no guessing from what
+    # Mirrors the studio's IMAGE_CATALOG and the imageIds New-Vhdx.ps1 writes into each
+    # gold's sidecar. The id in the sidecar IS the id in config.json, so resolving a
+    # gold is an exact comparison - no guessing from what
     # a name happens to contain, and no edition that can collide with another.
     $server = [ordered]@{}
     foreach ($year in 2016, 2019, 2022, 2025) {
@@ -918,7 +1136,7 @@ function Get-ImageIdMatchRules {
         "w11-enterprise"    = @{ Experience = "DesktopExperience"; Label = "Windows 11 Enterprise" }
         "w11-enterprise-n"  = @{ Experience = "DesktopExperience"; Label = "Windows 11 Enterprise N" }
         # Its own SKU, not an edition of Enterprise: same WIM name prefix, different
-        # licensing and a different id, so the two golds never share a file name.
+        # licensing and a different id, so the two golds are never confused.
         "w11-enterprise-ms" = @{ Experience = "DesktopExperience"; Label = "Windows 11 Enterprise multi-session" }
         "w11-pro"           = @{ Experience = "DesktopExperience"; Label = "Windows 11 Pro" }
         "w11-pro-n"         = @{ Experience = "DesktopExperience"; Label = "Windows 11 Pro N" }
@@ -969,28 +1187,11 @@ function Get-ImageDisplayName {
     return $label
 }
 
-function Get-GoldNameParts {
-    # <hv|azl>-<language>-<imageId>.vhdx -> the language and imageId it carries.
-    # Anything that does not have all three segments is reported as unparseable rather
-    # than half-read: a gold nobody can identify should say so, not match by accident.
-    param([string]$BaseName)
-
-    $base = ([string]$BaseName).ToLowerInvariant()
-    if ($base -notmatch "^(hv|azl)-([a-z0-9]+)-(.+)$") {
-        return $null
-    }
-    return [pscustomobject]@{
-        Prefix   = $Matches[1]
-        Language = $Matches[2]
-        ImageId  = $Matches[3]
-    }
-}
-
 function Get-LinuxGoldIds {
-    # The imageIds the studio emits for Linux, which are also the LAST segment of the
-    # gold's file name - hv-enus-ubuntu2604. Keep in step with Get-LinuxImageCatalog in
-    # New-Vhdx.ps1. Their only job here is to let a Linux id past the Windows rules
-    # table; everything after that is the ordinary three-segment lookup.
+    # The imageIds the studio emits for Linux, which are also the imageId in a Linux
+    # gold's sidecar. Keep in step with Get-LinuxImageCatalog in New-Vhdx.ps1. Their
+    # only job here is to let a Linux id past the Windows rules table; everything
+    # after that is the ordinary sidecar lookup.
     return @("ubuntu2604", "ubuntu2404", "debian13", "debian12",
              "fedora44", "fedora43", "rocky10", "rocky9", "alma10", "alma9", "oracle10",
              "oracle9", "leap16", "arch")
@@ -1005,9 +1206,9 @@ function Test-IsLinuxImageId {
 }
 
 function Get-ConfiguredLanguageSlug {
-    # defaults.locale as it appears in a gold file name: "de-DE" -> "dede". Empty when
-    # the config says "default", which means the gold decides the locale - so it cannot
-    # be the thing that picks the gold.
+    # defaults.locale flattened for comparison: "de-DE" -> "dede". Empty when the
+    # config says "default", which means the gold decides the locale - so it cannot be
+    # the thing that picks the gold.
     param([object]$Defaults)
 
     $locale = ""
@@ -1018,67 +1219,118 @@ function Get-ConfiguredLanguageSlug {
     return (($locale -replace "[^A-Za-z0-9]", "")).ToLowerInvariant()
 }
 
-function Get-LanguageTagFromSlug {
-    # "dede" -> "de-DE". The slug in a gold's file name is the locale with its hyphen
-    # flattened out, so putting it back is the whole job: two letters, a hyphen, two
-    # letters upper-cased. Anything that is not four characters is handed back as-is
-    # rather than guessed at.
-    param([string]$Slug)
+function Select-GoldByInstruction {
+    # Narrows one image's golds (newest first) by what the operator already said, in
+    # order of how explicit it was: -GoldId, -GoldLanguage, then the config's locale.
+    # The first two are instructions and fail loudly when they leave nothing; the
+    # locale is a preference and is dropped when no gold speaks it. Returns the golds
+    # still in the running, newest first.
+    param(
+        [object[]]$Candidates,
+        [string]$ImageId
+    )
 
-    $slug = ([string]$Slug).Trim().ToLowerInvariant()
-    if ($slug.Length -ne 4) { return $slug }
-    return "{0}-{1}" -f $slug.Substring(0, 2), $slug.Substring(2, 2).ToUpperInvariant()
+    $pinned = @($Candidates | Where-Object { @($script:GoldIdParameter) -contains $_.Id })
+    if ($pinned.Count -gt 0) { return @($pinned[0]) }
+
+    $remaining = @($Candidates)
+    $requested = [string]$script:GoldLanguageParameter
+    if (-not [string]::IsNullOrWhiteSpace($requested)) {
+        $remaining = @($remaining | Where-Object { $_.LanguageSlug -eq $requested })
+        if ($remaining.Count -eq 0) {
+            $langs = (($Candidates | ForEach-Object { $_.Language }) | Sort-Object -Unique) -join ", "
+            throw "-GoldLanguage '$requested' does not match any gold for imageId='$ImageId' (on disk: $langs)"
+        }
+        return $remaining
+    }
+
+    $configured = Get-ConfiguredLanguageSlug -Defaults $script:ConfigRoot.defaults
+    if (-not [string]::IsNullOrWhiteSpace($configured)) {
+        $speaking = @($remaining | Where-Object { $_.LanguageSlug -eq $configured })
+        if ($speaking.Count -gt 0) { return $speaking }
+    }
+    return $remaining
 }
 
-function Show-GoldLanguageForm {
+function Show-GoldPickerForm {
     # One card for the whole question. The rows at the top answer it for every VM at
-    # once, which is what a single-language lab wants; the rows below answer it per VM
-    # with left/right, for the lab that mixes.
+    # once; the rows below answer it per VM with left/right, which steps through that
+    # image's golds newest first. Under the list, the full sidecar of whatever the
+    # cursor is on - build, region, source, hash - because two golds of one image
+    # differ in exactly the things a single row has no room for.
     #
-    # Every VM that resolves a gold by imageId is listed, including the ones with nothing
-    # to decide: a VM whose image exists in only one language is shown locked, so the
-    # list reads as the whole build rather than the subset that happens to be ambiguous.
-    # The cursor skips those - there is nothing there to change.
+    # Every VM that resolves a gold by imageId is listed, including the ones with
+    # nothing to decide: a VM whose image has one gold is shown locked, so the list
+    # reads as the whole build rather than the subset that happens to be ambiguous.
     #
-    # Returns a map of VM name -> language slug, $null if the operator cancelled, or
-    # $script:MenuBackId for Backspace.
+    # Returns a map of VM key -> gold path, $null if cancelled, or $script:MenuBackId.
     param(
         [object[]]$Rows,
-        [string[]]$CommonLanguages,
+        [object[]]$AllRows,
         [System.Collections.IDictionary]$StatusLines,
         [switch]$AllowBack
     )
 
-    $allRows = @($CommonLanguages)
-
-    # Index space: the "every VM" rows, then one per VM, then Continue. Locked VM rows
-    # keep their index so the arithmetic stays readable - they are simply never landed on.
-    $continueIndex = $allRows.Count + $Rows.Count
-    $selectable = @(0..($allRows.Count - 1) | Where-Object { $allRows.Count -gt 0 })
+    $allCount = @($AllRows).Count
+    $continueIndex = $allCount + $Rows.Count
+    $selectable = @(0..($allCount - 1) | Where-Object { $allCount -gt 0 })
     for ($i = 0; $i -lt $Rows.Count; $i++) {
-        if (@($Rows[$i].Languages).Count -gt 1) { $selectable += ($allRows.Count + $i) }
+        if (@($Rows[$i].Golds).Count -gt 1) { $selectable += ($allCount + $i) }
     }
     $selectable += $continueIndex
     $selectable = @($selectable | Sort-Object)
     $index = $selectable[0]
 
-    if (-not (Test-MenuHostSupported)) {
-        # No cursor keys to drive the form. Ask once, in text, and apply it everywhere.
-        foreach ($language in $allRows) {
-            Write-Host ("  {0}  ({1})" -f (Get-LanguageTagFromSlug -Slug $language), $language)
-        }
-        $raw = Read-Host "Gold language for every VM (tag or slug, empty cancels$(if ($AllowBack) { ', B goes back' }))"
-        if ($AllowBack -and ([string]$raw).Trim() -match "^[Bb]$") { return $script:MenuBackId }
-        $picked = (($raw -replace "[^A-Za-z0-9]", "")).ToLowerInvariant()
-        if ([string]::IsNullOrWhiteSpace($picked)) { return $null }
+    $applyAll = {
+        param([object]$Choice)
         $map = @{}
         foreach ($row in $Rows) {
-            $map[$row.Key] = if ($row.Languages -contains $picked) { $picked } else { [string]$row.Language }
+            $golds = @($row.Golds)
+            $pick = $null
+            if ($Choice.Kind -eq "newest") { $pick = $golds[0] }
+            else { $pick = @($golds | Where-Object { $_.LanguageSlug -eq $Choice.Slug }) | Select-Object -First 1 }
+            if ($null -eq $pick) { $pick = $golds[$row.At] }
+            $map[$row.Key] = [string]$pick.FullName
         }
         return $map
     }
 
-    # Header once, list on every keypress - see the repaint helpers.
+    if (-not (Test-MenuHostSupported)) {
+        # No cursor keys to drive the form. List every row and its golds, and take gold
+        # ids typed in; a row none of them names keeps the gold shown first for it.
+        foreach ($row in $Rows) {
+            Write-Host ("  {0}  {1}" -f $row.Name, $row.ImageId)
+            foreach ($gold in @($row.Golds)) {
+                Write-Host ("      {0}" -f (Format-GoldSummary -Gold $gold))
+            }
+        }
+        $raw = Read-Host "Gold ids to use, comma separated (empty keeps the newest, Q cancels$(if ($AllowBack) { ', B goes back' }))"
+        $text = ([string]$raw).Trim()
+        if ($AllowBack -and $text -match "^[Bb]$") { return $script:MenuBackId }
+        if ($text -match "^[Qq]$") { return $null }
+        $ids = @($text -split "[,\s]+" | ForEach-Object { $_.Trim().ToLowerInvariant() } | Where-Object { $_ })
+        $map = @{}
+        foreach ($row in $Rows) {
+            $pick = @($row.Golds | Where-Object { $ids -contains $_.Id -or $ids -contains $_.BaseName }) | Select-Object -First 1
+            if ($null -eq $pick) { $pick = @($row.Golds)[$row.At] }
+            $map[$row.Key] = [string]$pick.FullName
+        }
+        return $map
+    }
+
+    # Column widths across every gold any row can show, so a row does not shift
+    # sideways as Left/Right steps through golds of different widths.
+    $width = @{ Name = 2; Image = 5; Lang = 4; Build = 5; Disk = 4 }
+    foreach ($row in $Rows) {
+        $width.Name = [math]::Max($width.Name, ([string]$row.Name).Length)
+        $width.Image = [math]::Max($width.Image, ([string]$row.ImageId).Length)
+        foreach ($gold in @($row.Golds)) {
+            $width.Lang = [math]::Max($width.Lang, ([string]$gold.Language).Length)
+            $width.Build = [math]::Max($width.Build, (Format-GoldBuild -Gold $gold).Length)
+            $width.Disk = [math]::Max($width.Disk, (Format-GoldDisk -Gold $gold).Length)
+        }
+    }
+
     $anchor = $null
     $windowTop = $null
 
@@ -1095,74 +1347,63 @@ function Show-GoldLanguageForm {
         }
 
         if (-not $repainted) {
-            Show-MenuHeader -Title "Choose the gold image language" -StatusLines $StatusLines
-            Write-Studio -Text "  Gold language" -Key "fg"
-            Write-Studio -Text "  More than one language is on disk for these images" -Key "muted"
+            Show-MenuHeader -Title "Choose the gold images" -StatusLines $StatusLines
+            Write-Studio -Text "  Gold images" -Key "fg"
+            Write-Studio -Text "  More than one gold on disk for these images" -Key "muted"
             Write-Host ""
             $anchor = Get-MenuCursorAnchor
         }
 
         $cursor = 0
 
-        if ($allRows.Count -gt 0) {
+        if ($allCount -gt 0) {
             Write-Studio -Text "  Every VM" -Key "accent"
             Write-Host ""
-            foreach ($language in $allRows) {
-                $label = "Build all VMs with {0}" -f (Get-LanguageTagFromSlug -Slug $language)
+            foreach ($choice in $AllRows) {
                 if ($cursor -eq $index) {
                     Write-Studio -Text "    > " -Key "accent" -NoNewline
-                    Write-Studio -Text $label -Key "fg"
+                    Write-Studio -Text $choice.Label -Key "fg"
                 }
                 else {
                     Write-Host "      " -NoNewline
-                    Write-Studio -Text $label -Key "muted"
+                    Write-Studio -Text $choice.Label -Key "muted"
                 }
                 $cursor++
             }
             Write-Host ""
         }
 
+        # Column heads line up with the values: 6 for the caret, the name and image
+        # columns, then "< " before the gold's own columns.
+        $head = ("      {0}   {1}   " -f "".PadRight($width.Name), "".PadRight($width.Image)) +
+            ("  {0}  {1}  {2}  {3}  {4}" -f "lang".PadRight($width.Lang), "build".PadRight($width.Build),
+                "disk".PadRight($width.Disk), "baked".PadRight(10), "id")
         Write-Studio -Text "  Pick per VM" -Key "accent"
-        Write-Host ""
-        $nameWidth = 1
+        Write-Studio -Text $head -Key "muted"
         foreach ($row in $Rows) {
-            $len = ([string]$row.Name).Length
-            if ($len -gt $nameWidth) { $nameWidth = $len }
-        }
-        foreach ($row in $Rows) {
-            $tag = Get-LanguageTagFromSlug -Slug $row.Language
-            $locked = (@($row.Languages).Count -le 1)
+            $golds = @($row.Golds)
+            $gold = $golds[$row.At]
+            $locked = ($golds.Count -le 1)
             $arrows = if ($locked) { @(" ", " ") } else { @("<", ">") }
-            # Palette keys, not ConsoleColor names. "DarkGray" and "Gray" are not in
-            # the table, so Write-Studio fell back to `fg` for both and a locked row -
-            # one with a single gold on disk, which the arrows cannot move - was drawn
-            # exactly as brightly as a row you can actually change.
             $rowColor = if ($locked) { "muted" } else { "fg" }
 
-            # The arrows are a control, like the cursor, so they carry the cursor's colour
-            # rather than the row's - the language between them is the value.
-            if ($cursor -eq $index) {
-                Write-Studio -Text "    > " -Key "accent" -NoNewline
-                # The row under the cursor is already marked by the accent caret, so
-                # the tag only needs full foreground - and a locked row stays muted
-                # even under the cursor, because it still cannot be changed.
-                $tagColor = if ($locked) { "muted" } else { "fg" }
-            }
-            else {
-                Write-Host "      " -NoNewline
-                $tagColor = $rowColor
-            }
+            if ($cursor -eq $index) { Write-Studio -Text "    > " -Key "accent" -NoNewline }
+            else { Write-Host "      " -NoNewline }
+            Write-Studio -Text ("{0}   " -f ([string]$row.Name).PadRight($width.Name)) -Key $rowColor -NoNewline
+            Write-Studio -Text ("{0}   " -f ([string]$row.ImageId).PadRight($width.Image)) -Key "muted" -NoNewline
+            # The arrows are a control, like the caret, so they carry its colour; the
+            # gold between them is the value.
             Write-Studio -Text $arrows[0] -Key "accent" -NoNewline
-            Write-Studio -Text (" {0,-5} " -f $tag) -Key $tagColor -NoNewline
+            Write-Studio -Text (" {0}  {1}  {2}  {3}  {4} " -f ([string]$gold.Language).PadRight($width.Lang),
+                    (Format-GoldBuild -Gold $gold).PadRight($width.Build), (Format-GoldDisk -Gold $gold).PadRight($width.Disk),
+                    (Format-GoldDate -Gold $gold).PadRight(10), $gold.Id) -Key $rowColor -NoNewline
             Write-Studio -Text $arrows[1] -Key "accent" -NoNewline
-            Write-Studio -Text ("   {0}" -f ([string]$row.Name).PadRight($nameWidth)) -Key $rowColor -NoNewline
-            Write-Studio -Text ("   {0}" -f [string]$row.ImageId) -Key "muted" -NoNewline
-            if ($locked) {
-                Write-Studio -Text "   only gold on disk" -Key "muted"
-            }
-            else {
-                Write-Host ""
-            }
+            $flags = ""
+            if ($gold.Evaluation) { $flags += "  eval" }
+            if ($gold.NotGeneralized) { $flags += "  not generalized" }
+            if ($gold.Label) { $flags += "  " + $gold.Label }
+            if ($locked) { Write-Studio -Text ("   only gold" + $flags) -Key "muted" }
+            else { Write-Studio -Text ("   {0} of {1}{2}" -f ($row.At + 1), $golds.Count, $flags) -Key "muted" }
             $cursor++
         }
 
@@ -1176,21 +1417,27 @@ function Show-GoldLanguageForm {
             Write-Studio -Text "Continue" -Key "muted"
         }
 
-        # What the highlighted row would actually do. On an "every VM" row that is worth
-        # spelling out: it does not reach a VM whose image has no gold in that language,
-        # and those keep the one they have.
+        # The detail pane: what the highlighted row would actually do.
         Write-Host ""
-        if ($index -lt $allRows.Count) {
-            $language = [string]$allRows[$index]
-            $tag = Get-LanguageTagFromSlug -Slug $language
-            $covered = @($Rows | Where-Object { $_.Languages -contains $language })
-            $kept = @($Rows | Where-Object { -not ($_.Languages -contains $language) })
-            Write-Studio -Text ("  {0} applies to {1}" -f $tag, (($covered | ForEach-Object { $_.Name }) -join ", ")) -Key "muted"
-            if ($kept.Count -gt 0) {
-                $keptText = (($kept | ForEach-Object {
-                            "{0} stays {1}" -f $_.Name, (Get-LanguageTagFromSlug -Slug $_.Language)
-                        }) -join ", ")
-                Write-Studio -Text ("  No {0} gold for the rest - {1}" -f $tag, $keptText) -Key "muted"
+        if ($index -lt $allCount) {
+            # An "every VM" row does not reach a VM whose image has no gold in that
+            # language; those keep the gold their row shows, and the pane says so.
+            $choice = $AllRows[$index]
+            $preview = & $applyAll $choice
+            foreach ($row in $Rows) {
+                $gold = Get-GoldByPath -GoldImages @($row.Golds) -GoldPath $preview[$row.Key]
+                $note = ""
+                if ($choice.Kind -eq "language" -and $gold.LanguageSlug -ne $choice.Slug) { $note = "   (no $($choice.Tag) gold - kept)" }
+                Write-Studio -Text ("  {0}  {1}{2}" -f ([string]$row.Name).PadRight($width.Name), (Format-GoldSummary -Gold $gold), $note) -Key "muted"
+            }
+        }
+        elseif ($index -lt $continueIndex) {
+            $row = $Rows[$index - $allCount]
+            $first = $true
+            foreach ($line in @(Get-GoldDetailLines -Gold @($row.Golds)[$row.At])) {
+                $indent = if ($first) { "  " } else { "            " }
+                Write-Studio -Text ($indent + $line.Text) -Key $line.Key
+                $first = $false
             }
         }
 
@@ -1200,8 +1447,7 @@ function Show-GoldLanguageForm {
         # Read when the frame is COMPLETE, never half way through it. A frame taller
         # than the window scrolls as its last lines are written, so a top measured
         # before the list was drawn always disagrees with the one measured after - and
-        # the guard then declared a scroll on every keypress and redrew the whole
-        # screen, which is the flicker coming back on exactly the tall blades.
+        # the guard then declared a scroll on every keypress and redrew the whole screen.
         $windowTop = Get-MenuWindowTop
         $key = $Host.UI.RawUI.ReadKey("NoEcho,IncludeKeyDown")
         $virtualKey = [int]$key.VirtualKeyCode
@@ -1220,39 +1466,24 @@ function Show-GoldLanguageForm {
             continue
         }
         if ($virtualKey -eq 37 -or $virtualKey -eq 39) {
-            $rowIndex = $index - $allRows.Count
+            $rowIndex = $index - $allCount
             if ($rowIndex -ge 0 -and $rowIndex -lt $Rows.Count) {
                 $row = $Rows[$rowIndex]
-                $languages = @($row.Languages)
-                if ($languages.Count -gt 1) {
-                    $at = [Array]::IndexOf($languages, [string]$row.Language)
-                    if ($at -lt 0) { $at = 0 }
-                    if ($virtualKey -eq 37) {
-                        $at = if ($at -le 0) { $languages.Count - 1 } else { $at - 1 }
-                    }
-                    else {
-                        $at = if ($at -ge ($languages.Count - 1)) { 0 } else { $at + 1 }
-                    }
-                    $row.Language = $languages[$at]
+                $count = @($row.Golds).Count
+                if ($count -gt 1) {
+                    if ($virtualKey -eq 37) { $row.At = if ($row.At -le 0) { $count - 1 } else { $row.At - 1 } }
+                    else { $row.At = if ($row.At -ge ($count - 1)) { 0 } else { $row.At + 1 } }
                 }
             }
             continue
         }
         if ($virtualKey -eq 13) {
-            $map = @{}
-            if ($index -lt $allRows.Count) {
-                # An "every VM" row answers for all of them. A VM whose image does not
-                # have that language keeps whatever its own row shows - leaving it
-                # unanswered would only push the question to preflight, which is the
-                # thing this form exists to prevent.
-                $language = [string]$allRows[$index]
-                foreach ($row in $Rows) {
-                    $map[$row.Key] = if ($row.Languages -contains $language) { $language } else { [string]$row.Language }
-                }
-                return $map
+            if ($index -lt $allCount) {
+                return (& $applyAll $AllRows[$index])
             }
+            $map = @{}
             foreach ($row in $Rows) {
-                $map[$row.Key] = [string]$row.Language
+                $map[$row.Key] = [string]@($row.Golds)[$row.At].FullName
             }
             return $map
         }
@@ -1265,61 +1496,14 @@ function Show-GoldLanguageForm {
     }
 }
 
-function Show-GoldLanguagePicker {
-    # Two golds of the same image in different languages is a question only the operator
-    # can answer, and only at build time - the studio cannot see this host's disk. Offer
-    # the choice per VM, plus "use it for the rest of this run" for the common case where
-    # the whole lab is one language.
-    param(
-        [object[]]$Candidates,
-        [string]$ImageId,
-        [string]$ServerName
-    )
-
-    $items = @()
-    foreach ($candidate in $Candidates) {
-        $parts = Get-GoldNameParts -BaseName $candidate.BaseName
-        $items += [PSCustomObject]@{
-            Id    = "one:$($candidate.FullName)"
-            Label = "{0}  ({1})" -f $candidate.Name, $parts.Language
-        }
-    }
-    foreach ($candidate in $Candidates) {
-        $parts = Get-GoldNameParts -BaseName $candidate.BaseName
-        $items += [PSCustomObject]@{
-            Id    = "all:$($parts.Language)"
-            Label = "Use '{0}' for every remaining VM this run" -f $parts.Language
-        }
-    }
-
-    $choice = Show-Menu -Title "Choose a gold image" `
-        -Heading "Gold image" -HeadingHint "More than one language is on disk for this image" `
-        -Items $items `
-        -StatusLines ([ordered]@{ vm = $ServerName; image = $ImageId })
-
-    if ([string]::IsNullOrWhiteSpace($choice)) {
-        throw "No gold image chosen for imageId='$ImageId'"
-    }
-    if ($choice.StartsWith("all:")) {
-        $script:GoldLanguageForRun = $choice.Substring(4)
-        Write-Log "Gold language '$($script:GoldLanguageForRun)' for the rest of this run" -Tag "Info"
-        $picked = @($Candidates | Where-Object {
-                (Get-GoldNameParts -BaseName $_.BaseName).Language -eq $script:GoldLanguageForRun
-            })
-        return $picked[0].FullName
-    }
-    return $choice.Substring(4)
-}
-
-function Resolve-GoldLanguagePlan {
-    # Asked once, before preflight, for every VM whose image exists in more than one
-    # language on disk. Same shape as Resolve-FodPlans: an interactive run settles it up
-    # front, an unattended one stays silent and lets preflight report the ambiguity as
-    # the error it is there.
+function Resolve-GoldPlan {
+    # Asked once, before preflight, for every VM whose image has more than one gold
+    # left after -GoldId, -GoldLanguage and the config's locale have had their say.
+    # Same shape as Resolve-FodPlans: an interactive run settles it up front, an
+    # unattended one stays silent and Resolve-GoldVhdxPath takes the newest.
     #
     # It has to happen before preflight rather than during the build, because preflight
-    # resolves the same golds - left to the build, the ambiguity fails preflight and the
-    # build never reaches the point where it could ask.
+    # resolves the same golds - and has to see the same answer the build will use.
     #
     # Returns "asked", "none" (nothing to ask), $null (cancelled) or $script:MenuBackId.
     param(
@@ -1330,78 +1514,70 @@ function Resolve-GoldLanguagePlan {
     )
 
     if (-not $Interactive) { return "none" }
-    if (-not [string]::IsNullOrWhiteSpace([string]$script:GoldLanguageParameter)) { return "none" }
 
-    $configured = Get-ConfiguredLanguageSlug -Defaults $script:ConfigRoot.defaults
     $rows = @()
-
     foreach ($server in $Servers) {
         $imageId = ([string]$server.imageId).ToLowerInvariant().Trim()
         $name = ([string]$server.name).Trim()
         if ([string]::IsNullOrWhiteSpace($imageId) -or [string]::IsNullOrWhiteSpace($name)) { continue }
-        # A hand-picked file name answers the question by itself.
+        # A hand-picked gold answers the question by itself.
         if (-not [string]::IsNullOrWhiteSpace([string]$server.imageHint)) { continue }
 
-        $candidates = @($GoldImages | Where-Object {
-                $parts = Get-GoldNameParts -BaseName $_.BaseName
-                $null -ne $parts -and $parts.ImageId -eq $imageId
-            })
+        $candidates = @(Get-GoldCandidates -GoldImages $GoldImages -ImageId $imageId)
         # No gold at all is preflight's error to report, not a row with nothing to pick.
         if ($candidates.Count -eq 0) { continue }
-
-        $languages = @(($candidates | ForEach-Object { (Get-GoldNameParts -BaseName $_.BaseName).Language }) | Sort-Object -Unique)
+        try { $golds = @(Select-GoldByInstruction -Candidates $candidates -ImageId $imageId) }
+        catch { continue }   # a -GoldLanguage nothing matches is preflight's to report too
 
         # An earlier answer wins - the form reached again through Back opens on it.
-        $earlier = [string]$script:GoldLanguageByServer[$name.ToLowerInvariant()]
-        $default = if (-not [string]::IsNullOrWhiteSpace($earlier) -and $languages -contains $earlier) {
-            $earlier
-        }
-        elseif (-not [string]::IsNullOrWhiteSpace($configured) -and $languages -contains $configured) {
-            $configured
-        }
-        else {
-            $languages[0]
+        $key = $name.ToLowerInvariant()
+        $at = 0
+        $earlier = [string]$script:GoldByServer[$key]
+        if (-not [string]::IsNullOrWhiteSpace($earlier)) {
+            for ($i = 0; $i -lt $golds.Count; $i++) {
+                if ($golds[$i].FullName -eq $earlier) { $at = $i }
+            }
         }
 
-        # Every VM that resolves by imageId gets a row, including the ones with a single
-        # gold. Those are shown locked: the list is then the whole build, and an "every
-        # VM" choice can say honestly which VMs it does not reach.
-        $rows += [PSCustomObject]@{
-            Key       = $name.ToLowerInvariant()
-            Name      = $name
-            ImageId   = $imageId
-            Languages = $languages
-            Language  = $default
+        $rows += [pscustomobject]@{
+            Key     = $key
+            Name    = $name
+            ImageId = $imageId
+            Golds   = $golds
+            At      = $at
         }
     }
 
-    # Nothing to ask unless at least one VM has a real choice that nothing has answered.
-    # A config locale that lands on exactly one gold is an answer.
-    $open = @($rows | Where-Object {
-            @($_.Languages).Count -gt 1 -and
-            -not (-not [string]::IsNullOrWhiteSpace($configured) -and
-                @($_.Languages | Where-Object { $_ -eq $configured }).Count -eq 1)
-        })
+    $open = @($rows | Where-Object { @($_.Golds).Count -gt 1 })
     if ($open.Count -eq 0) { return "none" }
 
-    # "Build all VMs with X" is offered for any language at least one open row can take.
-    # A locked row cannot follow it, which is what the coverage line under the list says.
-    $common = @((($open | ForEach-Object { $_.Languages }) | Sort-Object -Unique))
+    # "Every VM" choices: the newest of each image, and each language at least one open
+    # row could take. A row without that language keeps its own, as the pane says.
+    $allRows = @([pscustomobject]@{ Kind = "newest"; Slug = ""; Tag = ""; Label = "Newest gold of each image" })
+    $languages = @($open | ForEach-Object { @($_.Golds) } | Group-Object -Property LanguageSlug |
+            Sort-Object -Property Name)
+    if ($languages.Count -gt 1) {
+        foreach ($group in $languages) {
+            $tag = [string]$group.Group[0].Language
+            $allRows += [pscustomobject]@{ Kind = "language"; Slug = $group.Name; Tag = $tag; Label = "$tag where available" }
+        }
+    }
 
-    $result = Show-GoldLanguageForm -Rows $rows -CommonLanguages $common -AllowBack:$AllowBack -StatusLines ([ordered]@{
-            vms       = "$($rows.Count) need a language"
-            languages = ((($rows | ForEach-Object { $_.Languages }) | Sort-Object -Unique) -join ", ")
+    $result = Show-GoldPickerForm -Rows $rows -AllRows $allRows -AllowBack:$AllowBack -StatusLines ([ordered]@{
+            vms   = "$($open.Count) of $($rows.Count) have a choice"
+            golds = "$(@($rows | ForEach-Object { @($_.Golds) } | Sort-Object -Property FullName -Unique).Count) on disk for them"
         })
 
     if (-not (Test-BladeAnswer -Value $result)) { return $result }
 
     foreach ($key in @($result.Keys)) {
-        $script:GoldLanguageByServer[[string]$key] = [string]$result[$key]
+        $script:GoldByServer[[string]$key] = [string]$result[$key]
     }
-    $summary = ($rows | Where-Object { $script:GoldLanguageByServer.ContainsKey($_.Key) } | ForEach-Object {
-            "{0}={1}" -f $_.Name, (Get-LanguageTagFromSlug -Slug $script:GoldLanguageByServer[$_.Key])
+    $summary = ($rows | ForEach-Object {
+            $gold = Get-GoldByPath -GoldImages @($_.Golds) -GoldPath $script:GoldByServer[$_.Key]
+            "{0}={1}" -f $_.Name, $gold.BaseName
         }) -join ", "
-    Write-Log "Gold language chosen: $summary" -Tag "Info"
+    Write-Log "Golds chosen: $summary" -Tag "Info"
     return "asked"
 }
 
@@ -1411,26 +1587,26 @@ function Resolve-GoldVhdxPath {
         [string]$ImageId,
         [string]$ImageHint,
         [string]$ServerName,
-        # Only the build path may ask. Preflight and the review page resolve the same way
-        # but must never block on a prompt - they report the ambiguity instead.
-        [switch]$AllowPrompt
+        # No log lines - the gold inventory asks for every VM just to know what it would get.
+        [switch]$Quiet
     )
 
     if (-not $GoldImages -or $GoldImages.Count -eq 0) {
-        throw "No hv-*.vhdx files found in the vhdx folder"
+        throw "No golds found in the golds folder"
     }
 
-    $candidates = @($GoldImages)
     if (-not [string]::IsNullOrWhiteSpace($ImageHint)) {
-        # A hand-picked image is matched on the file name as typed, exactly as before -
-        # the operator named a file, so nothing here second-guesses which one they meant.
+        # A hand-picked gold: its id exactly, else the file name containing what was
+        # typed. Custom disks without a sidecar are only reachable this way.
         $hint = $ImageHint.ToLowerInvariant().Trim()
-        $candidates = @($candidates | Where-Object { $_.BaseName.ToLowerInvariant().Contains($hint) })
+        $candidates = @($GoldImages | Where-Object { $_.Id -eq $hint })
+        if ($candidates.Count -eq 0) {
+            $candidates = @($GoldImages | Where-Object { $_.Name.ToLowerInvariant().Contains($hint) })
+        }
         if ($candidates.Count -eq 0) {
             throw "No gold image matched custom imageHint='$ImageHint'"
         }
-        if ($candidates.Count -gt 1) {
-            $names = ($candidates | ForEach-Object { $_.Name }) -join ', '
+        if ($candidates.Count -gt 1 -and -not $Quiet) {
             Write-Log "imageHint '$ImageHint' -> $($candidates[0].Name)" -Tag "Info"
         }
         return $candidates[0].FullName
@@ -1441,11 +1617,6 @@ function Resolve-GoldVhdxPath {
     }
 
     $key = $ImageId.ToLowerInvariant().Trim()
-
-    # A Linux gold is hv-enus-ubuntu2604.vhdx - the same three segments a Windows gold
-    # has, so Get-GoldNameParts reads it correctly and everything below works unchanged.
-    # The only thing these ids need is a pass through the Windows rules table, which
-    # only knows about Windows editions.
     if (-not (Test-IsLinuxImageId -ImageId $key)) {
         $rules = Get-ImageIdMatchRules
         if (-not $rules.Contains($key)) {
@@ -1453,75 +1624,529 @@ function Resolve-GoldVhdxPath {
         }
     }
 
-    $candidates = @($GoldImages | Where-Object {
-            $parts = Get-GoldNameParts -BaseName $_.BaseName
-            $null -ne $parts -and $parts.ImageId -eq $key
-        })
+    $candidates = @(Get-GoldCandidates -GoldImages $GoldImages -ImageId $key)
     if ($candidates.Count -eq 0) {
-        throw "No gold image for imageId='$ImageId' (expected hv-<language>-$key.vhdx in the vhdx folder)"
+        throw "No gold image for imageId='$ImageId' in the golds folder (build one with New-Vhdx.ps1)"
     }
     if ($candidates.Count -eq 1) {
         return $candidates[0].FullName
     }
 
-    # More than one language of the same image. Narrow, in order of how explicit the
-    # instruction was, and only ask when nothing has already answered it.
+    # The answer the picker recorded for this VM wins over everything but -GoldId,
+    # which the picker already honoured when it built the row.
     $serverKey = ([string]$ServerName).Trim().ToLowerInvariant()
-    if (-not [string]::IsNullOrWhiteSpace($serverKey) -and $script:GoldLanguageByServer.ContainsKey($serverKey)) {
-        $chosen = [string]$script:GoldLanguageByServer[$serverKey]
-        $picked = @($candidates | Where-Object { (Get-GoldNameParts -BaseName $_.BaseName).Language -eq $chosen })
-        if ($picked.Count -gt 0) {
-            return $picked[0].FullName
+    if (-not [string]::IsNullOrWhiteSpace($serverKey) -and $script:GoldByServer.ContainsKey($serverKey)) {
+        $chosen = [string]$script:GoldByServer[$serverKey]
+        $picked = @($candidates | Where-Object { $_.FullName -eq $chosen })
+        if ($picked.Count -gt 0) { return $picked[0].FullName }
+    }
+
+    # Unattended, or nothing asked: the newest of what the instructions leave.
+    $remaining = @(Select-GoldByInstruction -Candidates $candidates -ImageId $key)
+    $newest = $remaining[0]
+    if ($remaining.Count -gt 1 -and -not $Quiet -and -not $script:GoldNewestLogged.ContainsKey("$serverKey|$key")) {
+        $script:GoldNewestLogged["$serverKey|$key"] = $true
+        Write-Log "'$ServerName' -> newest of $($remaining.Count) golds for ${key}: $(Format-GoldSummary -Gold $newest)" -Tag "Info"
+    }
+    return $newest.FullName
+}
+
+function Test-FileOpenElsewhere {
+    # True when another process holds the file - a bake writing its bake-*.vhdx, or a
+    # running VM reading its parent. An exclusive open that fails says so for any
+    # holder at all, which no list of VMs can.
+    param([string]$Path)
+
+    try {
+        $stream = [System.IO.File]::Open($Path, [System.IO.FileMode]::Open,
+            [System.IO.FileAccess]::ReadWrite, [System.IO.FileShare]::None)
+        $stream.Dispose()
+        return $false
+    }
+    catch {
+        return $true
+    }
+}
+
+function Get-GoldParentUsage {
+    # Gold path (lower case) -> names of the VMs whose disks are built on it. Walks every
+    # VM disk's differencing chain to its root, checkpoints included, so a gold under a
+    # VM with snapshots is still found. A full copy has no parent and never shows up -
+    # the gold can go without it noticing.
+    $usage = @{}
+    $vms = @()
+    try { $vms = @(Get-VM -ErrorAction Stop) }
+    catch { return $usage }
+
+    foreach ($vm in $vms) {
+        foreach ($drive in @(Get-VMHardDiskDrive -VM $vm -ErrorAction SilentlyContinue)) {
+            $path = [string]$drive.Path
+            for ($depth = 0; $depth -lt 32 -and -not [string]::IsNullOrWhiteSpace($path); $depth++) {
+                $vhd = $null
+                try { $vhd = Get-VHD -Path $path -ErrorAction Stop }
+                catch { break }
+                $parent = [string]$vhd.ParentPath
+                if ([string]::IsNullOrWhiteSpace($parent)) { break }
+                $key = $parent.ToLowerInvariant()
+                if (-not $usage.ContainsKey($key)) { $usage[$key] = @() }
+                if ($usage[$key] -notcontains $vm.Name) { $usage[$key] += $vm.Name }
+                $path = $parent
+            }
+        }
+    }
+    return $usage
+}
+
+function Get-GoldInventory {
+    <#
+        Everything in the gold folders, judged: which golds are the newest of their kind,
+        which are older and could go, which the host still builds on, and which files are
+        leftovers of a bake that never finished. Show golds and Clean up golds both read it.
+
+        "Of their kind" is imageId + language + disk size + disk type. Two golds that differ
+        in any of those are both wanted - a 60 GB and a 127 GB Server gold are a choice,
+        not a duplicate - so only an older build or bake of the SAME kind is suggested
+        for removal.
+
+        Picks are what each config's VMs would build from today, unattended.
+    #>
+    param(
+        [string[]]$GoldDirectories,
+        [object[]]$Sources,
+        [string]$FallbackGoldDirectory
+    )
+
+    $parents = Get-GoldParentUsage
+    $entries = @()
+
+    # What each VM in each config would get today - from its own config's gold folder.
+    $pickedBy = @{}
+    foreach ($source in @($Sources)) {
+        $dir = $FallbackGoldDirectory
+        if ($null -ne $source -and $null -ne $source.Defaults -and -not [string]::IsNullOrWhiteSpace([string]$source.Defaults.goldDirectory)) {
+            $dir = Resolve-ConfiguredHostPath -ConfiguredPath ([string]$source.Defaults.goldDirectory) `
+                -PromptLabel "Gold directory" -ExampleHint "golds" -DefaultWhenEmpty "golds"
+        }
+        $golds = @()
+        try { $golds = @(Get-HyperVGoldImages -GoldDirectory $dir) } catch { continue }
+        foreach ($server in @($source.Servers)) {
+            try {
+                $path = Resolve-GoldVhdxPath -GoldImages $golds -ImageId ([string]$server.imageId) `
+                    -ImageHint ([string]$server.imageHint) -ServerName ([string]$server.name) -Quiet
+            }
+            catch { continue }
+            $key = $path.ToLowerInvariant()
+            if (-not $pickedBy.ContainsKey($key)) { $pickedBy[$key] = @() }
+            $pickedBy[$key] += [string]$server.name
         }
     }
 
-    $forRun = [string]$script:GoldLanguageForRun
-    if (-not [string]::IsNullOrWhiteSpace($forRun)) {
-        $picked = @($candidates | Where-Object { (Get-GoldNameParts -BaseName $_.BaseName).Language -eq $forRun })
-        if ($picked.Count -gt 0) {
-            return $picked[0].FullName
+    # Each gold folder, and its azl\ subfolder for Azure Local golds: those are never
+    # offered to a VM here, but they pile up from rebakes the same way and want the
+    # same view and the same cleanup.
+    $folders = @()
+    foreach ($dir in @($GoldDirectories | Sort-Object -Unique)) {
+        $folders += [pscustomobject]@{ Path = $dir; Azl = $false }
+        $folders += [pscustomobject]@{ Path = (Join-Path -Path $dir -ChildPath "azl"); Azl = $true }
+    }
+    foreach ($folder in $folders) {
+        $dir = $folder.Path
+        if (-not (Test-Path -LiteralPath $dir)) { continue }
+        $golds = @(Get-HyperVGoldImages -GoldDirectory $dir -IncludeAzureLocal:$folder.Azl)
+
+        # Newest of each kind, by the same order the picker uses.
+        $newest = @{}
+        foreach ($group in @($golds | Where-Object { -not $_.IsCustom } |
+                    Group-Object -Property { "{0}|{1}|{2}|{3}" -f $_.ImageId, $_.LanguageSlug, $_.DiskSizeGB, $_.VhdType })) {
+            $top = @($group.Group | Sort-Object -Property @{ Expression = { $_.BuildVersion }; Descending = $true },
+                @{ Expression = { $_.CreatedUtc }; Descending = $true })[0]
+            $newest[$top.FullName] = $true
         }
-        throw "Gold language '$forRun' was chosen for this run but no $forRun gold exists for imageId='$ImageId'"
-    }
 
-    $requested = [string]$script:GoldLanguageParameter
-    if (-not [string]::IsNullOrWhiteSpace($requested)) {
-        $picked = @($candidates | Where-Object { (Get-GoldNameParts -BaseName $_.BaseName).Language -eq $requested })
-        if ($picked.Count -eq 0) {
-            $langs = (($candidates | ForEach-Object { (Get-GoldNameParts -BaseName $_.BaseName).Language }) | Sort-Object -Unique) -join ', '
-            throw "-GoldLanguage '$requested' does not match any gold for imageId='$ImageId' (on disk: $langs)"
+        foreach ($gold in $golds) {
+            $key = $gold.FullName.ToLowerInvariant()
+            $usedBy = if ($parents.ContainsKey($key)) { @($parents[$key]) } else { @() }
+            $locked = ""
+            if ($usedBy.Count -gt 0) { $locked = "parent of " + ($usedBy -join ", ") }
+            elseif (Test-FileOpenElsewhere -Path $gold.FullName) { $locked = "open in another process" }
+
+            $kind = if ($gold.IsCustom) { "custom" } elseif ($newest.ContainsKey($gold.FullName)) { "newest" } else { "older" }
+            $files = @($gold.FullName)
+            if (Test-Path -LiteralPath "$($gold.FullName).json") { $files += "$($gold.FullName).json" }
+            $entries += [pscustomobject]@{
+                Kind      = $kind
+                Gold      = $gold
+                Name      = $gold.Name
+                Path      = $gold.FullName
+                Files     = $files
+                Bytes     = [int64]$gold.Length
+                Group     = $(if ($gold.IsCustom) { "other files" } elseif ($gold.IsAzureLocal) { "azl/" + $gold.ImageId } else { $gold.ImageId })
+                UsedBy    = $usedBy
+                PickedBy  = $(if ($pickedBy.ContainsKey($key)) { @($pickedBy[$key]) } else { @() })
+                Locked    = $locked
+                Suggested = ($kind -eq "older" -and -not $locked)
+            }
         }
-        return $picked[0].FullName
-    }
 
-    # An explicit locale in the config already says what language this lab speaks. If
-    # exactly one gold agrees with it, that is the answer and there is nothing to ask.
-    $configured = Get-ConfiguredLanguageSlug -Defaults $script:ConfigRoot.defaults
-    if (-not [string]::IsNullOrWhiteSpace($configured)) {
-        $picked = @($candidates | Where-Object { (Get-GoldNameParts -BaseName $_.BaseName).Language -eq $configured })
-        if ($picked.Count -eq 1) {
-            Write-Log "'$ImageId' by locale ${configured}: $($picked[0].Name)" -Tag "Info"
-            return $picked[0].FullName
+        # What a bake leaves behind when it does not finish: the working disk, the seed
+        # the bake VM booted with, a sidecar whose disk is gone. Suggested unless
+        # something still has them open - a bake running right now, most likely.
+        $leftovers = @(Get-ChildItem -LiteralPath $dir -File -ErrorAction SilentlyContinue | Where-Object {
+                $_.Name -match "^bake-.*\.vhdx$" -or
+                ($_.Name -match "\.vhdx\.json$" -and -not (Test-Path -LiteralPath ($_.FullName -replace "\.json$", "")))
+            })
+        foreach ($file in $leftovers) {
+            $locked = if (Test-FileOpenElsewhere -Path $file.FullName) { "open in another process - a bake may be running" } else { "" }
+            $what = if ($file.Name -match "^bake-.*\.vhdx$") { "unfinished bake" } else { "sidecar without its disk" }
+            $entries += [pscustomobject]@{
+                Kind      = "leftover"
+                Gold      = $null
+                Name      = $file.Name
+                Path      = $file.FullName
+                Files     = @($file.FullName)
+                Bytes     = [int64]$file.Length
+                Group     = "leftovers"
+                UsedBy    = @()
+                PickedBy  = @()
+                Locked    = $locked
+                Suggested = (-not $locked)
+                What      = $what
+            }
         }
     }
 
-    $names = (($candidates | ForEach-Object { $_.Name }) | Sort-Object) -join ', '
-    if ($AllowPrompt -and (Test-MenuHostSupported)) {
-        return Show-GoldLanguagePicker -Candidates $candidates -ImageId $key -ServerName $ServerName
+    # Golds by image, newest first inside each; other files and leftovers at the end.
+    $rank = { param($e) switch ($e.Kind) { "leftover" { 3 } "custom" { 2 } default { if ($e.Gold.IsAzureLocal) { 1 } else { 0 } } } }
+    return @($entries | Sort-Object -Property @{ Expression = { & $rank $_ } },
+        @{ Expression = { $_.Group } },
+        @{ Expression = { if ($_.Gold) { $_.Gold.BuildVersion } else { [version]"0.0" } }; Descending = $true },
+        @{ Expression = { if ($_.Gold) { $_.Gold.CreatedUtc } else { [datetime]::MinValue } }; Descending = $true },
+        @{ Expression = { $_.Name } })
+}
+
+function Get-GoldInventorySummary {
+    # The hint text the home menu shows beside its two gold rows.
+    param([object[]]$Inventory)
+
+    $golds = @($Inventory | Where-Object { $_.Kind -in @("newest", "older") })
+    $images = @($golds | ForEach-Object { $_.Gold.ImageId } | Sort-Object -Unique).Count
+    $total = [int64](($Inventory | Measure-Object -Property Bytes -Sum).Sum)
+    $suggested = @($Inventory | Where-Object { $_.Suggested })
+    $reclaim = [int64](($suggested | Measure-Object -Property Bytes -Sum).Sum)
+    $older = @($suggested | Where-Object { $_.Kind -eq "older" }).Count
+    $leftover = @($suggested | Where-Object { $_.Kind -eq "leftover" }).Count
+
+    $azl = @($golds | Where-Object { $_.Gold.IsAzureLocal }).Count
+    $show = "{0} gold(s) of {1} image(s), {2}" -f $golds.Count, $images, (Format-ByteSize -Bytes $total)
+    if ($azl -gt 0) { $show = "{0} gold(s) of {1} image(s) ({2} Azure Local), {3}" -f $golds.Count, $images, $azl, (Format-ByteSize -Bytes $total) }
+    $clean = if ($suggested.Count -eq 0) { "nothing to suggest" }
+        else {
+            $parts = @()
+            if ($older -gt 0) { $parts += "$older older" }
+            if ($leftover -gt 0) { $parts += "$leftover leftover" }
+            "{0} - {1} to reclaim" -f ($parts -join ", "), (Format-ByteSize -Bytes $reclaim)
+        }
+    return [pscustomobject]@{ Show = $show; Clean = $clean; Golds = $golds.Count; Bytes = $total }
+}
+
+function Show-GoldInventoryForm {
+    <#
+        Show golds and Clean up golds are one table: grouped by image, newest first, one
+        row per file, with whatever the cursor is on spelled out under it. -Cleanup adds a
+        tick column; Space ticks, A puts the suggestion back, Enter goes on to confirm.
+
+        A locked row - a gold an existing VM is built on, a file another process has open
+        - is shown, so the table is the whole folder, but it cannot be ticked and the pane
+        says why.
+
+        Returns: view - $script:MenuBackId / $null; cleanup - the ticked entries,
+        $script:MenuBackId or $null.
+    #>
+    param(
+        [object[]]$Inventory,
+        [System.Collections.IDictionary]$StatusLines,
+        [switch]$Cleanup,
+        [switch]$AllowBack
+    )
+
+    $rows = @($Inventory)
+    if ($rows.Count -eq 0) {
+        Show-MenuHeader -Title "Gold images" -StatusLines $StatusLines
+        Write-Studio -Text "  The gold folder is empty - New-Vhdx.ps1 builds golds" -Key "muted"
+        if (-not (Wait-BladeContinue -Keys @("Enter back to the menu"))) { return $null }
+        return $script:MenuBackId
+    }
+    $ticked = @{}
+    for ($i = 0; $i -lt $rows.Count; $i++) { $ticked[$i] = ($Cleanup -and [bool]$rows[$i].Suggested) }
+    $index = 0
+    if ($Cleanup) {
+        # Open on the first suggestion: that is the row the blade exists for.
+        for ($i = 0; $i -lt $rows.Count; $i++) { if ($rows[$i].Suggested) { $index = $i; break } }
     }
 
-    throw "More than one gold image for imageId='$ImageId' ($names). Pass -GoldLanguage <tag> or set defaults.locale in config.json"
+    if (-not (Test-MenuHostSupported)) {
+        # No cursor keys: list it, and in cleanup mode take the suggestion or nothing.
+        for ($i = 0; $i -lt $rows.Count; $i++) {
+            $mark = if ($ticked[$i]) { "[x]" } else { "[ ]" }
+            Write-Host ("  {0} {1}  {2}  {3}" -f $mark, $rows[$i].Name, $rows[$i].Kind, $rows[$i].Locked)
+        }
+        if (-not $Cleanup) {
+            [void](Wait-BladeContinue -Keys @("Enter back to the menu"))
+            return $script:MenuBackId
+        }
+        $raw = Read-Host "Y removes the ticked files, anything else keeps them"
+        if ($raw -match "^[Yy]$") { return @(for ($i = 0; $i -lt $rows.Count; $i++) { if ($ticked[$i]) { $rows[$i] } }) }
+        return $script:MenuBackId
+    }
+
+    $width = @{ Id = 8; Lang = 4; Build = 5; Disk = 4; Size = 4 }
+    foreach ($row in $rows) {
+        if ($row.Gold -and -not $row.Gold.IsCustom) {
+            $width.Lang = [math]::Max($width.Lang, ([string]$row.Gold.Language).Length)
+            $width.Build = [math]::Max($width.Build, (Format-GoldBuild -Gold $row.Gold).Length)
+            $width.Disk = [math]::Max($width.Disk, (Format-GoldDisk -Gold $row.Gold).Length)
+        }
+        $width.Size = [math]::Max($width.Size, (Format-ByteSize -Bytes $row.Bytes).Length)
+    }
+
+    $title = if ($Cleanup) { "Clean up gold images" } else { "Gold images" }
+    $anchor = $null
+    $windowTop = $null
+    $budget = 12
+    $start = 0
+
+    while ($true) {
+        $repainted = $false
+        if ($null -ne $anchor -and -not (Test-MenuWindowScrolled -TopBefore $windowTop)) {
+            if (Set-MenuCursorAnchor -Anchor $anchor) {
+                $repainted = (Clear-MenuBelowCursor)
+                if (-not $repainted) { $anchor = $null }
+            }
+            else {
+                $anchor = $null
+            }
+        }
+        if (-not $repainted) {
+            Show-MenuHeader -Title $title -StatusLines $StatusLines
+            if ($Cleanup) {
+                Write-Studio -Text "  Clean up" -Key "fg"
+                Write-Studio -Text "  Ticked: older builds of the same image, language and disk, and what failed bakes left behind" -Key "muted"
+            }
+            else {
+                Write-Studio -Text "  Gold images" -Key "fg"
+                Write-Studio -Text "  Grouped by image, newest first - the first of each kind is what an unattended build takes" -Key "muted"
+            }
+            Write-Host ""
+            $anchor = Get-MenuCursorAnchor
+
+            # Rows that fit between here and the pane + legend (8 lines), so the cursor
+            # never walks off the bottom of a short window.
+            try {
+                $used = [int]$Host.UI.RawUI.CursorPosition.Y - [int]$Host.UI.RawUI.WindowPosition.Y
+                $budget = [int]$Host.UI.RawUI.WindowSize.Height - $used - 14
+            }
+            catch { $budget = 12 }
+            if ($budget -lt 6) { $budget = 6 }
+        }
+
+        # Rows to draw, with a group heading wherever the group changes. The window
+        # scrolls by row; a heading counts as a line in the budget.
+        if ($index -lt $start) { $start = $index }
+        while ($true) {
+            $lines = 0; $last = $null; $fits = $true
+            for ($i = $start; $i -le $index; $i++) {
+                if ($rows[$i].Group -ne $last) { $lines += 2; $last = $rows[$i].Group }
+                $lines++
+            }
+            if ($lines -le $budget -or $start -ge $index) { break }
+            $start++
+        }
+
+        $head = "      " + $(if ($Cleanup) { "    " } else { "" }) +
+            ("{0}  {1}  {2}  {3}  {4}  {5}  {6}" -f "id".PadRight($width.Id), "lang".PadRight($width.Lang),
+                "build".PadRight($width.Build), "disk".PadRight($width.Disk), "baked".PadRight(10),
+                "size".PadLeft($width.Size), "status")
+        Write-Studio -Text $head -Key "muted"
+        if ($start -gt 0) { Write-Studio -Text "      ..." -Key "muted" } else { Write-Host "" }
+
+        $drawn = 0; $last = $null; $end = $start
+        for ($i = $start; $i -lt $rows.Count; $i++) {
+            $row = $rows[$i]
+            $need = 1
+            if ($row.Group -ne $last) { $need += 2 }
+            if ($drawn + $need -gt $budget) { break }
+            if ($row.Group -ne $last) {
+                if ($null -ne $last) { Write-Host "" }
+                $groupLabel = [string]$row.Group
+                if ($row.Gold -and -not $row.Gold.IsCustom) {
+                    $groupLabel = "{0}  {1}" -f $row.Group, $row.Gold.DisplayName
+                    if ($row.Gold.IsAzureLocal) { $groupLabel += "  (Azure Local)" }
+                }
+                Write-Studio -Text ("    " + $groupLabel) -Key "accent"
+                $last = $row.Group
+            }
+            $drawn += $need
+            $end = $i
+
+            $here = ($i -eq $index)
+            $color = if ($here) { "fg" } else { "muted" }
+            if ($here) { Write-Studio -Text "    > " -Key "accent" -NoNewline } else { Write-Host "      " -NoNewline }
+            if ($Cleanup) {
+                $mark = if ($row.Locked) { "[-] " } elseif ($ticked[$i]) { "[x] " } else { "[ ] " }
+                Write-Studio -Text $mark -Key $(if ($ticked[$i]) { "accent" } else { $color }) -NoNewline
+            }
+
+            if ($row.Gold -and -not $row.Gold.IsCustom) {
+                $gold = $row.Gold
+                $text = "{0}  {1}  {2}  {3}  {4}  {5}" -f ([string]$gold.Id).PadRight($width.Id), ([string]$gold.Language).PadRight($width.Lang),
+                    (Format-GoldBuild -Gold $gold).PadRight($width.Build), (Format-GoldDisk -Gold $gold).PadRight($width.Disk),
+                    (Format-GoldDate -Gold $gold).PadRight(10), (Format-ByteSize -Bytes $row.Bytes).PadLeft($width.Size)
+            }
+            else {
+                $nameWidth = $width.Id + $width.Lang + $width.Build + $width.Disk + 18
+                $name = [string]$row.Name
+                if ($name.Length -gt $nameWidth) { $name = $name.Substring(0, $nameWidth - 3) + "..." }
+                $text = "{0}  {1}" -f $name.PadRight($nameWidth), (Format-ByteSize -Bytes $row.Bytes).PadLeft($width.Size)
+            }
+            Write-Studio -Text $text -Key $color -NoNewline
+
+            $status = switch ($row.Kind) {
+                "newest"   { "newest" }
+                "older"    { "older" }
+                "custom"   { "no sidecar" }
+                "leftover" { [string]$row.What }
+            }
+            $statusKey = switch ($row.Kind) { "newest" { "success" } "older" { "warn" } "leftover" { "warn" } default { "muted" } }
+            Write-Studio -Text ("  " + $status) -Key $statusKey -NoNewline
+            if ($row.Gold -and $row.Gold.Evaluation) { Write-Studio -Text "  eval" -Key "warn" -NoNewline }
+            if ($row.Gold -and $row.Gold.NotGeneralized) { Write-Studio -Text "  not generalized" -Key "warn" -NoNewline }
+            if ($row.Gold -and $row.Gold.Label) { Write-Studio -Text ("  " + $row.Gold.Label) -Key "accent" -NoNewline }
+            if ($row.Locked) { Write-Studio -Text ("  - " + $row.Locked) -Key "muted" }
+            else { Write-Host "" }
+        }
+        if ($end -lt $rows.Count - 1) { Write-Studio -Text "      ..." -Key "muted" } else { Write-Host "" }
+
+        # The pane: the row under the cursor, in full.
+        $row = $rows[$index]
+        Write-Host ""
+        Write-Studio -Text ("  " + $row.Path) -Key "fg"
+        if ($row.Gold -and -not $row.Gold.IsCustom) {
+            foreach ($line in @(Get-GoldDetailLines -Gold $row.Gold)) {
+                Write-Studio -Text ("  " + $line.Text) -Key $line.Key
+            }
+        }
+        else {
+            $note = switch ($row.Kind) {
+                "custom"   { "No schema-2 sidecar: never matched by imageId, only by a VM's imageHint. A gold from before hash names looks like this." }
+                "leftover" { "Left by a bake that did not finish. Nothing reads it." }
+                default    { "" }
+            }
+            Write-Studio -Text ("  " + $note) -Key "muted"
+            Write-Host ""
+        }
+        $uses = @()
+        if (@($row.PickedBy).Count -gt 0) { $uses += "picked today by " + (@($row.PickedBy) -join ", ") }
+        if ($row.Locked) { $uses += $row.Locked }
+        if ($uses.Count -eq 0) { $uses += "no VM on this host and no VM in the config uses it" }
+        Write-Studio -Text ("  " + ($uses -join "; ")) -Key $(if ($row.Locked) { "warn" } else { "muted" })
+
+        Write-Host ""
+        if ($Cleanup) {
+            $chosen = @(for ($i = 0; $i -lt $rows.Count; $i++) { if ($ticked[$i]) { $rows[$i] } })
+            $bytes = [int64](($chosen | Measure-Object -Property Bytes -Sum).Sum)
+            Write-Studio -Text ("  {0} ticked, {1}" -f $chosen.Count, (Format-ByteSize -Bytes $bytes)) -Key "accent"
+            Write-BladeLegend -Keys @("Up/Down move", "Space tick", "A suggested", "Enter remove...") -AllowBack:$AllowBack
+        }
+        else {
+            Write-BladeLegend -Keys @("Up/Down move", "L label") -AllowBack:$AllowBack
+        }
+
+        $windowTop = Get-MenuWindowTop
+        $key = $Host.UI.RawUI.ReadKey("NoEcho,IncludeKeyDown")
+        $virtualKey = [int]$key.VirtualKeyCode
+        $charKey = [string]$key.Character
+
+        if ($virtualKey -eq 38) { $index = if ($index -le 0) { $rows.Count - 1 } else { $index - 1 }; continue }
+        if ($virtualKey -eq 40) { $index = if ($index -ge $rows.Count - 1) { 0 } else { $index + 1 }; if ($index -eq 0) { $start = 0 }; continue }
+        if ($virtualKey -eq 33) { $index = [math]::Max(0, $index - $budget); continue }
+        if ($virtualKey -eq 34) { $index = [math]::Min($rows.Count - 1, $index + $budget); continue }
+        if ($virtualKey -eq 36) { $index = 0; $start = 0; continue }
+        if ($virtualKey -eq 35) { $index = $rows.Count - 1; continue }
+        if ($Cleanup -and $virtualKey -eq 32) {
+            if (-not $rows[$index].Locked) { $ticked[$index] = -not $ticked[$index] }
+            continue
+        }
+        if (-not $Cleanup -and ($charKey -eq "l" -or $charKey -eq "L") -and $rows[$index].Gold -and -not $rows[$index].Gold.IsCustom) {
+            # A label is free text, so it is read as a line - the one place this table
+            # leaves key-by-key input. Empty clears it; the table is redrawn either way.
+            Write-Host ""
+            $text = Read-Host ("  Label for {0} (empty clears)" -f $rows[$index].Gold.Id)
+            try { Set-GoldLabel -Gold $rows[$index].Gold -Label ([string]$text) }
+            catch { Write-Log "Could not write the label: $($_.Exception.Message)" -Tag "Error" }
+            $anchor = $null
+            continue
+        }
+        if ($Cleanup -and ($charKey -eq "a" -or $charKey -eq "A")) {
+            for ($i = 0; $i -lt $rows.Count; $i++) { $ticked[$i] = [bool]$rows[$i].Suggested }
+            continue
+        }
+        if ($virtualKey -eq 13) {
+            if (-not $Cleanup) { return $script:MenuBackId }
+            $chosen = @(for ($i = 0; $i -lt $rows.Count; $i++) { if ($ticked[$i]) { $rows[$i] } })
+            if ($chosen.Count -eq 0) { continue }
+            return $chosen
+        }
+        if ($virtualKey -eq 8 -and $AllowBack) { return $script:MenuBackId }
+        if ($virtualKey -eq 27 -or $charKey -eq "q" -or $charKey -eq "Q") { return $null }
+    }
+}
+
+function Remove-GoldInventoryEntries {
+    # Deletes what Clean up golds confirmed. Each file is checked again right before it
+    # goes - a VM created or a bake started since the table was read wins over the
+    # tick - and a file that cannot be removed is reported and skipped, not retried.
+    param([object[]]$Entries)
+
+    $removed = 0
+    $bytes = [int64]0
+    $parents = Get-GoldParentUsage
+    foreach ($entry in $Entries) {
+        if ($parents.ContainsKey($entry.Path.ToLowerInvariant())) {
+            Write-Log "Kept '$($entry.Path)' - a VM is now built on it" -Tag "Warn"
+            continue
+        }
+        foreach ($file in @($entry.Files)) {
+            if (-not (Test-Path -LiteralPath $file)) { continue }
+            try {
+                $length = (Get-Item -LiteralPath $file).Length
+                Remove-Item -LiteralPath $file -Force -ErrorAction Stop
+                $removed++
+                $bytes += $length
+                Write-Log "Removed '$file'" -Tag "Run"
+            }
+            catch {
+                Write-Log "Could not remove '$file': $($_.Exception.Message)" -Tag "Error"
+            }
+        }
+        if ($null -ne $script:GoldManifestCache) { $script:GoldManifestCache.Remove($entry.Path.ToLowerInvariant()) }
+    }
+    Write-Log ("Removed {0} file(s), {1}" -f $removed, (Format-ByteSize -Bytes $bytes)) -Tag "Ok"
+}
+
+function Get-GoldImageIdFromPath {
+    # The imageId a gold's sidecar names, "" for a custom disk without one.
+    param([string]$GoldPath)
+
+    $manifest = Get-GoldImageManifest -GoldPath $GoldPath
+    if ($null -eq $manifest) { return "" }
+    return ([string]$manifest.imageId).ToLowerInvariant()
 }
 
 function Test-IsWindows11Gold {
-    # Reads the imageId out of the gold's name rather than searching the whole string:
-    # the id is the part that is guaranteed to be there, and the language segment in
-    # front of it is not something either of these questions cares about.
+    # Read from the gold's sidecar: the imageId there is what the gold IS.
     param([string]$GoldPath)
 
-    $parts = Get-GoldNameParts -BaseName ([System.IO.Path]::GetFileNameWithoutExtension($GoldPath))
-    if ($null -eq $parts) { return $false }
-    return ($parts.ImageId -match "^w1[01]-")
+    return ((Get-GoldImageIdFromPath -GoldPath $GoldPath) -match "^w1[01]-")
 }
 
 function Test-IsServerGold {
@@ -1530,9 +2155,8 @@ function Test-IsServerGold {
     # rather than the classifier falling through to its default.
     param([string]$GoldPath)
 
-    $parts = Get-GoldNameParts -BaseName ([System.IO.Path]::GetFileNameWithoutExtension($GoldPath))
-    if ($null -eq $parts) { return $false }
-    return ($parts.ImageId -match "^ws\d{4}-" -or $parts.ImageId -eq "azl")
+    $imageId = Get-GoldImageIdFromPath -GoldPath $GoldPath
+    return ($imageId -match "^ws\d{4}-" -or $imageId -eq "azl")
 }
 
 function Test-IsClientProvision {
@@ -1541,7 +2165,7 @@ function Test-IsClientProvision {
         [string]$GoldPath = ""
     )
 
-    # Prefer concrete gold filename over config hints - a stale imageHint must
+    # Prefer the concrete gold's sidecar over config hints - a stale imageHint must
     # never flip a Server gold onto the Win11 OOBE path (HideOnlineAccountScreens
     # / offline OOBE hive -> answer-file or first-boot failures on Server).
     if (-not [string]::IsNullOrWhiteSpace($GoldPath)) {
@@ -6054,7 +6678,7 @@ function Get-ProvisionVmContext {
     $imageId = [string]$Server.imageId
     $imageHint = [string]$Server.imageHint
     $goldPath = Resolve-GoldVhdxPath -GoldImages $GoldImages -ImageId $imageId -ImageHint $imageHint `
-        -ServerName ([string]$Server.name) -AllowPrompt
+        -ServerName ([string]$Server.name)
 
     # Path precedence: per-VM vmPath/vhdPath override wins; otherwise automatic
     # storage placement (when enabled) picks a volume for this VM; otherwise the
@@ -6330,8 +6954,13 @@ function New-ProvisionedVm {
         # These cloud images are signed by Microsoft's THIRD-PARTY UEFI CA, through shim.
         # The MicrosoftWindows template does not trust that chain, and a VM created with
         # it does not boot - with no message that points at Secure Boot.
-        $secureBootTemplate = "MicrosoftWindows"
-        if (Test-IsLinuxServer -Server $Server) { $secureBootTemplate = "MicrosoftUEFICertificateAuthority" }
+        # The gold says which template it boots with; a custom disk without a sidecar
+        # falls back to the one its OS family needs.
+        $secureBootTemplate = [string]$goldManifest.secureBootTemplate
+        if ([string]::IsNullOrWhiteSpace($secureBootTemplate)) {
+            $secureBootTemplate = "MicrosoftWindows"
+            if (Test-IsLinuxServer -Server $Server) { $secureBootTemplate = "MicrosoftUEFICertificateAuthority" }
+        }
         Set-VMFirmware -VMName $hyperVName -EnableSecureBoot On -SecureBootTemplate $secureBootTemplate
         Write-Log "Secure Boot on with the $secureBootTemplate template" -Tag "Debug"
     }
@@ -6348,7 +6977,9 @@ function New-ProvisionedVm {
     if ($null -ne $Server.enableVtpm) {
         $enableVtpm = [bool]$Server.enableVtpm
     }
-    if ($enableVtpm -and (Test-IsWindows11Gold -GoldPath $ctx.GoldPath)) {
+    $tpmManifest = Get-GoldImageManifest -GoldPath $ctx.GoldPath
+    $goldWantsTpm = if ($null -ne $tpmManifest -and $null -ne $tpmManifest.requiresTpm) { [bool]$tpmManifest.requiresTpm } else { Test-IsWindows11Gold -GoldPath $ctx.GoldPath }
+    if ($enableVtpm -and $goldWantsTpm) {
         try {
             Set-VMKeyProtector -VMName $hyperVName -NewLocalKeyProtector -ErrorAction Stop
             Enable-VMTPM -VMName $hyperVName -ErrorAction Stop
@@ -7870,7 +8501,7 @@ function Invoke-BuildPreflight {
         [object]$Defaults,
         [object[]]$Servers,
         [object[]]$GoldImages,
-        [string]$VhdxDirectory,
+        [string]$GoldDirectory,
         [string]$VmPath,
         [string]$VhdPath,
         [object[]]$VhdSets = @()
@@ -7881,7 +8512,7 @@ function Invoke-BuildPreflight {
     $ok = New-Object System.Collections.Generic.List[string]
 
     $ok.Add("Config loaded ($($Servers.Count) server(s) in scope)")
-    $ok.Add("Gold folder: $VhdxDirectory ($($GoldImages.Count) hv-*.vhdx)")
+    $ok.Add("Gold folder: $GoldDirectory ($(@($GoldImages | Where-Object { -not $_.IsCustom }).Count) gold(s), $(@($GoldImages | Where-Object { $_.IsCustom }).Count) custom)")
     $ok.Add("VM path: $VmPath")
     $ok.Add("VHD path: $VhdPath")
 
@@ -7933,7 +8564,17 @@ function Invoke-BuildPreflight {
             $gold = Resolve-GoldVhdxPath -GoldImages $GoldImages -ImageId ([string]$server.imageId) `
                 -ImageHint ([string]$server.imageHint) -ServerName ([string]$server.name)
             $goldForPreview = $gold
-            $ok.Add("$label gold -> $(Split-Path -Leaf $gold)")
+            $goldRecord = Get-GoldByPath -GoldImages $GoldImages -GoldPath $gold
+            $ok.Add("$label gold -> $(Format-GoldSummary -Gold $goldRecord)")
+            if ($goldRecord.NotGeneralized) {
+                $warnings.Add("$label gold $($goldRecord.Id) is not generalized (built with -SkipSysprep) - every VM from it shares its SID and identity")
+            }
+            if ($goldRecord.Evaluation) {
+                $warnings.Add("$label gold $($goldRecord.Id) is an evaluation edition - 180 days, no AVMA or KMS activation")
+            }
+            if ($goldRecord.Manifest -and [bool]$goldRecord.Manifest.requiresTpm -and -not [bool]$server.enableVtpm) {
+                $warnings.Add("$label gold $($goldRecord.Id) expects a TPM but enableVtpm is off - BitLocker and Windows Hello will not work")
+            }
         }
         catch {
             $errors.Add("$label gold image: $($_.Exception.Message)")
@@ -8281,7 +8922,7 @@ function Invoke-BuildPreflightForGroups {
         [object[]]$Groups,
         [object[]]$VhdSets,
         [object]$FallbackDefaults,
-        [string]$FallbackVhdxDirectory,
+        [string]$FallbackGoldDirectory,
         [string]$FallbackVmPath,
         [string]$FallbackVhdPath
     )
@@ -8289,7 +8930,7 @@ function Invoke-BuildPreflightForGroups {
     $allPassed = $true
     foreach ($group in $Groups) {
         $groupDefaults = $FallbackDefaults
-        $groupVhdx = $FallbackVhdxDirectory
+        $groupGoldDir = $FallbackGoldDirectory
         $groupVmPath = $FallbackVmPath
         $groupVhdPath = $FallbackVhdPath
 
@@ -8298,15 +8939,15 @@ function Invoke-BuildPreflightForGroups {
             $resolved = Resolve-ConfigSourcePaths -Source $group.Source `
                 -FallbackVmPath $FallbackVmPath -FallbackVhdPath $FallbackVhdPath
             $groupDefaults = $group.Source.Defaults
-            $groupVhdx = $resolved.VhdxDirectory
+            $groupGoldDir = $resolved.GoldDirectory
             $groupVmPath = $resolved.VmPath
             $groupVhdPath = $resolved.VhdPath
             if ($Groups.Count -gt 1) { Write-Log ("Preflight for '{0}'" -f $group.Source.Name) -Tag "Info" }
         }
 
-        $goldImages = @(Get-HyperVGoldImages -VhdxDirectory $groupVhdx)
+        $goldImages = @(Get-HyperVGoldImages -GoldDirectory $groupGoldDir)
         $passed = Invoke-BuildPreflight -Defaults $groupDefaults -Servers $group.Servers `
-            -GoldImages $goldImages -VhdxDirectory $groupVhdx -VmPath $groupVmPath -VhdPath $groupVhdPath `
+            -GoldImages $goldImages -GoldDirectory $groupGoldDir -VmPath $groupVmPath -VhdPath $groupVhdPath `
             -VhdSets $VhdSets
         if (-not $passed) { $allPassed = $false }
     }
@@ -8331,8 +8972,8 @@ function Resolve-ConfigSourcePaths {
     #>
     param([object]$Source, [string]$FallbackVmPath, [string]$FallbackVhdPath)
 
-    $vhdx = Resolve-ConfiguredHostPath -ConfiguredPath ([string]$Source.Defaults.vhdxDirectory) `
-        -PromptLabel "Gold VHDX directory" -ExampleHint "vhdx" -DefaultWhenEmpty "vhdx"
+    $goldDir = Resolve-ConfiguredHostPath -ConfiguredPath ([string]$Source.Defaults.goldDirectory) `
+        -PromptLabel "Gold directory" -ExampleHint "golds" -DefaultWhenEmpty "golds"
 
     $vmPath = [string]$Source.Defaults.vmPath
     if ([string]::IsNullOrWhiteSpace($vmPath)) { $vmPath = $FallbackVmPath }
@@ -8348,7 +8989,7 @@ function Resolve-ConfigSourcePaths {
     $Source.Defaults | Add-Member -NotePropertyName "vmPath" -NotePropertyValue $vmPath -Force
     $Source.Defaults | Add-Member -NotePropertyName "vhdPath" -NotePropertyValue $vhdPath -Force
 
-    return [pscustomobject]@{ VhdxDirectory = $vhdx; VmPath = $vmPath; VhdPath = $vhdPath }
+    return [pscustomobject]@{ GoldDirectory = $goldDir; VmPath = $vmPath; VhdPath = $vhdPath }
 }
 
 function Get-ServerConfigSource {
@@ -8572,15 +9213,12 @@ function Get-ServerSummaryRows {
 
     & $addRow "os" (Get-ImageDisplayName -Server $Server)
 
-    # The gold file name is implied by the OS label, so only spell it out when the
-    # config picked its image by hand or the pick cannot be resolved at all.
-    $picksGoldByHand = -not [string]::IsNullOrWhiteSpace(([string]$Server.imageHint).Trim())
+    # Always spelled out: an image can have golds of several languages, builds and
+    # disk sizes, and the OS label says none of that.
     try {
         $goldPath = Resolve-GoldVhdxPath -GoldImages $GoldImages -ImageId ([string]$Server.imageId) `
             -ImageHint ([string]$Server.imageHint) -ServerName ([string]$Server.name)
-        if ($picksGoldByHand) {
-            & $addRow "gold image" (Split-Path -Leaf $goldPath)
-        }
+        & $addRow "gold image" (Format-GoldSummary -Gold (Get-GoldByPath -GoldImages $GoldImages -GoldPath $goldPath))
     }
     catch {
         & $addRow "gold image" ("not resolved - {0}" -f $_.Exception.Message)
@@ -8783,7 +9421,7 @@ function Get-BuildMenuStatusLines {
     return [ordered]@{
         "config"  = $configText
         "servers" = $serverText
-        "gold"    = ("{0} hv-*.vhdx" -f $GoldImages.Count)
+        "gold"    = ("{0} on disk" -f @($GoldImages | Where-Object { -not $_.IsCustom }).Count)
         "cluster" = $cluster
     }
 }
@@ -8953,8 +9591,8 @@ try {
         throw "no servers in any configuration"
     }
 
-    $vhdxDirectory = Resolve-ConfiguredHostPath -ConfiguredPath ([string]$defaults.vhdxDirectory) `
-        -PromptLabel "Gold VHDX directory" -ExampleHint "vhdx" -DefaultWhenEmpty "vhdx"
+    $goldDirectory = Resolve-ConfiguredHostPath -ConfiguredPath ([string]$defaults.goldDirectory) `
+        -PromptLabel "Gold directory" -ExampleHint "golds" -DefaultWhenEmpty "golds"
 
     # Config leaves vmPath/vhdPath blank -> fall back to this Hyper-V host's own configured
     # defaults (Get-VMHost) instead of blocking on an interactive prompt, which would hang
@@ -9010,10 +9648,13 @@ try {
     # vmPath blank inherits the host default resolved just now; without this it would
     # reach the VM builder as an empty string, because that builder reads
     # $Defaults.vmPath itself rather than being handed a path.
+    # Every gold folder in play, for Show golds and Clean up golds - usually just one.
+    $goldDirectories = @($goldDirectory)
     foreach ($source in $sources) {
         $resolvedSource = Resolve-ConfigSourcePaths -Source $source -FallbackVmPath $vmPath -FallbackVhdPath $vhdPath
+        $goldDirectories += [string]$resolvedSource.GoldDirectory
         if ($sources.Count -gt 1) {
-            Write-Log ("  {0} -> gold '{1}', VMs '{2}'" -f $source.Name, $resolvedSource.VhdxDirectory, $resolvedSource.VmPath) -Tag "Info"
+            Write-Log ("  {0} -> gold '{1}', VMs '{2}'" -f $source.Name, $resolvedSource.GoldDirectory, $resolvedSource.VmPath) -Tag "Info"
         }
     }
     $namingSuffixSource = if ([string]::IsNullOrWhiteSpace($script:NamingFqdnOverride)) { "per-VM domain join" } else { $script:NamingFqdnOverride }
@@ -9043,8 +9684,8 @@ try {
         Write-Log "Failover cluster enabled: $cn | $clusterScope" -Tag "Info"
     }
 
-    $goldImages = Get-HyperVGoldImages -VhdxDirectory $vhdxDirectory
-    Write-Log "$($goldImages.Count) gold image(s) in '$vhdxDirectory'" -Tag "Get"
+    $goldImages = @(Get-HyperVGoldImages -GoldDirectory $goldDirectory)
+    Write-Log "$($goldImages.Count) gold image(s) in '$goldDirectory'" -Tag "Get"
     if ($goldImages.Count -gt 0) {
         Write-Log ($goldImages.Name -join " | ") -Tag "Debug"
     }
@@ -9090,6 +9731,9 @@ try {
         $step = "menu"
         $menuChoice = $null
         $action = "Build"
+        # Read on the way into the home menu, dropped after a cleanup so it is read again.
+        $inventory = $null
+        $cleanupPick = @()
 
         while ($step -ne "build") {
             $canBack = ($history.Count -gt 0)
@@ -9099,27 +9743,112 @@ try {
 
             switch ($step) {
                 "menu" {
-                    $configWord = if ($sources.Count -gt 1) { "{0} configs" -f $sources.Count } else { "the config" }
+                    # Home. Grouped by what the verbs act on - the VMs in the config, the
+                    # golds on disk - and every row says what it would touch right now,
+                    # so the menu itself tells you when a cleanup is worth opening.
+                    $action = "Build"
+                    if ($null -eq $inventory) {
+                        $inventory = @(Get-GoldInventory -GoldDirectories $goldDirectories -Sources $sources `
+                                -FallbackGoldDirectory $goldDirectory)
+                    }
+                    $goldSummary = Get-GoldInventorySummary -Inventory $inventory
+                    $configWord = if ($sources.Count -gt 1) { "{0} configs" -f $sources.Count } else { $sources[0].Name }
+                    $menuRow = { param($Id, $Verb, $Hint) [pscustomobject]@{ Id = $Id; Label = ("{0}{1}" -f $Verb.PadRight(20), $Hint) } }
+                    $menuGap = { param($Text) [pscustomobject]@{ Id = "__gap__"; Label = $Text; Separator = $true } }
                     $menuItems = @(
-                        [pscustomobject]@{ Id = "all";      Label = ("Build all VMs       provision every server in {0} ({1})" -f $configWord, $allServers.Count) }
-                        [pscustomobject]@{ Id = "selected"; Label = "Build selected      pick one or more VMs" }
-                        [pscustomobject]@{ Id = "quit";     Label = "Quit" }
+                        (& $menuGap "Virtual machines")
+                        (& $menuRow "all"      "Build all"        ("every VM in {0} ({1})" -f $configWord, $allServers.Count))
+                        (& $menuRow "selected" "Build selected"   "pick one or more")
+                        (& $menuRow "check"    "Check config"     "preflight every VM, change nothing")
+                        (& $menuGap "")
+                        (& $menuGap "Gold images")
+                        (& $menuRow "golds"    "Show golds"       $goldSummary.Show)
+                        (& $menuRow "cleanup"  "Clean up golds"   $goldSummary.Clean)
+                        (& $menuGap "")
+                        (& $menuRow "quit"     "Quit"             "")
                     )
 
                     $menuTitle = if ($sources.Count -gt 1) { "Build VMs" } else { "Build VMs from $($sources[0].Name)" }
                     $answer = Show-Menu -Title $menuTitle -Items $menuItems -StatusLines $statusLines -SelectedId $menuChoice `
-                        -Heading "What to build" -HeadingHint ("Every VM in {0}, or a pick of them" -f $configWord)
+                        -Heading "Home" -HeadingHint "Build from the config, or look after the golds it builds from"
                     if ($null -eq $answer -or $answer -eq "quit") {
                         Write-Log "Cancelled by user" -Tag "Info"
                         Complete-Script -ExitCode 0
                     }
                     $menuChoice = $answer
-                    if ($answer -eq "all") {
-                        $selectedServers = @($allServers)
-                        $goto = "fod"
+                    switch ($answer) {
+                        "all"      { $selectedServers = @($allServers); $goto = "fod" }
+                        "selected" { $goto = "pick" }
+                        "check"    { $goto = "check" }
+                        "golds"    { $goto = "golds" }
+                        "cleanup"  { $goto = "cleanup" }
                     }
-                    else {
-                        $goto = "pick"
+                }
+                "check" {
+                    # -CheckOnly from the menu: every VM, nothing asked - FOD media fall back
+                    # to the guest's online install and each image takes its newest gold, as
+                    # an unattended run would - then the report, and back home.
+                    $asked = $false
+                    $action = "Check"
+                    Write-Log "Check | $($allServers.Count) server(s)" -Tag "Info"
+                    [void](Resolve-FodPlans -Servers $allServers)
+                    $checkScope = Get-BuildScope -Servers $allServers -Sources $sources -FallbackConfig $config
+                    $passed = Invoke-BuildPreflightForGroups -Groups $checkScope.Groups -VhdSets $checkScope.VhdSets `
+                        -FallbackDefaults $defaults -FallbackGoldDirectory $goldDirectory `
+                        -FallbackVmPath $vmPath -FallbackVhdPath $vhdPath
+                    Write-Log $(if ($passed) { "Check passed" } else { "Check found problems - see above" }) -Tag $(if ($passed) { "Ok" } else { "Error" })
+                    if (-not (Wait-BladeContinue -Keys @("Enter back to the menu"))) {
+                        Write-Log "Cancelled by user" -Tag "Info"
+                        Complete-Script -ExitCode 0
+                    }
+                    $history.Clear()
+                    $goto = "menu"
+                }
+                "golds" {
+                    $answer = Show-GoldInventoryForm -Inventory $inventory -StatusLines $statusLines -AllowBack
+                }
+                "cleanup" {
+                    $answer = Show-GoldInventoryForm -Inventory $inventory -StatusLines $statusLines -Cleanup -AllowBack
+                    if (Test-BladeAnswer -Value $answer) {
+                        $cleanupPick = @($answer)
+                        $goto = "cleanconfirm"
+                    }
+                }
+                "cleanconfirm" {
+                    # The last stop before files are deleted, so it opens on Keep: Enter
+                    # straight through never removes anything.
+                    $bytes = [int64](($cleanupPick | Measure-Object -Property Bytes -Sum).Sum)
+                    $renderCleanup = {
+                        Write-Studio -Text ("  Remove {0} item(s), {1}" -f $cleanupPick.Count, (Format-ByteSize -Bytes $bytes)) -Key "fg"
+                        Write-Host ""
+                        foreach ($entry in $cleanupPick) {
+                            foreach ($file in @($entry.Files)) {
+                                Write-Studio -Text ("    " + $file) -Key "muted"
+                            }
+                        }
+                        Write-Host ""
+                        Write-Studio -Text ("  " + ("-" * 62)) -Key "muted"
+                        Write-Host ""
+                    }
+                    $confirmItems = @(
+                        [pscustomobject]@{ Id = "remove"; Label = ("Remove {0} item(s) - {1}" -f $cleanupPick.Count, (Format-ByteSize -Bytes $bytes)) }
+                        [pscustomobject]@{ Id = "keep";   Label = "Keep everything - back to the list" }
+                    )
+                    $answer = Show-Menu -Title "Confirm cleanup" -Subtitle "Files are deleted, not moved" `
+                        -Items $confirmItems -SelectedIndex 1 -StatusLines $statusLines -PreItems $renderCleanup -AllowBack
+                    if ($answer -eq "keep") { $answer = $script:MenuBackId }
+                    if ($answer -eq "remove") {
+                        Remove-GoldInventoryEntries -Entries $cleanupPick
+                        $inventory = $null
+                        $goldImages = @(Get-HyperVGoldImages -GoldDirectory $goldDirectory)
+                        $statusLines = Get-BuildMenuStatusLines -Servers $allServers -GoldImages $goldImages -Defaults $defaults -Sources $sources
+                        if (-not (Wait-BladeContinue -Keys @("Enter back to the menu"))) {
+                            Write-Log "Cancelled by user" -Tag "Info"
+                            Complete-Script -ExitCode 0
+                        }
+                        $asked = $false
+                        $history.Clear()
+                        $goto = "menu"
                     }
                 }
                 "pick" {
@@ -9142,7 +9871,7 @@ try {
                     # Same idea for the gold language: preflight resolves golds too, so an image
                     # that exists in more than one language has to be settled before it runs
                     # rather than during the build it would otherwise abort.
-                    $answer = Resolve-GoldLanguagePlan -Servers $selectedServers -GoldImages $goldImages -Interactive -AllowBack:$canBack
+                    $answer = Resolve-GoldPlan -Servers $selectedServers -GoldImages $goldImages -Interactive -AllowBack:$canBack
                     if ($answer -eq "none") { $asked = $false }
                     $goto = "preflight"
                 }
@@ -9152,7 +9881,7 @@ try {
                     $scope = Get-BuildScope -Servers $selectedServers -Sources $sources -FallbackConfig $config
                     $vhdSetsInScope = $scope.VhdSets
                     $passed = Invoke-BuildPreflightForGroups -Groups $scope.Groups -VhdSets $vhdSetsInScope `
-                        -FallbackDefaults $defaults -FallbackVhdxDirectory $vhdxDirectory `
+                        -FallbackDefaults $defaults -FallbackGoldDirectory $goldDirectory `
                         -FallbackVmPath $vmPath -FallbackVhdPath $vhdPath
                     if ($passed) {
                         $goto = "summary"
@@ -9254,7 +9983,7 @@ try {
                         # Every section reads the same: heading, blank line, then its rows.
                         Write-Studio -Text "  Build" -Key "fg"
                         Write-Host ""
-                        Write-FastfetchInfoRow -Label "gold folder" -Value $vhdxDirectory -LabelWidth 20 -IndentWidth 4
+                        Write-FastfetchInfoRow -Label "gold folder" -Value $goldDirectory -LabelWidth 20 -IndentWidth 4
                         $pathLabelSuffix = if ($placementRows.Count -gt 0) { " (fallback)" } else { "" }
                         Write-FastfetchInfoRow -Label ("vm path" + $pathLabelSuffix) -Value $vmPath -LabelWidth 20 -IndentWidth 4
                         Write-FastfetchInfoRow -Label ("vhd path" + $pathLabelSuffix) -Value $vhdPath -LabelWidth 20 -IndentWidth 4
@@ -9359,12 +10088,12 @@ try {
         # An unattended run cannot ask: FOD media fall back to the guest's online install,
         # and an ambiguous gold language is left for preflight to report.
         [void](Resolve-FodPlans -Servers $selectedServers)
-        [void](Resolve-GoldLanguagePlan -Servers $selectedServers -GoldImages $goldImages)
+        [void](Resolve-GoldPlan -Servers $selectedServers -GoldImages $goldImages)
 
         $scope = Get-BuildScope -Servers $selectedServers -Sources $sources -FallbackConfig $config
         $vhdSetsInScope = $scope.VhdSets
         $passed = Invoke-BuildPreflightForGroups -Groups $scope.Groups -VhdSets $vhdSetsInScope `
-            -FallbackDefaults $defaults -FallbackVhdxDirectory $vhdxDirectory `
+            -FallbackDefaults $defaults -FallbackGoldDirectory $goldDirectory `
             -FallbackVmPath $vmPath -FallbackVhdPath $vhdPath
 
         if ($action -eq "Check") {
@@ -9398,7 +10127,7 @@ try {
             $resolved = Resolve-ConfigSourcePaths -Source $group.Source `
                 -FallbackVmPath $vmPath -FallbackVhdPath $vhdPath
             $groupDefaults = $group.Source.Defaults
-            $groupGolds = @(Get-HyperVGoldImages -VhdxDirectory $resolved.VhdxDirectory)
+            $groupGolds = @(Get-HyperVGoldImages -GoldDirectory $resolved.GoldDirectory)
             if ($buildGroups.Count -gt 1) {
                 Write-Log ("Building {0} VM(s) from '{1}'" -f @($group.Servers).Count, $group.Source.Name) -Tag "Info"
             }

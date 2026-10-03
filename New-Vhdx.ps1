@@ -37,17 +37,16 @@
     DISM lists the edition as ServerRdsh or EnterpriseMultiSession depending on
     where you read it; both names mean the same SKU. The image is asked whether it
     can become one straight after apply, so a build that cannot stops before the
-    temporary VM costs twenty minutes, and the gold is named for what it ends up as
-    (hv-enus-w11-enterprise-ms.vhdx) with the source index recorded in the sidecar.
+    temporary VM costs twenty minutes, and the gold's sidecar names it for what it
+    ends up as (imageId w11-enterprise-ms) with the source index recorded beside it.
 
     A Windows Server 2025 Datacenter index can be built as a Datacenter: Azure
     Edition gold the same way (-AzureEditionImageIndexes): its own build next to
     any plain golds, edition changed offline after generalize. DISM lists that
     target as ServerTurbine (Desktop) / ServerTurbineCor (Core) - the SKU's
     internal name - and only Server 2025 media carries it, so the rows are
-    offered for 2025 Datacenter indexes and nowhere else. The gold leaves as
-    hv-<language>-ws2025-datacenter-az-<core|desktop>.vhdx with the SKU's own
-    AVMA key baked. Azure Edition is licensed for Azure and Azure Local, where
+    offered for 2025 Datacenter indexes and nowhere else. The gold leaves as imageId
+    ws2025-datacenter-az-<core|desktop> with the SKU's own AVMA key baked. Azure Edition is licensed for Azure and Azure Local, where
     Azure verification activates it and hotpatch is on by default; on plain
     Hyper-V the VM deactivates itself once it notices where it runs.
 
@@ -75,13 +74,20 @@
     is baked into the gold image - Build-Vms.ps1 injects Panther\unattend.xml
     per VM at provision time.
 
-    The temporary generalize VM is created under '<Hyper-V default VM path>\sysprep'
-    (e.g. D:\vms\sysprep) rather than the host default root, so it never sits beside
+    The temporary VM a gold is baked in - bake-<hv|azl>-<buildId> (named like its working disk), the sysprep VM for Windows and
+    the cloud-init bake VM for Linux - is created under '<Hyper-V default VM path>\bake'
+    (e.g. D:\vms\bake) rather than the host default root, so it never sits beside
     real VMs. Both the VM and that folder are removed again when the run finishes,
-    including on failure. Only the gold VHDX in -OutputDirectory survives (plus its
-    '<name>.vhdx.json' sidecar manifest on the HyperV target, recording the baked
-    locale/keyboard/time zone for Build-Vms.ps1), and it is attached in place, never
-    moved there.
+    including on failure. Only the gold VHDX in -OutputDirectory (default .\golds)
+    survives, and it is attached in place, never moved there.
+
+    Gold naming: a gold is built as bake-<hv|azl>-<random build id>.vhdx and,
+    once finished, renamed to <hv|azl>-<first 8 hex of its SHA-256>.vhdx with a
+    '<name>.vhdx.json' sidecar beside it (schema 2): id, sha256, osFamily, imageId,
+    displayName, build (Windows 10.0.26100.4061 / the distribution's version), language,
+    locale, keyboard, time zone, vhdType, diskSizeGB, source media, createdUtc. The
+    sidecar is how Build-Vms.ps1 finds and tells golds apart; a rebake gets a new hash
+    and sits beside the older gold instead of overwriting it.
 
 .NOTES
     Target shell : Windows PowerShell 5.1 and PowerShell 7
@@ -352,8 +358,8 @@ function Format-LogPathsForConsole {
         matters is which file, and where it sits relative to the toolkit.
 
         A path under the script's own folder becomes the part below it - so
-        D:\Tools\HyperV-Scripts\vhdx\hv-enus-ubuntu2604.vhdx reads as
-        vhdx\hv-enus-ubuntu2604.vhdx. Anything else keeps its root and its last two
+        D:\Tools\HyperV-Scripts\golds\hv-3f9a2c1e.vhdx reads as
+        golds\hv-3f9a2c1e.vhdx. Anything else keeps its root and its last two
         segments with an ellipsis between - D:\...\Images\gold.vhdx - which is enough
         to recognise a path without spelling it out.
 
@@ -465,23 +471,31 @@ function Write-Log {
     $logMessage = "$timestamp [ $rawTag ] $Message"
 
     if ($enableLogFile) {
-        # -ErrorAction Stop is what makes the catch below a catch. Without it Add-Content
-        # reports a locked file as a NON-TERMINATING error, which walks straight past
-        # try/catch and prints the whole red block to the console - from nothing worse
-        # than somebody tailing the log in another window.
-        #
-        # A lock on a log file is transient by nature, so it is retried rather than simply
-        # swallowed: catching it alone would drop the line silently, which is a worse
-        # failure than the noise it replaced. Three attempts, briefly spaced; after that
-        # the line is lost and the run carries on, because logging must never block it.
-        for ($attempt = 1; $attempt -le 3; $attempt++) {
+        # Appended through a FileStream that shares read AND write, so a reader tailing the
+        # log never blocks it. Something else can still hold the file for a moment: on
+        # 2026-10-03 two New-Vhdx lines vanished in the second after a VHDX was dismounted,
+        # past three 120 ms retries of the Add-Content this replaced. So a line is never
+        # dropped any more - what cannot be written now waits in $script:LogPending and
+        # goes in, in order, ahead of the next line that can. Logging still never blocks
+        # the run: a few short retries, then on.
+        if ($null -eq $script:LogPending) { $script:LogPending = New-Object System.Collections.Generic.List[string] }
+        $script:LogPending.Add($logMessage)
+        for ($attempt = 1; $attempt -le 5; $attempt++) {
             try {
-                Add-Content -Path $logFile -Value $logMessage -Encoding UTF8 -ErrorAction Stop
+                $stream = [System.IO.File]::Open($logFile, [System.IO.FileMode]::Append, [System.IO.FileAccess]::Write,
+                    ([System.IO.FileShare]::ReadWrite -bor [System.IO.FileShare]::Delete))
+                try {
+                    $bytes = [System.Text.Encoding]::UTF8.GetBytes((($script:LogPending -join "`r`n") + "`r`n"))
+                    $stream.Write($bytes, 0, $bytes.Length)
+                }
+                finally {
+                    $stream.Dispose()
+                }
+                $script:LogPending.Clear()
                 break
             }
             catch {
-                if ($attempt -eq 3) { break }
-                Start-Sleep -Milliseconds 120
+                if ($attempt -lt 5) { Start-Sleep -Milliseconds 100 }
             }
         }
     }
@@ -548,7 +562,7 @@ function Complete-Script {
     $scriptEndTime = Get-Date
     $duration      = $scriptEndTime - $scriptStartTime
 
-    Write-Log "Runtime $($duration.ToString('hh\:mm\:ss\.ff'))" -Tag "Info"
+    Write-Log "Runtime $(Format-Duration -Seconds $duration.TotalSeconds)" -Tag "Info"
     Write-Log "Exit $ExitCode" -Tag "Debug"
     Write-Log "==================== End ====================" -Tag "End"
 
@@ -891,7 +905,7 @@ function Test-IsServerDatacenterImage {
 function Test-IsServerCoreImage {
     # Server Core, i.e. a Server image that is not Desktop Experience. WIM names never say
     # "Core" - the GUI ones say "Desktop Experience" and Core is what is left, which is the
-    # same test Get-VhdxFileName slugs with.
+    # same test Get-ImageNameSlug slugs with.
     param([string]$ImageName)
 
     if ([string]::IsNullOrWhiteSpace($ImageName)) {
@@ -1029,32 +1043,18 @@ function Get-LanguageSlug {
     return $tag.ToLowerInvariant()
 }
 
-function Get-VhdxFileName {
-    # <hv|azl>-<language>-<imageId>.vhdx
-    # hv-enus-ws2025-datacenter-core.vhdx / azl-dede-w11-enterprise-ms.vhdx
-    #
-    # The language sits second so the tail stays free for the imageId, which ends in the
-    # tokens that distinguish editions (-core, -desktop, -ms, -n). Two bakes of the same
-    # image in different languages get different names instead of overwriting each other;
-    # Build-Vms.ps1 asks which one to use when both are on disk.
+function Get-GoldImageId {
+    # The studio's imageId for what the gold IS when a VM boots it, not for the index
+    # it was applied from. A Pro image that leaves here as multi-session is
+    # w11-enterprise-ms to everything downstream, a Standard image that leaves as Azure
+    # Edition is ws2025-datacenter-az-*; the sidecar keeps the source index honest.
     param(
         [string]$ImageName,
         [int]$ImageIndex,
-        [string]$Target,
-        [string]$ImageLanguage,
         [string]$EditionUpgrade = ""
     )
 
-    $methodPrefix = "azl"
-    if ($Target -eq "HyperV") {
-        $methodPrefix = "hv"
-    }
-
     $slug = Get-ImageNameSlug -ImageName $ImageName -ImageIndex $ImageIndex
-    # The gold is named for what it is when a VM boots it, not for the index it was
-    # applied from. A Pro image that leaves here as multi-session is w11-enterprise-ms
-    # to everything downstream, a Standard image that leaves as Azure Edition is
-    # ws2025-datacenter-az-*; the sidecar keeps the source index honest.
     if ($EditionUpgrade -eq "MultiSession") {
         $slug = $slug -replace "^(w\d+)-.*$", '$1-enterprise-ms'
     }
@@ -1063,71 +1063,288 @@ function Get-VhdxFileName {
         # install type, so a Desktop Experience source stays Desktop Experience.
         $slug = $slug -replace "^(ws\d+)-(standard|datacenter)", '$1-datacenter-az'
     }
-    $language = Get-LanguageSlug -ImageLanguage $ImageLanguage
-    return ("{0}-{1}-{2}.vhdx" -f $methodPrefix, $language, $slug).ToLowerInvariant()
+    return $slug.ToLowerInvariant()
 }
 
-function Write-GoldImageManifest {
-    # Sidecar manifest next to the gold VHDX ("<name>.vhdx.json"). Records the region
-    # settings the image carries so Build-Vms.ps1 can resolve locale/keyboard from the
-    # gold itself when config.json says locale "default" instead of trusting the studio
-    # picker to match the bake.
-    #
-    # HyperV target only. Build-Vms.ps1 enumerates hv-*.vhdx and reads the sidecar
-    # beside the gold it picked, so an azl-*.vhdx never has a reader: it goes to Azure
-    # Local, which provisions from its own answer file and never sees a file sitting
-    # next to the disk. Its region settings travel inside the image instead, applied at
-    # first boot by the SetupComplete payload. Writing one there would only imply a
-    # consumer that does not exist.
+function Get-GoldTargetPrefix {
+    # hv- for a gold Build-Vms.ps1 provisions, azl- for one that goes to Azure Local.
+    # The one thing about a gold its file name still says out loud: the two are not
+    # interchangeable, and Explorer is where somebody copies one to the wrong place.
+    param([string]$Target)
+
+    if ($Target -eq "AzureLocal") { return "azl" }
+    return "hv"
+}
+
+function New-GoldBuildId {
+    # Eight random hex digits naming one build from start to finish: the working disk
+    # (bake-hv-7c41e09a.vhdx), the temporary bake VM (bake-hv-7c41e09a) and
+    # the bake log. The sidecar keeps it as buildId, so a gold leads back to its log.
+    return [Guid]::NewGuid().ToString("N").Substring(0, 8)
+}
+
+function Get-GoldTargetDirectory {
+    # Where a gold for this target lands: Hyper-V golds in the output folder itself,
+    # where Build-Vms.ps1 looks for them, Azure Local golds in its azl\ subfolder. The
+    # two are never interchangeable, so they never share a folder. Created on demand.
     param(
-        [string]$VhdPath,
+        [string]$OutputDirectory,
+        [string]$Target
+    )
+
+    $dir = $OutputDirectory
+    if ($Target -eq "AzureLocal") { $dir = Join-Path -Path $OutputDirectory -ChildPath "azl" }
+    if (-not (Test-Path -LiteralPath $dir)) { New-Item -ItemType Directory -Path $dir -Force | Out-Null }
+    return $dir
+}
+
+function Get-AzureImageName {
+    # A ready --name for az stack-hci-vm image create, because the hash that names the
+    # file means nothing in the portal: imageId, build without the "10.0." every Windows
+    # build shares, language - ws2025-datacenter-core-26100-33438-en-us. Azure resource
+    # names take letters, digits, '-', '_' and '.', at most 80 characters.
+    param(
+        [string]$ImageId,
+        [string]$Build,
+        [string]$Language
+    )
+
+    $parts = @($ImageId, ($Build -replace "^10\.0\.", ""), $Language) | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
+    $name = (($parts -join "-").ToLowerInvariant() -replace "[^a-z0-9-]+", "-").Trim("-")
+    if ($name.Length -gt 80) { $name = $name.Substring(0, 80).Trim("-") }
+    return $name
+}
+
+function Get-GoldWorkingName {
+    # The name a gold is built under before it has a hash to be named for:
+    # bake-hv-7c41e09a.vhdx. The bake- prefix keeps it out of every hv-*.vhdx glob and
+    # sorts it apart from the golds, so a disk a failed run leaves behind is never
+    # mistaken for one; the id is the one the bake VM (bake-hv-7c41e09a) and the bake log
+    # carry. Build-Vms.ps1 reads sidecars, and a working disk never has one. What is
+    # being built is in the log line beside it.
+    param(
+        [string]$Target,
+        [string]$BuildId
+    )
+
+    return ("bake-{0}-{1}.vhdx" -f (Get-GoldTargetPrefix -Target $Target), $BuildId).ToLowerInvariant()
+}
+
+function Get-GoldBuildIdFromPath {
+    # bake-hv-7c41e09a.vhdx -> 7c41e09a, the sidecar's buildId.
+    param([string]$Path)
+
+    $name = [System.IO.Path]::GetFileNameWithoutExtension($Path)
+    return ($name -replace "^bake-(hv|azl)-", "")
+}
+
+function Get-GoldFileHash {
+    # SHA-256 of the finished gold. SHA256Cng rather than Get-FileHash: on Windows
+    # PowerShell 5.1 Get-FileHash ends up in SHA256Managed, which runs a 127 GB fixed
+    # disk at a fraction of what the drive can deliver. CNG uses the CPU's SHA
+    # instructions and keeps up with the read. 4 MB reads, sequential-scan hint.
+    param([Parameter(Mandatory = $true)][string]$Path)
+
+    $sha = $null
+    $stream = $null
+    try {
+        try { $sha = New-Object System.Security.Cryptography.SHA256Cng }
+        catch { $sha = [System.Security.Cryptography.SHA256]::Create() }
+        $stream = New-Object System.IO.FileStream($Path, [System.IO.FileMode]::Open,
+            [System.IO.FileAccess]::Read, [System.IO.FileShare]::Read, 4MB,
+            [System.IO.FileOptions]::SequentialScan)
+        $hash = $sha.ComputeHash($stream)
+        return (($hash | ForEach-Object { $_.ToString("x2") }) -join "")
+    }
+    finally {
+        if ($stream) { $stream.Dispose() }
+        if ($sha) { $sha.Dispose() }
+    }
+}
+
+function Complete-GoldImage {
+    <#
+        Turns a finished working disk into a gold: hash it, rename it to
+        <hv|azl>-<first 8 hex of its SHA-256>.vhdx, and write the sidecar beside it.
+
+        The sidecar is what identifies a gold now - imageId, language, build, disk -
+        so every gold gets one, Azure Local included: a hash says nothing about what is
+        inside. Written last, so a run that dies between the rename and the sidecar
+        leaves a disk Build-Vms.ps1 does not pick up rather than one it misreads.
+
+        Every rebake hashes differently, so it sits beside the gold it replaces instead
+        of overwriting it. Build-Vms.ps1 picks between them.
+
+        Returns the gold's path, or "" on failure.
+    #>
+    param(
+        [Parameter(Mandatory = $true)][string]$WorkingPath,
+        [Parameter(Mandatory = $true)][string]$Target,
+        [Parameter(Mandatory = $true)][System.Collections.Specialized.OrderedDictionary]$Manifest,
+        [int]$Generation = 2
+    )
+
+    $buildId = Get-GoldBuildIdFromPath -Path $WorkingPath
+
+    try {
+        Write-Log "Hashing (SHA-256)" -Tag "Run"
+        $clock = [System.Diagnostics.Stopwatch]::StartNew()
+        $sha256 = Get-GoldFileHash -Path $WorkingPath
+        $clock.Stop()
+        Write-Log "SHA-256 $sha256 ($(Format-Duration -Seconds $clock.Elapsed.TotalSeconds))" -Tag "ok"
+
+        $id = $sha256.Substring(0, 8)
+        $fileName = "{0}-{1}.vhdx" -f (Get-GoldTargetPrefix -Target $Target), $id
+        $goldPath = Join-Path -Path (Split-Path -Parent $WorkingPath) -ChildPath $fileName
+        if (Test-Path -LiteralPath $goldPath) {
+            # Eight hex digits collide about once in four billion pairs; two bakes with
+            # identical bytes collide always, and sysprep makes that impossible. Either
+            # way the gold already there is the one VMs may be parented on.
+            throw "'$goldPath' already exists - not overwriting a gold VMs may be built on"
+        }
+
+        $vhd = Get-VHD -Path $WorkingPath -ErrorAction Stop
+        Rename-Item -LiteralPath $WorkingPath -NewName $fileName -ErrorAction Stop
+
+        # Identity first, then what the caller knows about the image, then the disk.
+        $sidecar = [ordered]@{
+            schema  = 2
+            id      = $id
+            sha256  = $sha256
+            buildId = $buildId
+        }
+        foreach ($key in $Manifest.Keys) { $sidecar[$key] = $Manifest[$key] }
+        # Which host and which copy of this script baked it. D:\deploy has no git, so the
+        # script's own hash is the only way to tell two script versions apart later.
+        if ([string]::IsNullOrWhiteSpace([string]$script:ScriptSha256) -and $PSCommandPath) {
+            try { $script:ScriptSha256 = Get-GoldFileHash -Path $PSCommandPath } catch { $script:ScriptSha256 = "" }
+        }
+        $sidecar["bakeHost"] = $env:COMPUTERNAME
+        $sidecar["scriptSha256"] = [string]$script:ScriptSha256
+        $sidecar["target"] = $Target
+        $sidecar["generation"] = $Generation
+        $sidecar["vhdType"] = [string]$vhd.VhdType
+        $sidecar["diskSizeGB"] = [int][math]::Round($vhd.Size / 1GB)
+        $sidecar["fileBytes"] = [int64]$vhd.FileSize
+        $sidecar["createdUtc"] = [DateTime]::UtcNow.ToString("yyyy-MM-ddTHH:mm:ssZ")
+
+        if ($Target -eq "AzureLocal") { $sidecar = ConvertTo-AzureLocalSidecar -Sidecar $sidecar }
+
+        $sidecarPath = "$goldPath.json"
+        $json = $sidecar | ConvertTo-Json
+        [System.IO.File]::WriteAllText($sidecarPath, $json + "`n", (New-Object System.Text.UTF8Encoding($false)))
+        Write-Log "Gold '$goldPath' + sidecar" -Tag "ok"
+        return $goldPath
+    }
+    catch {
+        Write-Log "Could not finish the gold from '$WorkingPath': $($_.Exception.Message)" -Tag "Error"
+        return ""
+    }
+}
+
+function ConvertTo-AzureLocalSidecar {
+    <#
+        An Azure Local gold's sidecar, trimmed to what matters there. Build-Vms.ps1 never
+        provisions from it, so everything only the per-VM builder reads goes - inputLocale,
+        the Secure Boot template, package family, most bake options - and what stays is
+        what tells two golds apart and what az stack-hci-vm image create and the VM
+        create that follows want to know: OS type, generation, Secure Boot, TPM, whether
+        it is generalized, plus azureImageName as a ready --name.
+    #>
+    param([System.Collections.Specialized.OrderedDictionary]$Sidecar)
+
+    $keep = @(
+        "schema", "id", "sha256", "buildId", "label",
+        "osFamily", "imageId", "displayName", "azureImageName", "build", "editionId", "evaluation",
+        "sourceEdition", "editionUpgrade",
+        "language", "locale", "keyboardLayout", "timeZone", "localeMode",
+        "generalized", "activation", "secureBoot", "requiresTpm", "rdp",
+        "distro", "kernel", "updatesApplied",
+        "sourceMedia", "sourceMediaSha256", "bakeHost", "scriptSha256",
+        "target", "generation", "vhdType", "diskSizeGB", "fileBytes", "createdUtc")
+
+    # Derived before the trim: the full sidecar has them in other shapes.
+    $Sidecar["azureImageName"] = Get-AzureImageName -ImageId ([string]$Sidecar["imageId"]) `
+        -Build ([string]$Sidecar["build"]) -Language ([string]$Sidecar["language"])
+    if (-not $Sidecar.Contains("secureBoot")) { $Sidecar["secureBoot"] = ($Sidecar["osFamily"] -eq "windows") }
+    if ($Sidecar.Contains("bakeOptions") -and $null -ne $Sidecar["bakeOptions"]) {
+        $Sidecar["rdp"] = [bool]$Sidecar["bakeOptions"]["rdp"]
+    }
+
+    $trimmed = [ordered]@{}
+    foreach ($key in $keep) {
+        if ($Sidecar.Contains($key)) { $trimmed[$key] = $Sidecar[$key] }
+    }
+    return $trimmed
+}
+
+function New-WindowsGoldManifest {
+    # What a Windows gold's sidecar says about the image; Complete-GoldImage adds the
+    # identity and the disk. locale/keyboardLayout/inputLocale are what Build-Vms.ps1
+    # resolves locale "default" from; build is what it sorts golds of one image by.
+    param(
+        [string]$ImageId,
         [string]$ImageName,
         [int]$ImageIndex,
-        [string]$Target,
+        [string]$Build,
+        [string]$SourceMedia,
         [string]$Locale,
         [string]$KeyboardLayout,
         [string]$TimeZone,
         [string]$ImageLanguage,
-        [string]$EditionUpgrade = ""
+        [string]$EditionUpgrade = "",
+        [string]$EditionId,
+        [string]$SourceMediaSha256,
+        [bool]$Generalized = $true,
+        [string]$Activation = "none",
+        [System.Collections.IDictionary]$BakeOptions
     )
 
-    if ($Target -eq "AzureLocal") {
-        Write-Log "Azure Local gold - no sidecar manifest" -Tag "Info"
-        return $true
-    }
-
-    $manifestPath = "$VhdPath.json"
+    $isClient = Test-IsClientImage -ImageName $ImageName
     $manifest = [ordered]@{
-        imageName      = $ImageName
-        imageIndex     = $ImageIndex
-        target         = $Target
+        label          = ""
+        osFamily       = "windows"
+        imageId        = $ImageId
+        displayName    = $(if ($EditionUpgrade) { [string]$script:VirtualEditionCatalog[$EditionUpgrade].DisplayName } else { $ImageName })
+        build          = $Build
+        language       = $ImageLanguage
         locale         = $Locale
         keyboardLayout = $KeyboardLayout
         inputLocale    = (Get-InputLocaleId -KeyboardLayout $KeyboardLayout)
         timeZone       = $TimeZone
         localeMode     = "offline"
-        imageLanguage  = $ImageLanguage
-        createdUtc     = [DateTime]::UtcNow.ToString("yyyy-MM-ddTHH:mm:ssZ")
+        imageName      = $ImageName
+        imageIndex     = $ImageIndex
+        editionId      = $EditionId
+        # DISM names an evaluation SKU ...Eval: 180 days, no AVMA, no KMS.
+        evaluation     = ($EditionId -match "Eval$")
+        # False only for a -SkipSysprep build, which is not release-ready: every VM from
+        # it shares the gold's SID and computer identity.
+        generalized    = $Generalized
+        activation     = $Activation
+        # What Build-Vms.ps1 sets on the VM. Windows 11 will not install without a TPM
+        # and every Windows gold boots with the Microsoft Windows Secure Boot template.
+        requiresTpm    = $isClient
+        secureBootTemplate = "MicrosoftWindows"
+        bakeOptions    = $BakeOptions
+        sourceMedia    = $SourceMedia
+        sourceMediaSha256 = $SourceMediaSha256
     }
 
     if (-not [string]::IsNullOrWhiteSpace($EditionUpgrade)) {
-        # imageName and imageIndex above describe the index that was applied. The
-        # gold's file name describes what it became. Both are true and neither implies
-        # the other, so the sidecar says so out loud.
+        # imageName and imageIndex describe the index that was applied; imageId and
+        # displayName describe what it became. Both are true and neither implies the
+        # other, so the sidecar says so out loud.
         $manifest["sourceEdition"] = $ImageName
         $manifest["editionUpgrade"] = $script:VirtualEditionCatalog[$EditionUpgrade].ManifestValue
+        # The SKU it was changed to, as DISM named it (ServerRdsh, ServerTurbineCor).
+        if (-not [string]::IsNullOrWhiteSpace($script:EditionUpgradeTarget)) {
+            $manifest["sourceEditionId"] = $EditionId
+            $manifest["editionId"] = $script:EditionUpgradeTarget
+            $manifest["evaluation"] = ($script:EditionUpgradeTarget -match "Eval$")
+        }
     }
-
-    try {
-        $json = $manifest | ConvertTo-Json
-        [System.IO.File]::WriteAllText($manifestPath, $json + "`n", (New-Object System.Text.UTF8Encoding($false)))
-        Write-Log "Wrote gold image manifest '$manifestPath'" -Tag "Info"
-        return $true
-    }
-    catch {
-        Write-Log "Failed to write gold image manifest '$manifestPath': $($_.Exception.Message)" -Tag "Error"
-        return $false
-    }
+    return $manifest
 }
 
 # ---------------------------[ Unattend Content ]---------------------------
@@ -3185,7 +3402,7 @@ function Start-InteractiveConfiguration {
     # Not a question: -OutputDirectory decides it, the same as on the Linux path.
     $outputDirectory = $CurrentOutputDirectory
     if ([string]::IsNullOrWhiteSpace($outputDirectory)) {
-        $outputDirectory = Join-Path -Path $PSScriptRoot -ChildPath "vhdx"
+        $outputDirectory = Join-Path -Path $PSScriptRoot -ChildPath "golds"
     }
     $isoId = $null
     $isoFilePath = $null
@@ -3540,7 +3757,7 @@ function Start-InteractiveConfiguration {
                             "index " + ($azureEditionIndexes -join ", ") + " built as own gold, upgraded after generalize"
                         } else { "No" }) -LabelWidth 24 -IndentWidth 2
                     }
-                    Write-FastfetchInfoRow -Label "output"   -Value $outputDirectory -LabelWidth 24 -IndentWidth 2
+                    Write-FastfetchInfoRow -Label "output"   -Value $(if ($targetId -eq "AzureLocal") { Join-Path -Path $outputDirectory -ChildPath "azl" } else { $outputDirectory }) -LabelWidth 24 -IndentWidth 2
                     Write-Host ""
                     Write-Studio -Text "  Region" -Key "fg"
                     Write-FastfetchInfoRow -Label "locale"    -Value $localeSummary -LabelWidth 24 -IndentWidth 2
@@ -3656,6 +3873,30 @@ function Format-Duration {
     $span = [System.TimeSpan]::FromSeconds([Math]::Round($Seconds))
     if ($span.TotalHours -ge 1) { return ("{0}:{1:00}:{2:00}" -f [int]$span.TotalHours, $span.Minutes, $span.Seconds) }
     return ("{0}:{1:00}" -f $span.Minutes, $span.Seconds)
+}
+
+function Format-Count {
+    # "1 gold" / "2 golds" - a count with the noun it counts, never "gold(s)".
+    param(
+        [int]$Count,
+        [string]$Noun,
+        [string]$Plural = ""
+    )
+
+    if ([string]::IsNullOrWhiteSpace($Plural)) { $Plural = $Noun + "s" }
+    return "{0} {1}" -f $Count, $(if ($Count -eq 1) { $Noun } else { $Plural })
+}
+
+function Write-LogBreak {
+    # An empty line between golds, on the console and in the log file alike, so a run
+    # that builds several reads as one block per gold.
+    if (-not $log) { return }
+    Write-Host ""
+    if ($enableLogFile) {
+        # Queued, not written: the next Write-Log puts it in the file ahead of its own line.
+        if ($null -eq $script:LogPending) { $script:LogPending = New-Object System.Collections.Generic.List[string] }
+        $script:LogPending.Add("")
+    }
 }
 
 function Get-ConsoleWidth {
@@ -5304,34 +5545,38 @@ function Get-CachedLinuxImage {
     return $imagePath
 }
 
-function Write-LinuxGoldManifest {
-    # The Linux counterpart to Write-GoldImageManifest. Build-Vms.ps1 reads the sidecar
-    # beside a gold to learn what it is; for a Linux gold the decisive field is
-    # osFamily, which is what tells the builder not to go looking for a language slug
-    # in the file name or an unattend.xml to write into the disk.
+function New-LinuxGoldManifest {
+    # The Linux counterpart to New-WindowsGoldManifest. For a Linux gold the decisive
+    # field is osFamily, which is what tells Build-Vms.ps1 not to go looking for an
+    # unattend.xml to write into the disk. build is the distribution's version; the
+    # kernel the bake left installed is the finer-grained answer, recorded when known.
     param(
-        [Parameter(Mandatory = $true)][string]$VhdPath,
         [Parameter(Mandatory = $true)][object]$Entry,
-        [string]$Target = "HyperV",
         [string]$Language,
         [string]$Locale,
         [string]$KeyboardLayout,
         [string]$TimeZone,
-        [string]$VhdType,
+        [string]$Kernel,
+        [bool]$UpdatesApplied,
+        [string[]]$Features = @(),
         [string]$SourceChecksum
     )
 
-    if ($Target -eq "AzureLocal") {
-        # Same rule as Write-GoldImageManifest: Build-Vms.ps1 reads the sidecar beside a
-        # gold it picked, and it only ever picks hv-*. An azl- gold has no reader, so a
-        # manifest there would imply a consumer that does not exist.
-        Write-Log "Azure Local gold - no sidecar manifest" -Tag "Info"
-        return $true
-    }
-
-    $manifestPath = "$VhdPath.json"
-    $manifest = [ordered]@{
+    $secureBoot = $(if ($null -ne $Entry.PSObject.Properties["SecureBoot"] -and $null -ne $Entry.SecureBoot) { [bool]$Entry.SecureBoot } else { $true })
+    return [ordered]@{
+        label          = ""
         osFamily       = "linux"
+        imageId        = [string]$Entry.ImageId
+        displayName    = [string]$Entry.Name
+        build          = [string]$Entry.Version
+        # language and locale are SEPARATE on Linux: language becomes LANG, locale
+        # becomes the LC_* format family. A reader that conflates them gets German
+        # error messages it did not ask for.
+        language       = $Language
+        locale         = $Locale
+        keyboardLayout = $KeyboardLayout
+        timeZone       = $TimeZone
+        localeMode     = "cloud-init"
         distro         = $Entry.Distro
         # The package family, which is what Build-Vms.ps1 needs and cannot work out
         # from the distro without carrying a copy of the catalog: the per-VM seed
@@ -5341,36 +5586,21 @@ function Write-LinuxGoldManifest {
         # Whether a VM built from this gold can boot with Secure Boot on. False only
         # for a distribution that ships no signed shim, and recorded here because the
         # per-VM config decides Secure Boot and has no other way to know.
-        secureBoot     = $(if ($null -ne $Entry.PSObject.Properties["SecureBoot"] -and $null -ne $Entry.SecureBoot) { [bool]$Entry.SecureBoot } else { $true })
-        distroVersion  = $Entry.Version
-        imageName      = $Entry.Name
-        target         = $Target
-        generation     = $Entry.Generation
-        vhdType        = $VhdType
-        # language and locale are SEPARATE on Linux: language becomes LANG, locale
-        # becomes the LC_* format family. A reader that conflates them gets German
-        # error messages it did not ask for.
-        language       = $Language
-        locale         = $Locale
-        keyboardLayout = $KeyboardLayout
-        timeZone       = $TimeZone
-        localeMode     = "cloud-init"
+        secureBoot     = $secureBoot
+        # These images boot through shim, signed by Microsoft's third-party UEFI CA; the
+        # Windows template does not trust it. Empty when Secure Boot has to stay off.
+        secureBootTemplate = $(if ($secureBoot) { "MicrosoftUEFICertificateAuthority" } else { "" })
+        requiresTpm    = $false
+        # The bake leaves nothing machine-specific behind (machine-id, host keys, initrd),
+        # and a stock cloud image never had any.
+        generalized    = $true
+        kernel         = $Kernel
+        updatesApplied = $UpdatesApplied
+        features       = @($Features)
         sourceUrl      = $Entry.Url
         sourceFormat   = $Entry.SourceFormat
         sourceChecksum = $SourceChecksum
         checksumAlgorithm = $Entry.Algorithm
-        createdUtc     = [DateTime]::UtcNow.ToString("yyyy-MM-ddTHH:mm:ssZ")
-    }
-
-    try {
-        $json = $manifest | ConvertTo-Json
-        [System.IO.File]::WriteAllText($manifestPath, $json + "`n", (New-Object System.Text.UTF8Encoding($false)))
-        Write-Log "Wrote gold image manifest '$manifestPath'" -Tag "Info"
-        return $true
-    }
-    catch {
-        Write-Log "Failed to write gold image manifest '$manifestPath': $($_.Exception.Message)" -Tag "Error"
-        return $false
     }
 }
 
@@ -5399,8 +5629,8 @@ function New-LinuxGoldImage {
         [string]$WorkDirectory
     )
 
-    # The caller always names the gold now, because the name carries the language and
-    # only the caller knows it. The bare imageId is a last resort, not a default.
+    # The caller names the working disk (Get-LinuxGoldName, bake-hv-<buildId>); the gold's final name is
+    # its hash, given once the bake is done. The bare imageId is a last resort.
     if ([string]::IsNullOrWhiteSpace($GoldName)) { $GoldName = [string]$Entry.ImageId }
 
     if ([string]::IsNullOrWhiteSpace($WorkDirectory)) { $WorkDirectory = $OutputDirectory }
@@ -5412,7 +5642,7 @@ function New-LinuxGoldImage {
     $intermediateVhd = Join-Path -Path $WorkDirectory -ChildPath ("{0}.tmp.vhd" -f $GoldName)
 
     if (Test-Path -LiteralPath $vhdxPath) {
-        Write-Log "Replacing the existing gold '$vhdxPath'" -Tag "Info"
+        Write-Log "Removing a working disk an earlier run left behind: '$vhdxPath'" -Tag "Info"
         Remove-Item -LiteralPath $vhdxPath -Force
     }
     if (Test-Path -LiteralPath $intermediateVhd) { Remove-Item -LiteralPath $intermediateVhd -Force }
@@ -5697,22 +5927,14 @@ function Get-LinuxDistroDisplayName {
 }
 
 function Get-LinuxGoldName {
-    <#
-        The gold's file name: <hv|azl>-<language>-<imageId>, which is the SAME three
-        segments Get-VhdxFileName builds for Windows - hv-enus-ubuntu2604 beside
-        hv-dede-ws2025-datacenter-core.
+    # The working disk a Linux gold is built and baked under, without the extension:
+    # bake-hv-7c41e09a - the same shape Get-GoldWorkingName gives a Windows gold.
+    # Complete-GoldImage renames it to hv-<hash>.vhdx once the bake has finished, so a
+    # gold whose bake failed is never named like one.
+    param([string]$Target)
 
-        That is not cosmetic. Get-GoldNameParts in Build-Vms.ps1 parses exactly this
-        shape, so a Linux gold is resolved by the ordinary imageId lookup and takes part
-        in language selection like any other: two golds of one distribution in two
-        languages can sit in the folder and be told apart.
-    #>
-    param([object]$Entry, [string]$Target, [string]$Language)
-
-    $prefix = "azl"
-    if ($Target -ne "AzureLocal") { $prefix = "hv" }
-    $slug = Get-LanguageSlug -ImageLanguage $Language
-    return ("{0}-{1}-{2}" -f $prefix, $slug, $Entry.ImageId).ToLowerInvariant()
+    $working = Get-GoldWorkingName -Target $Target -BuildId (New-GoldBuildId)
+    return [System.IO.Path]::GetFileNameWithoutExtension($working)
 }
 
 function Get-AptMirrorCatalog {
@@ -7089,19 +7311,27 @@ function Invoke-LinuxBakeBoot {
         [int]$TimeoutMinutes = 30
     )
 
-    $vmName = "bake-" + $Entry.ImageId + "-" + ([Guid]::NewGuid().ToString("N").Substring(0, 6))
+    # Named like its working disk, so VM, disk and bake log are one name.
+    $vmName = [System.IO.Path]::GetFileNameWithoutExtension($VhdxPath)
     $pipeName = "bake-" + [Guid]::NewGuid().ToString("N").Substring(0, 12)
-    $seedPath = [System.IO.Path]::ChangeExtension($VhdxPath, ".bake-seed.vhdx")
+    # The VM and its seed live under <VM path>\bake\bake-hv-<buildId>, like the Windows
+    # sysprep VM - never beside the lab's VMs, and never in the golds folder.
+    $vmRoot = Get-BakeVmRootPath
+    $seedPath = Join-Path -Path (Join-Path -Path $vmRoot -ChildPath $vmName) -ChildPath "seed.vhdx"
     $created = $false
 
     try {
         # The VM is created BEFORE the seed, because a static address has to be pinned to
         # the adapter's MAC and that MAC does not exist until Hyper-V has assigned one.
-        Write-Log "Creating the temporary bake VM '$vmName'" -Tag "Run"
-        New-VM -Name $vmName -Generation 2 -MemoryStartupBytes 2GB -VHDPath $VhdxPath -SwitchName $SwitchName -ErrorAction Stop | Out-Null
+        $cpuCount = Get-BakeVmCpuCount
+        Write-Log "Creating '$vmName' ($cpuCount vCPU, $([math]::Round($script:BakeVmMemoryLinux / 1GB)) GB, switch '$SwitchName')" -Tag "Run"
+        Write-Log "Bake VM in '$vmRoot', Gen 2" -Tag "Debug"
+        New-Item -ItemType Directory -Path (Split-Path -Parent $seedPath) -Force | Out-Null
+        New-VM -Name $vmName -Generation 2 -MemoryStartupBytes $script:BakeVmMemoryLinux -VHDPath $VhdxPath -SwitchName $SwitchName `
+            -Path $vmRoot -ErrorAction Stop | Out-Null
         $created = $true
 
-        Set-VMProcessor -VMName $vmName -Count 2 -ErrorAction Stop
+        Set-VMProcessor -VMName $vmName -Count $cpuCount -ErrorAction Stop
         Set-VMMemory -VMName $vmName -DynamicMemoryEnabled $false -ErrorAction Stop
 
         # The third-party UEFI CA, not the Windows template - these images are signed
@@ -7200,7 +7430,7 @@ function Invoke-LinuxBakeBoot {
 
         Set-VMComPort -VMName $vmName -Number 1 -Path "\\.\pipe\$pipeName" -ErrorAction Stop
 
-        Write-Log "Starting the bake boot - installing $($Entry.BakePackages -join ', ')" -Tag "Run"
+        Write-Log "Starting '$vmName' - cloud-init bake, up to $TimeoutMinutes min, installing $($Entry.BakePackages -join ', ')" -Tag "Run"
         Start-VM -Name $vmName -ErrorAction Stop
 
         $transcript = Read-VmSerialConsole -PipeName $pipeName -VmName $vmName -TimeoutMinutes $TimeoutMinutes
@@ -7222,13 +7452,13 @@ function Invoke-LinuxBakeBoot {
             return $false
         }
 
-        # Beside the run's own log, not beside the gold. The vhdx folder holds disks
+        # Beside the run's own log, not beside the gold. The golds folder holds disks
         # and their sidecars; a 127 KB console transcript is neither, and leaving it
         # there means every gold ships with a stray file that looks like part of it.
         # Named for the gold and stamped, so several bakes of the same image do not
         # overwrite each other the way a fixed name would.
         $logPath = Join-Path -Path $logFileDirectory -ChildPath (
-            "{0}-bake-{1}.log" -f [System.IO.Path]::GetFileNameWithoutExtension($VhdxPath), (Get-Date -Format "yyyyMMdd-HHmm"))
+            "{0}-{1}.log" -f [System.IO.Path]::GetFileNameWithoutExtension($VhdxPath), (Get-Date -Format "yyyyMMdd-HHmm"))
         if (-not (Test-Path -LiteralPath $logFileDirectory)) {
             New-Item -ItemType Directory -Path $logFileDirectory -Force | Out-Null
         }
@@ -7307,6 +7537,8 @@ function Invoke-LinuxBakeBoot {
 
             $kernel = ""
             if ($transcript -match "BAKE-KERNEL\s+(\S+)") { $kernel = $Matches[1] }
+            # Read back by Invoke-LinuxGoldRun for the sidecar.
+            $script:LastBakeKernel = $kernel
             if ($kernel) { Write-Log "Bake finished - guest kernel $kernel" -Tag "ok" }
             else { Write-Log "Bake finished" -Tag "ok" }
             return $true
@@ -7341,6 +7573,9 @@ function Invoke-LinuxBakeBoot {
         if (Test-Path -LiteralPath $seedPath) {
             Remove-Item -LiteralPath $seedPath -Force -ErrorAction SilentlyContinue
         }
+        # The VM's folder, and bake\ itself once it is empty. The VM is already gone, so
+        # this only tidies; it keeps any folder that still holds a disk.
+        Remove-TemporaryVm -VmName $vmName -VmRoot $vmRoot
     }
 }
 
@@ -7376,7 +7611,6 @@ function Start-LinuxInteractiveConfiguration {
     $distroId = $null
     $entry = $null
     $targetId = $null
-    $goldName = ""
     $language = $null
     $locale = $null
     $keyboard = $null
@@ -7446,7 +7680,7 @@ function Start-LinuxInteractiveConfiguration {
             }
             "target" {
                 # The same question the Windows path asks, and it decides the same two things:
-                # the gold's prefix, and whether a sidecar manifest is written at all.
+                # the gold's prefix, and whether Build-Vms.ps1 will ever provision from it.
                 $targetItems = @(
                     [PSCustomObject]@{ Id = "HyperV";     Label = "Hyper-V" }
                     [PSCustomObject]@{ Id = "AzureLocal"; Label = "Azure Local" }
@@ -7463,7 +7697,7 @@ function Start-LinuxInteractiveConfiguration {
                 }
             }
             "azurelocal" {
-                # Worth saying once, plainly. Build-Vms.ps1 enumerates hv-*.vhdx and nothing
+                # Worth saying once, plainly. Build-Vms.ps1 provisions hv- golds and nothing
                 # else, so an azl- gold never meets this project's seed machinery: whatever
                 # Azure Local does for cloud-init is what that VM gets. The bake still runs -
                 # it happens on this Hyper-V host - so the kernel, the daemons and the SSH
@@ -7475,7 +7709,7 @@ function Start-LinuxInteractiveConfiguration {
                 $answer = Show-NoteBlade -Title "Azure Local" -AllowBack:$canBack `
                     -StatusLines ([ordered]@{ distro = $entry.Name }) -Lines @(
                         "An Azure Local gold is not provisioned by Build-Vms.ps1 - it only builds hv-* golds.",
-                        "No per-VM seed is written for it, and no sidecar manifest: nothing on that path reads one.",
+                        "It lands in golds\azl\ with a trimmed sidecar - azureImageName there is a ready --name for the upload.",
                         "What the bake puts in is all such a VM carries, so pick the bake options with that in mind."
                     )
                 if (Test-BladeAnswer -Value $answer) { $goto = "language" }
@@ -7519,7 +7753,6 @@ function Start-LinuxInteractiveConfiguration {
                     -StatusLines ([ordered]@{ distro = $entry.Name })
                 if (Test-BladeAnswer -Value $answer) {
                     $language = $answer
-                    $goldName = Get-LinuxGoldName -Entry $entry -Target $targetId -Language $language
                     $goto = "locale"
                 }
             }
@@ -7950,7 +8183,7 @@ function Start-LinuxInteractiveConfiguration {
                     $answer = Show-MultiSelectMenu -Title "Optional features" -Items $featureItems -AllowEmpty `
                         -Heading "Features" -HeadingHint "Baked into the gold, not per VM - Required is installed whatever is ticked" `
                         -AllowBack:$canBack `
-                        -StatusLines ([ordered]@{ distro = $entry.Name; gold = "$goldName.vhdx" })
+                        -StatusLines ([ordered]@{ distro = $entry.Name; language = $language })
                     if (Test-BladeAnswer -Value $answer) {
                         $featureAnswer = $answer
                         $bakeFeatures = $answer
@@ -7965,7 +8198,7 @@ function Start-LinuxInteractiveConfiguration {
                 }
                 $outputDirectory = $CurrentOutputDirectory
                 if ([string]::IsNullOrWhiteSpace($outputDirectory)) {
-                    $outputDirectory = Join-Path -Path $PSScriptRoot -ChildPath "vhdx"
+                    $outputDirectory = Join-Path -Path $PSScriptRoot -ChildPath "golds"
                 }
                 # Worked out once: the summary shows it and the config carries it, and two
                 # Join-Path calls for one path is one of them waiting to disagree with the other.
@@ -7978,10 +8211,10 @@ function Start-LinuxInteractiveConfiguration {
                     Write-Studio -Text "  Image" -Key "fg"
                     Write-FastfetchInfoRow -Label "distribution" -Value $entry.Name -LabelWidth 24 -IndentWidth 2
                     Write-FastfetchInfoRow -Label "target"       -Value $targetId -LabelWidth 24 -IndentWidth 2
-                    Write-FastfetchInfoRow -Label "gold name"    -Value "$goldName.vhdx" -LabelWidth 24 -IndentWidth 2
+                    Write-FastfetchInfoRow -Label "gold name"    -Value ("{0}-<sha256>.vhdx" -f (Get-GoldTargetPrefix -Target $targetId)) -LabelWidth 24 -IndentWidth 2
                     Write-FastfetchInfoRow -Label "source"       -Value $entry.Url -LabelWidth 24 -IndentWidth 2
                     Write-FastfetchInfoRow -Label "image cache"  -Value $cacheDirectory -LabelWidth 24 -IndentWidth 2
-                    Write-FastfetchInfoRow -Label "output"       -Value $outputDirectory -LabelWidth 24 -IndentWidth 2
+                    Write-FastfetchInfoRow -Label "output"       -Value $(if ($targetId -eq "AzureLocal") { Join-Path -Path $outputDirectory -ChildPath "azl" } else { $outputDirectory }) -LabelWidth 24 -IndentWidth 2
                     Write-Host ""
 
                     Write-Studio -Text "  Region" -Key "fg"
@@ -8073,7 +8306,6 @@ function Start-LinuxInteractiveConfiguration {
         OsFamily        = "Linux"
         Entry           = $entry
         Target          = $targetId
-        GoldName        = $goldName
         Language        = $language
         Locale          = $locale
         KeyboardLayout  = $keyboard
@@ -8106,23 +8338,28 @@ function Invoke-LinuxGoldRun {
 
     $target = [string]$Config.Target
     if ([string]::IsNullOrWhiteSpace($target)) { $target = "HyperV" }
-    $goldName = [string]$Config.GoldName
-    if ([string]::IsNullOrWhiteSpace($goldName)) {
-        $goldName = Get-LinuxGoldName -Entry $entry -Target $target -Language ([string]$Config.Language)
-    }
+    $goldName = Get-LinuxGoldName -Target $target
 
-    Write-Log "$($entry.Name) -> '$goldName' ($target)" -Tag "Info"
-    Write-Log ("Language {0}, format {1}" -f $Config.Language, $Config.Locale) -Tag "Info"
-    Write-Log ("Keymap {0}, time zone {1}" -f (Get-LinuxKeymap -LocaleTag $Config.KeyboardLayout), $Config.TimeZone) -Tag "Info"
+    # One fact per line, the same shape the Windows path logs.
+    Write-Log "$($entry.Name) -> '$goldName'" -Tag "Info"
+    Write-Log "Target: $(if ($target -eq 'AzureLocal') { 'Azure Local' } else { 'Hyper-V' })" -Tag "Info"
+    Write-Log "Language: $($Config.Language)" -Tag "Info"
+    Write-Log "Locale: $($Config.Locale)" -Tag "Info"
+    Write-Log "Keymap: $(Get-LinuxKeymap -LocaleTag $Config.KeyboardLayout)" -Tag "Info"
+    Write-Log "Time zone: $($Config.TimeZone)" -Tag "Info"
     $diskType = if ($Config.VhdType) { $Config.VhdType } else { "Fixed" }
-    Write-Log ("Disk {0} GB {1}" -f $Config.DiskSizeGB, $diskType) -Tag "Info"
-    Write-Log ("Output {0}" -f $Config.OutputDirectory) -Tag "Info"
+    Write-Log ("Disk: {0} GB {1}" -f $Config.DiskSizeGB, $diskType) -Tag "Info"
+    Write-Log ("Output: {0}" -f (Get-GoldTargetDirectory -OutputDirectory $Config.OutputDirectory -Target $target)) -Tag "Info"
 
     foreach ($command in @("Convert-VHD", "Resize-VHD")) {
         if (-not (Get-Command -Name $command -ErrorAction SilentlyContinue)) {
             Write-Log "'$command' is not available - the Hyper-V PowerShell module is required to build a gold" -Tag "Error"
             return $false
         }
+    }
+    # Before the download, not at the bake boot after it.
+    if (-not [string]::IsNullOrWhiteSpace([string]$Config.BakeSwitchName)) {
+        if (-not (Test-BakeVmMemory -Bytes $script:BakeVmMemoryLinux)) { return $false }
     }
 
     try {
@@ -8136,7 +8373,7 @@ function Invoke-LinuxGoldRun {
     try {
         $checksum = (Get-FileHash -LiteralPath $imagePath -Algorithm $entry.Algorithm).Hash.ToLowerInvariant()
         $vhdxPath = New-LinuxGoldImage -Entry $entry -ImagePath $imagePath `
-            -OutputDirectory $Config.OutputDirectory -DiskSizeGB $Config.DiskSizeGB `
+            -OutputDirectory (Get-GoldTargetDirectory -OutputDirectory $Config.OutputDirectory -Target $target) -DiskSizeGB $Config.DiskSizeGB `
             -VhdType $(if ($Config.VhdType) { [string]$Config.VhdType } else { "Fixed" }) -GoldName $goldName
     }
     catch {
@@ -8144,17 +8381,25 @@ function Invoke-LinuxGoldRun {
         return $false
     }
 
-    $null = Write-LinuxGoldManifest -VhdPath $vhdxPath -Entry $entry -Target $target `
-        -Language $Config.Language -Locale $Config.Locale -KeyboardLayout $Config.KeyboardLayout `
-        -TimeZone $Config.TimeZone -VhdType $(if ($Config.VhdType) { [string]$Config.VhdType } else { "Fixed" }) `
-        -SourceChecksum $checksum
+    # Named and described once the disk is final - after the bake, which is what
+    # changes it. A bake that fails leaves the working disk with no sidecar, which
+    # Build-Vms.ps1 never offers as a gold.
+    $complete = {
+        param([string]$Kernel, [bool]$Baked)
+        $manifest = New-LinuxGoldManifest -Entry $entry -Language $Config.Language -Locale $Config.Locale `
+            -KeyboardLayout $Config.KeyboardLayout -TimeZone $Config.TimeZone -Kernel $Kernel -SourceChecksum $checksum `
+            -UpdatesApplied ($Baked -and [bool]$Config.BakeApplyUpdates) -Features @($Config.BakeFeatures | Where-Object { $_ })
+        $goldPath = Complete-GoldImage -WorkingPath $vhdxPath -Target $target -Manifest $manifest `
+            -Generation ([int]$entry.Generation)
+        return (-not [string]::IsNullOrWhiteSpace($goldPath))
+    }
 
     if ([string]::IsNullOrWhiteSpace([string]$Config.BakeSwitchName)) {
         # Said plainly rather than left for a puzzled reader: without the bake the gold
         # still carries the distribution's stock kernel and no Hyper-V integration
         # daemons, so no heartbeat, no shutdown integration and no KVP from its VMs.
         Write-Log "Bake skipped - this gold keeps the stock kernel and has no hyperv-daemons" -Tag "Warn"
-        return $true
+        return (& $complete "" $false)
     }
 
     # Ubuntu keeps translations out of the packages and in language-pack-<lang>, and its
@@ -8181,14 +8426,15 @@ function Invoke-LinuxGoldRun {
         }
     }
 
+    $script:LastBakeKernel = ""
     $baked = Invoke-LinuxBakeBoot -Entry $entry -VhdxPath $vhdxPath -SwitchName ([string]$Config.BakeSwitchName) `
         -Config $Config -ApplyUpdates ([bool]$Config.BakeApplyUpdates) -ExtraPackages $bakePackages
     if (-not $baked) {
-        Write-Log "'$vhdxPath' was built but the bake did not finish - do not deploy it as it stands" -Tag "Error"
+        Write-Log "'$vhdxPath' was built but the bake did not finish - left unnamed and without a sidecar, so Build-Vms.ps1 will not use it" -Tag "Error"
         return $false
     }
 
-    return $true
+    return (& $complete ([string]$script:LastBakeKernel) $true)
 }
 
 # ---------------------------[ Disk Helpers ]---------------------------
@@ -8205,7 +8451,7 @@ function New-ImageVhdx {
     }
 
     $sizeGb = [math]::Round($SizeBytes / 1GB)
-    Write-Log "$VhdType VHDX '$VhdPath' ($sizeGb GB)" -Tag "Run"
+    Write-Log "$VhdType VHDX ($sizeGb GB)" -Tag "Run"
 
     if ($VhdType -eq "Dynamic") {
         New-VHD -Path $VhdPath -SizeBytes $SizeBytes -Dynamic | Out-Null
@@ -8218,7 +8464,7 @@ function New-ImageVhdx {
 function Initialize-VhdxLayout {
     param([string]$VhdPath)
 
-    Write-Log "Mounting and partitioning '$VhdPath'" -Tag "Run"
+    Write-Log "Mounting and partitioning" -Tag "Run"
 
     $mountedDisk = Mount-VHD -Path $VhdPath -Passthru | Get-Disk
     Initialize-Disk -Number $mountedDisk.Number -PartitionStyle GPT
@@ -8247,7 +8493,7 @@ function Install-WindowsImageToVhdx {
         [int]$ImageIndex
     )
 
-    Write-Log "Applying image index $ImageIndex from '$WimPath'" -Tag "Run"
+    Write-Log "Applying image index $ImageIndex" -Tag "Run"
     Expand-WindowsImage -ImagePath $WimPath -Index $ImageIndex -ApplyPath "W:\" | Out-Null
 }
 
@@ -8261,7 +8507,7 @@ function Set-TempBootUnattend {
         New-Item -ItemType Directory -Path $pantherPath -Force | Out-Null
     }
 
-    Write-Log "Boot unattend -> '$unattendPath'" -Tag "Run"
+    Write-Log "Boot unattend -> '$unattendPath'" -Tag "Debug"
     Write-Utf8NoBomFile -Path $unattendPath -Content $Content
 }
 
@@ -8329,7 +8575,7 @@ function Set-BootFiles {
 
         $lastResult = Invoke-BcdBoot -BcdBootPath $candidate.Path -OsRoot $OsRoot -SystemVolume $SystemVolume
         if ($lastResult.ExitCode -eq 0) {
-            Write-Log "Boot files written with the $($candidate.Name) bcdboot" -Tag "Ok"
+            Write-Log "Boot files written ($($candidate.Name) bcdboot)" -Tag "Ok"
             break
         }
 
@@ -8353,7 +8599,7 @@ function Set-BootFiles {
         throw "No boot loader at '$loaderPath' after bcdboot - $why. The disk would not boot."
     }
 
-    Write-Log "Boot loader present at '$loaderPath'" -Tag "Ok"
+    Write-Log "Boot loader present at '$loaderPath'" -Tag "Debug"
 }
 
 function Invoke-DismRaw {
@@ -8554,7 +8800,7 @@ function Set-OfflineDeviceEncryptionPolicy {
     $systemHive = Join-Path -Path $MountRoot -ChildPath "Windows\System32\config\SYSTEM"
     $hiveRoot = "HKLM\OfflineImageBitLocker"
 
-    Write-Log "Loading offline SYSTEM hive for device encryption policy" -Tag "Run"
+    Write-Log "Loading offline SYSTEM hive for device encryption policy" -Tag "Debug"
     & reg.exe load $hiveRoot $systemHive | Out-Null
     if ($LASTEXITCODE -ne 0) {
         throw "Failed to load offline SYSTEM hive (exit $LASTEXITCODE)"
@@ -8629,7 +8875,7 @@ function Set-OfflineEdgePolicy {
             Set-ItemProperty -Path $edgeKey -Name $policy.Name -Value $policy.Value -Type $policy.Type -Force
         }
 
-        Write-Log "Baked $($edgePolicies.Count) Microsoft Edge policy value(s)" -Tag "Ok"
+        Write-Log "Baked $(Format-Count -Count $edgePolicies.Count -Noun "Microsoft Edge policy value")" -Tag "Ok"
     }
     finally {
         Dismount-ImageHive -HiveRoot $hiveRoot
@@ -8751,7 +8997,7 @@ function Set-OfflineRdpAndFirewall {
     $controlSet = "$hiveRoot\ControlSet001"
     $fwKey = "$controlSet\Services\SharedAccess\Parameters\FirewallPolicy\FirewallRules"
 
-    Write-Log "Loading offline SYSTEM hive for RDP and firewall" -Tag "Run"
+    Write-Log "Loading offline SYSTEM hive for RDP and firewall" -Tag "Debug"
     & reg.exe load $hiveRoot $systemHive | Out-Null
     if ($LASTEXITCODE -ne 0) {
         throw "Failed to load offline SYSTEM hive (exit $LASTEXITCODE)"
@@ -9126,7 +9372,7 @@ function Set-OfflineImageCustomization {
         [bool]$ConfigureEdge = $false
     )
 
-    Write-Log "Offline customization on '$VhdPath'" -Tag "Run"
+    Write-Log "Offline customization" -Tag "Run"
 
     $mounted = $false
     try {
@@ -9314,7 +9560,6 @@ function New-WindowsVhdxImage {
 
         Dismount-VHD -Path $VhdPath
         $buildSucceeded = $true
-        Write-Log "Finished apply phase for '$VhdPath'" -Tag "Ok"
     }
     catch {
         Write-Log "Build failed for '$VhdPath': $($_.Exception.Message)" -Tag "Error"
@@ -9340,7 +9585,7 @@ function Wait-VmShutdown {
         [int]$TimeoutMinutes = 45
     )
 
-    Write-Log "Waiting $TimeoutMinutes min for '$VmName' to stop" -Tag "Run"
+    Write-Log "Waiting up to $TimeoutMinutes min for '$VmName' to stop" -Tag "Debug"
     $deadline = (Get-Date).AddMinutes($TimeoutMinutes)
 
     while ((Get-Date) -lt $deadline) {
@@ -9351,7 +9596,7 @@ function Wait-VmShutdown {
         }
 
         if ($virtualMachine.State -eq "Off") {
-            Write-Log "VM '$VmName' has shut down (sysprep complete)" -Tag "Ok"
+            Write-Log "VM '$VmName' has shut down" -Tag "Debug"
             return $true
         }
 
@@ -9362,10 +9607,11 @@ function Wait-VmShutdown {
     return $false
 }
 
-function Get-SysprepVmRootPath {
+function Get-BakeVmRootPath {
     <#
-      Temporary generalize VMs get their own '<Hyper-V default VM path>\sysprep'
-      folder instead of landing in the host default root next to real VMs.
+      Temporary bake VMs - Windows sysprep and Linux cloud-init alike - get their own
+      '<Hyper-V default VM path>\bake' folder instead of landing in the host default
+      root next to real VMs.
       Falls back to the script folder when Get-VMHost is unavailable.
     #>
     $root = ""
@@ -9384,7 +9630,7 @@ function Get-SysprepVmRootPath {
 
     # Concatenate rather than Join-Path: Join-Path throws "Cannot find drive" when
     # the host default VM path sits on a drive that is not currently present.
-    return ($root.TrimEnd('\', '/') + "\sysprep")
+    return ($root.TrimEnd('\', '/') + "\bake")
 }
 
 function Remove-TemporaryVm {
@@ -9400,7 +9646,7 @@ function Remove-TemporaryVm {
             Stop-VM -Name $VmName -TurnOff -Force -ErrorAction SilentlyContinue
         }
 
-        Write-Log "Removing temporary VM '$VmName'" -Tag "Run"
+        Write-Log "Removing temporary VM '$VmName'" -Tag "Debug"
         Remove-VM -Name $VmName -Force -ErrorAction SilentlyContinue
     }
 
@@ -9416,14 +9662,14 @@ function Remove-TemporaryVm {
         $disks = @(Get-ChildItem -LiteralPath $vmFolder -Recurse -File -Force -ErrorAction SilentlyContinue |
             Where-Object { $_.Extension -in @(".vhdx", ".vhd", ".vhds", ".avhdx") })
         if ($disks.Count -gt 0) {
-            Write-Log "Keeping '$vmFolder' - $($disks.Count) disk(s) left" -Tag "Info"
+            Write-Log "Keeping '$vmFolder' - $(Format-Count -Count $disks.Count -Noun "disk") left" -Tag "Info"
         }
         else {
             Remove-Item -LiteralPath $vmFolder -Recurse -Force -ErrorAction SilentlyContinue
         }
     }
 
-    # Drop the sysprep\ folder itself once the last temporary VM is gone.
+    # Drop the bake\ folder itself once the last temporary VM is gone.
     if (Test-Path -LiteralPath $VmRoot) {
         $left = @(Get-ChildItem -LiteralPath $VmRoot -Force -ErrorAction SilentlyContinue)
         if ($left.Count -eq 0) {
@@ -9438,9 +9684,12 @@ function Convert-ToGeneralizedImage {
         [bool]$EnableTpm
     )
 
-    $vmName = "sysprep-$([System.IO.Path]::GetFileNameWithoutExtension($VhdPath))"
-    $vmRoot = Get-SysprepVmRootPath
-    Write-Log "Generalizing '$VhdPath' in VM '$vmName'" -Tag "Info"
+    # Named like its working disk (bake-hv-7c41e09a), so VM, disk and log are one name.
+    $vmName = [System.IO.Path]::GetFileNameWithoutExtension($VhdPath)
+    $vmRoot = Get-BakeVmRootPath
+    # The VM gets two lines of its own - created (with what it is and where), started -
+    # and the steps that set it up stay at Debug.
+    $cpuCount = Get-BakeVmCpuCount
 
     $previousErrorAction = $ErrorActionPreference
     $ErrorActionPreference = "Stop"
@@ -9453,9 +9702,11 @@ function Convert-ToGeneralizedImage {
             New-Item -ItemType Directory -Path $vmRoot -Force | Out-Null
         }
 
-        Write-Log "Creating temporary Generation 2 VM '$vmName'" -Tag "Run"
-        New-VM -Name $vmName -Generation 2 -MemoryStartupBytes 4GB -VHDPath $VhdPath -Path $vmRoot | Out-Null
-        Set-VM -Name $vmName -ProcessorCount 2
+        # Name, CPUs, memory at Run; where it lives and the fixed parts at Debug.
+        Write-Log "Creating '$vmName' ($cpuCount vCPU, $([math]::Round($script:BakeVmMemoryWindows / 1GB)) GB, offline)" -Tag "Run"
+        Write-Log "Bake VM in '$vmRoot', Gen 2, Secure Boot$(if ($EnableTpm) { ', vTPM' })" -Tag "Debug"
+        New-VM -Name $vmName -Generation 2 -MemoryStartupBytes $script:BakeVmMemoryWindows -VHDPath $VhdPath -Path $vmRoot | Out-Null
+        Set-VM -Name $vmName -ProcessorCount $cpuCount
 
         # New-VM without -SwitchName already leaves the adapter disconnected, which is the
         # posture we want - but this VM must not reach Windows Update at all, because an
@@ -9465,14 +9716,14 @@ function Convert-ToGeneralizedImage {
         $adapters = @(Get-VMNetworkAdapter -VMName $vmName -ErrorAction SilentlyContinue)
         if ($adapters.Count -gt 0) {
             Remove-VMNetworkAdapter -VMName $vmName -ErrorAction SilentlyContinue
-            Write-Log "Removed $($adapters.Count) adapter(s) - VM stays offline" -Tag "Run"
+            Write-Log "Removed $(Format-Count -Count $adapters.Count -Noun 'adapter') - VM stays offline" -Tag "Debug"
         }
 
-        Write-Log "Enabling Secure Boot with the Microsoft UEFI template" -Tag "Run"
+        Write-Log "Enabling Secure Boot with the MicrosoftWindows template" -Tag "Debug"
         Set-VMFirmware -VMName $vmName -EnableSecureBoot On -SecureBootTemplate "MicrosoftWindows"
 
         if ($EnableTpm) {
-            Write-Log "Enabling vTPM for client image sysprep VM" -Tag "Run"
+            Write-Log "Enabling vTPM for client image sysprep VM" -Tag "Debug"
             try {
                 Set-VMKeyProtector -VMName $vmName -NewLocalKeyProtector -ErrorAction Stop
                 Enable-VMTPM -VMName $vmName -ErrorAction Stop
@@ -9482,7 +9733,8 @@ function Convert-ToGeneralizedImage {
             }
         }
 
-        Write-Log "Starting temporary VM to run sysprep" -Tag "Run"
+        Write-Log "Starting '$vmName' - sysprep, up to 45 min" -Tag "Run"
+        $sysprepClock = [System.Diagnostics.Stopwatch]::StartNew()
         Start-VM -Name $vmName | Out-Null
 
         if (-not (Wait-VmShutdown -VmName $vmName)) {
@@ -9490,7 +9742,7 @@ function Convert-ToGeneralizedImage {
         }
 
         $generalizeSucceeded = $true
-        Write-Log "Generalized image ready at '$VhdPath'" -Tag "Ok"
+        Write-Log "Sysprep complete ($(Format-Duration -Seconds $sysprepClock.Elapsed.TotalSeconds)) - removing '$vmName'" -Tag "Ok"
     }
     catch {
         Write-Log "Generalize failed for '$VhdPath': $($_.Exception.Message)" -Tag "Error"
@@ -9571,6 +9823,43 @@ function Confirm-HyperVCmdletAvailable {
     return $false
 }
 
+# ---------------------------[ Bake VM Size ]---------------------------
+# The temporary VM a gold is baked in. 4 vCPUs (fewer only on a host that has fewer
+# logical processors); memory is static, so the host has to have it free when the VM
+# starts - which preflight checks rather than finding out after the apply phase.
+$script:BakeVmCpuCount = 4
+$script:BakeVmMemoryWindows = 4GB
+$script:BakeVmMemoryLinux = 2GB
+
+function Get-BakeVmCpuCount {
+    $logical = 0
+    try { $logical = [int](Get-VMHost -ErrorAction Stop).LogicalProcessorCount } catch { $logical = [int]$env:NUMBER_OF_PROCESSORS }
+    if ($logical -lt 1) { return $script:BakeVmCpuCount }
+    return [math]::Min($script:BakeVmCpuCount, $logical)
+}
+
+function Test-BakeVmMemory {
+    # True when the host has the bake VM's memory free, plus a 512 MB margin for the VM's
+    # own overhead and whatever else starts in the next minutes. Read from the OS's free
+    # physical memory - what Hyper-V can actually hand to a static-memory VM right now.
+    param([int64]$Bytes)
+
+    $freeBytes = $null
+    try { $freeBytes = [int64](Get-CimInstance -ClassName Win32_OperatingSystem -ErrorAction Stop).FreePhysicalMemory * 1KB }
+    catch {
+        Write-Log "Free memory unreadable - bake VM memory not checked: $($_.Exception.Message)" -Tag "Warn"
+        return $true
+    }
+    $needed = $Bytes + 512MB
+    if ($freeBytes -lt $needed) {
+        Write-Log ("Not enough free memory for the bake VM: {0} GB free, {1} GB needed ({2} GB VM + 0.5 GB margin)" -f `
+                [math]::Round($freeBytes / 1GB, 1), [math]::Round($needed / 1GB, 1), [math]::Round($Bytes / 1GB, 1)) -Tag "Error"
+        return $false
+    }
+    Write-Log ("Free memory {0} GB - bake VM needs {1} GB" -f [math]::Round($freeBytes / 1GB, 1), [math]::Round($Bytes / 1GB, 1)) -Tag "Debug"
+    return $true
+}
+
 function Test-Prerequisite {
     <#
       Quiet preflight: one Success line when everything passes, otherwise only the
@@ -9598,6 +9887,13 @@ function Test-Prerequisite {
     if (-not (Test-Path -Path $WimPath)) {
         Write-Log "Windows image not found at '$WimPath'" -Tag "Error"
         return $false
+    }
+
+    # Only when there is a bake VM to start: -SkipSysprep builds never boot one.
+    if (-not $SkipSysprep.IsPresent) {
+        if (-not (Test-BakeVmMemory -Bytes $script:BakeVmMemoryWindows)) { return $false }
+        Write-Log "Preflight passed - elevation, Hyper-V, DISM, image, memory" -Tag "Ok"
+        return $true
     }
 
     Write-Log "Preflight passed - elevation, Hyper-V, DISM, image" -Tag "Ok"
@@ -9669,6 +9965,34 @@ function Get-ImageLanguageTag {
     }
 
     return ""
+}
+
+function Get-ImageBuildInfo {
+    # Version and edition of one index, for the sidecar. Version is "10.0.26100.4061" -
+    # major.minor.build.revision, the revision being the cumulative update the media was
+    # refreshed with - and is what Build-Vms.ps1 sorts golds of one image by. DISM's
+    # Version carries three parts on some media and four on others; SPBuild is the
+    # revision either way. EditionId is DISM's own name for the SKU (ServerDatacenterCor,
+    # ServerDatacenterEval, Professional), which is the reliable way to tell an
+    # evaluation image from a licensed one. Empty strings when DISM cannot say.
+    param(
+        [string]$WimPath,
+        [int]$ImageIndex
+    )
+
+    try {
+        $detail = Get-WindowsImage -ImagePath $WimPath -Index $ImageIndex -ErrorAction Stop
+    }
+    catch {
+        Write-Log "Index $ImageIndex build: $($_.Exception.Message)" -Tag "Debug"
+        return [pscustomobject]@{ Version = ""; EditionId = "" }
+    }
+
+    $version = ([string]$detail.Version).Trim()
+    if ($version -match "^\d+\.\d+\.\d+$" -and $null -ne $detail.SPBuild) {
+        $version = "{0}.{1}" -f $version, [int]$detail.SPBuild
+    }
+    return [pscustomobject]@{ Version = $version; EditionId = ([string]$detail.EditionId).Trim() }
 }
 
 function Resolve-SelectedImageIndexes {
@@ -9745,7 +10069,7 @@ function Invoke-ImageBuildPipeline {
         # the key is baked by Set-OfflineImageCustomization, which runs after the
         # edition change, so it lands on an image that already is Azure Edition.
         $avmaKey = Get-AvmaKey -Year "2025" -Edition "AzureEdition"
-        Write-Log "Azure Edition build; its AVMA key will be applied offline" -Tag "Info"
+        Write-Log "Activation: AVMA (2025 Azure Edition)" -Tag "Info"
     }
     elseif ($isDatacenter) {
         $avmaKey = Get-AvmaKey -Year $serverYear -Edition "Datacenter"
@@ -9753,25 +10077,25 @@ function Invoke-ImageBuildPipeline {
             if ($Target -eq "HyperV") {
                 $productKey = $avmaKey
             }
-            Write-Log "$serverYear Datacenter - AVMA key applied offline" -Tag "Info"
+            Write-Log "Activation: AVMA ($serverYear Datacenter)" -Tag "Info"
         }
         else {
-            Write-Log "No AVMA key for Datacenter '$ImageName'" -Tag "Info"
+            Write-Log "Activation: none - no AVMA key for Datacenter '$ImageName'" -Tag "Info"
         }
     }
     elseif (-not $isClient -and ([string]$ImageName) -match "(?i)\bstandard\b") {
         $avmaKey = Get-AvmaKey -Year $serverYear -Edition "Standard"
         if ($avmaKey -ne "") {
-            Write-Log "$serverYear Standard - AVMA key applied offline" -Tag "Info"
+            Write-Log "Activation: AVMA ($serverYear Standard)" -Tag "Info"
         }
         else {
-            Write-Log "No AVMA key for Standard '$ImageName'" -Tag "Info"
+            Write-Log "Activation: none - no AVMA key for Standard '$ImageName'" -Tag "Info"
         }
     }
     elseif (-not $isClient) {
         # Covers Azure Local media and anything else server-shaped that is neither
         # Standard nor Datacenter - those activate through their own channels.
-        Write-Log "Server image without a matching AVMA key - none applied" -Tag "Info"
+        Write-Log "Activation: none - no AVMA key for this server image" -Tag "Info"
     }
     else {
         # AVMA is a Windows Server Datacenter mechanism. Saying a client image "skipped"
@@ -9779,8 +10103,12 @@ function Invoke-ImageBuildPipeline {
         Write-Log "Client image - AVMA does not apply" -Tag "Debug"
     }
 
+    # Read back by the build loop for the sidecar's activation field.
+    $script:LastBakeAvma = -not [string]::IsNullOrWhiteSpace($avmaKey)
+
     $tempBootUnattend = Get-TempBootUnattendContent -Target $Target
 
+    $phaseClock = [System.Diagnostics.Stopwatch]::StartNew()
     $built = New-WindowsVhdxImage -VhdPath $VhdPath -ImageIndex $ImageIndex -WimPath $WimPath `
         -Target $Target -Locale $Locale -KeyboardLayout $KeyboardLayout -UiLanguage $UiLanguage `
         -TimeZone $TimeZone -VhdSizeGB $VhdSizeGB -VhdType $VhdType -ProductKey $productKey `
@@ -9789,6 +10117,7 @@ function Invoke-ImageBuildPipeline {
     if (-not $built) {
         return $false
     }
+    Write-Log "Apply phase done ($(Format-Duration -Seconds $phaseClock.Elapsed.TotalSeconds))" -Tag "Ok"
 
     if ($Generalize) {
         if (-not (Convert-ToGeneralizedImage -VhdPath $VhdPath -EnableTpm:$isClient)) {
@@ -9811,6 +10140,7 @@ function Invoke-ImageBuildPipeline {
     }
 
     $removePanther = $true
+    $phaseClock = [System.Diagnostics.Stopwatch]::StartNew()
     try {
         Set-OfflineImageCustomization -VhdPath $VhdPath -Target $Target -Locale $Locale `
             -KeyboardLayout $KeyboardLayout -TimeZone $TimeZone -AvmaKey $avmaKey `
@@ -9828,6 +10158,7 @@ function Invoke-ImageBuildPipeline {
         Write-Log "Failed to apply offline customization to '$VhdPath': $($_.Exception.Message)" -Tag "Error"
         return $false
     }
+    Write-Log "Offline customization done ($(Format-Duration -Seconds $phaseClock.Elapsed.TotalSeconds))" -Tag "Ok"
 
     return $true
 }
@@ -9858,8 +10189,15 @@ $availableImages = @()
 $wimPath = ""
 
 if ([string]::IsNullOrWhiteSpace($OutputDirectory)) {
-    $OutputDirectory = Join-Path -Path $PSScriptRoot -ChildPath "vhdx"
+    $OutputDirectory = Join-Path -Path $PSScriptRoot -ChildPath "golds"
 }
+
+# An [int[]] parameter left unset is $null, and @($null) is a one-element array - so every
+# @(...).Count test below read 1 for a run that never passed either switch: an empty
+# "Multi-session after generalize: index" line in every log, an image selection that
+# always looked present, and a "no indexes" check that could never fire. Settled once here.
+$MultiSessionImageIndexes = @($MultiSessionImageIndexes | Where-Object { $null -ne $_ })
+$AzureEditionImageIndexes = @($AzureEditionImageIndexes | Where-Object { $null -ne $_ })
 
 $hasImageSelection = (
     ($ImageIndexes -and $ImageIndexes.Count -gt 0) -or
@@ -9926,8 +10264,8 @@ if ($needsInteractive) {
     $PreventDeviceEncryption = $config.PreventDeviceEncryption
     $SetVmPowerPlan = $config.SetVmPowerPlan
     $ConfigureEdge = $config.ConfigureEdge
-    $MultiSessionImageIndexes = @($config.MultiSessionImageIndexes)
-    $AzureEditionImageIndexes = @($config.AzureEditionImageIndexes)
+    $MultiSessionImageIndexes = @($config.MultiSessionImageIndexes | Where-Object { $null -ne $_ })
+    $AzureEditionImageIndexes = @($config.AzureEditionImageIndexes | Where-Object { $null -ne $_ })
 }
 
 if ([string]::IsNullOrWhiteSpace($IsoDrive) -and -not [string]::IsNullOrWhiteSpace($IsoPath)) {
@@ -9948,7 +10286,6 @@ if ($wimPath -eq "") {
     Write-Log "Verify the ISO is mounted and -IsoDrive points to its drive letter" -Tag "Error"
     Complete-Script -ExitCode 1
 }
-Write-Log "Using Windows image '$wimPath'" -Tag "Info"
 
 if (-not (Test-Prerequisite -WimPath $wimPath)) {
     Complete-Script -ExitCode 1
@@ -9962,7 +10299,7 @@ if (-not (Test-Path -Path $OutputDirectory)) {
 if ($availableImages.Count -eq 0) {
     $availableImages = @(Get-WindowsImage -ImagePath $wimPath)
 }
-Write-Log "$($availableImages.Count) image(s) in '$wimPath'" -Tag "Get"
+Write-Log "$(Format-Count -Count $availableImages.Count -Noun 'image') in '$wimPath'" -Tag "Get"
 
 # A run may carry only virtual edition builds. Resolve-SelectedImageIndexes falls back
 # to -Build/-CoreImageIndex/-GuiImageIndex when -ImageIndexes is empty and would
@@ -10005,13 +10342,35 @@ foreach ($imageIndex in @(@($AzureEditionImageIndexes) | Sort-Object -Unique)) {
 }
 $buildIndexes = @($buildSpecs | ForEach-Object { $_.ImageIndex } | Sort-Object -Unique)
 
-Write-Log "$Target | $Locale | $KeyboardLayout" -Tag "Info"
-Write-Log "Time zone: $TimeZone | VHD: $VhdSizeGB GB $VhdType" -Tag "Info"
-Write-Log "RDP: $EnableRdp | Ping: $EnablePing" -Tag "Info"
-# What this run can actually act on. Half of the offline policies are Server-only and
-# half are client-only, and a summary that lists all of them reports decisions that were
-# never available - a Server build has no Welcome Experience to suppress and does not
-# encrypt itself.
+# One DISM call per selected index, reused by the Azure Local guidance check and
+# by the per-build log line below.
+$imageLanguages = @{}
+$imageBuilds = @{}
+foreach ($imageIndex in $buildIndexes) {
+    $imageLanguages[$imageIndex] = Get-ImageLanguageTag -WimPath $wimPath -ImageIndex $imageIndex
+    $imageBuilds[$imageIndex] = Get-ImageBuildInfo -WimPath $wimPath -ImageIndex $imageIndex
+}
+# Named rather than left as "unchanged": the display language is whatever the selected
+# image ships, and the run should say which that is instead of only that nothing touched
+# it. More than one language here means the ISO carries indexes that disagree.
+$uiLanguages = @($buildIndexes |
+        ForEach-Object { [string]$imageLanguages[$_] } |
+        Where-Object { -not [string]::IsNullOrWhiteSpace($_) } |
+        Sort-Object -Unique)
+$uiLanguageText = if ($uiLanguages.Count -gt 0) { $uiLanguages -join ", " } else { "unknown" }
+
+# The run's settings, one fact per line. A bake option is logged at Info only when it
+# was chosen; one left off goes to Debug, so the console lists what the gold gets rather
+# than every switch there is. Options that cannot reach any image in this run - the
+# client-only ones on a Server build, the Server one on a client build, Edge on Core -
+# are not logged at all.
+Write-Log "Target: $(if ($Target -eq 'AzureLocal') { 'Azure Local' } else { 'Hyper-V' })" -Tag "Info"
+Write-Log "UI language: $uiLanguageText (image default)" -Tag "Info"
+Write-Log "Locale: $Locale" -Tag "Info"
+Write-Log "Keyboard: $KeyboardLayout" -Tag "Info"
+Write-Log "Time zone: $TimeZone" -Tag "Info"
+Write-Log "Disk: $VhdSizeGB GB $VhdType" -Tag "Info"
+
 $runHasClient = $false
 $runHasServer = $false
 $runHasEdge = $false
@@ -10022,55 +10381,52 @@ foreach ($index in $buildIndexes) {
     if (-not (Test-IsServerCoreImage -ImageName $match.ImageName)) { $runHasEdge = $true }
 }
 
-$suppressParts = @()
-if ($runHasServer) { $suppressParts += "Server Manager: $SuppressServerManagerAtLogon" }
-if ($runHasClient) {
-    $suppressParts += "Welcome: $SuppressWelcomeExperience"
-    $suppressParts += "sign-in animation: $SuppressFirstSignInAnimation"
+$bakeOptionLines = @(
+    @{ Applies = $true;         On = $EnableRdp;                    Text = "Remote Desktop: enabled";                Off = "Remote Desktop: not enabled" }
+    @{ Applies = $true;         On = $EnablePing;                   Text = "Ping: allowed";                          Off = "Ping: not allowed" }
+    @{ Applies = $runHasServer; On = $SuppressServerManagerAtLogon; Text = "Server Manager at logon: suppressed";    Off = "Server Manager at logon: not suppressed" }
+    @{ Applies = $runHasClient; On = $SuppressWelcomeExperience;    Text = "Welcome experience: suppressed";         Off = "Welcome experience: not suppressed" }
+    @{ Applies = $runHasClient; On = $SuppressFirstSignInAnimation; Text = "First sign-in animation: suppressed";    Off = "First sign-in animation: not suppressed" }
+    @{ Applies = $true;         On = $BlockSignInInputMethods;      Text = "Sign-in input methods: blocked";         Off = "Sign-in input methods: not blocked" }
+    @{ Applies = $runHasEdge;   On = $ConfigureEdge;                Text = "Edge policy baseline: baked (Google search, no first run, clean new tab, required-only diagnostics)"; Off = "Edge policy baseline: not baked" }
+    @{ Applies = $runHasClient; On = $PreventDeviceEncryption;      Text = "BitLocker device encryption: prevented"; Off = "BitLocker device encryption: left to Windows" }
+    @{ Applies = $runHasClient; On = $SetVmPowerPlan;               Text = "Power plan: High performance, display and sleep never, hibernation off"; Off = "Power plan: Windows default" }
+)
+foreach ($line in $bakeOptionLines) {
+    if (-not $line.Applies) { continue }
+    if ($line.On) { Write-Log $line.Text -Tag "Info" } else { Write-Log $line.Off -Tag "Debug" }
 }
-$suppressParts += "sign-in IMEs: $BlockSignInInputMethods"
-Write-Log ("Suppress at logon - " + ($suppressParts -join " | ")) -Tag "Info"
-if ($runHasEdge) {
-    Write-Log "Microsoft Edge policy baseline: $(if ($ConfigureEdge) { 'baked (Google search, no first run, clean new tab, required-only diagnostics)' } else { 'not baked' })" -Tag "Info"
-}
-
-if ($runHasClient) {
-    Write-Log "Automatic BitLocker device encryption: $(if ($PreventDeviceEncryption) { 'prevented in the image' } else { 'left to Windows' })" -Tag "Info"
-    Write-Log "Power plan: $(if ($SetVmPowerPlan) { 'High performance, display and sleep never, hibernation off' } else { 'left at the Windows default' })" -Tag "Info"
-}
-if (@($MultiSessionImageIndexes).Count -gt 0) {
-    Write-Log "Multi-session after generalize: index $(@($MultiSessionImageIndexes) -join ', ')" -Tag "Info"
-}
-if (@($AzureEditionImageIndexes).Count -gt 0) {
-    Write-Log "Azure Edition after generalize: index $(@($AzureEditionImageIndexes) -join ', ')" -Tag "Info"
-}
-$selectedNames = foreach ($buildSpec in $buildSpecs) {
-    if (-not [string]::IsNullOrWhiteSpace($buildSpec.EditionUpgrade)) {
-        "$($buildSpec.ImageIndex) $($script:VirtualEditionCatalog[$buildSpec.EditionUpgrade].DisplayName)"
+# What this run builds, as a header and one line per gold - the same shape as the
+# "Built" summary at the end, so the two can be read against each other.
+Write-Log "Building $(Format-Count -Count $buildSpecs.Count -Noun 'gold'):" -Tag "Info"
+$indexWidth = (@($buildSpecs | ForEach-Object { ([string]$_.ImageIndex).Length }) | Measure-Object -Maximum).Maximum
+foreach ($buildSpec in $buildSpecs) {
+    $name = if (-not [string]::IsNullOrWhiteSpace($buildSpec.EditionUpgrade)) {
+        [string]$script:VirtualEditionCatalog[$buildSpec.EditionUpgrade].DisplayName
     }
     else {
         $match = $availableImages | Where-Object { $_.ImageIndex -eq $buildSpec.ImageIndex } | Select-Object -First 1
-        if ($match) { "$($buildSpec.ImageIndex) $($match.ImageName)" } else { "$($buildSpec.ImageIndex)" }
+        if ($match) { [string]$match.ImageName } else { "" }
     }
-}
-Write-Log "Building $($buildSpecs.Count) gold(s) from $($availableImages.Count) image(s): $($selectedNames -join ' | ')" -Tag "Info"
-
-# One DISM call per selected index, reused by the Azure Local guidance check and
-# by the per-build log line below.
-$imageLanguages = @{}
-foreach ($imageIndex in $buildIndexes) {
-    $imageLanguages[$imageIndex] = Get-ImageLanguageTag -WimPath $wimPath -ImageIndex $imageIndex
+    Write-Log ("  index {0}  {1}" -f ([string]$buildSpec.ImageIndex).PadLeft($indexWidth), $name) -Tag "Info"
 }
 
-# Named rather than left as "unchanged": the display language is whatever the selected
-# image ships, and the run should say which that is instead of only that nothing touched
-# it. More than one language here means the ISO carries indexes that disagree.
-$uiLanguages = @($buildIndexes |
-        ForEach-Object { [string]$imageLanguages[$_] } |
-        Where-Object { -not [string]::IsNullOrWhiteSpace($_) } |
-        Sort-Object -Unique)
-$uiLanguageText = if ($uiLanguages.Count -gt 0) { $uiLanguages -join ", " } else { "unknown" }
-Write-Log "UI language: $uiLanguageText (image default)" -Tag "Info"
+# What the sidecar names as the gold's source: the ISO when there was one, else the
+# image file the run was pointed at - and its hash, once per run rather than per gold,
+# so a gold proves which media it came from and not only what that media was called.
+$sourceMediaPath = if (-not [string]::IsNullOrWhiteSpace($IsoPath)) { $IsoPath } else { $wimPath }
+$sourceMedia = Split-Path -Leaf $sourceMediaPath
+$sourceMediaSha256 = ""
+try {
+    Write-Log "Hashing '$sourceMedia' (SHA-256)" -Tag "Run"
+    $mediaClock = [System.Diagnostics.Stopwatch]::StartNew()
+    $sourceMediaSha256 = Get-GoldFileHash -Path $sourceMediaPath
+    # In full: this is the line to hold against the checksum the media was published with.
+    Write-Log "SHA-256 $sourceMediaSha256 ($(Format-Duration -Seconds $mediaClock.Elapsed.TotalSeconds))" -Tag "Ok"
+}
+catch {
+    Write-Log "Could not hash '$sourceMediaPath': $($_.Exception.Message)" -Tag "Warn"
+}
 
 if ($Target -eq "AzureLocal") {
     foreach ($imageIndex in $buildIndexes) {
@@ -10086,8 +10442,14 @@ if ($Target -eq "AzureLocal") {
 
 $generalize = -not $SkipSysprep.IsPresent
 $allSucceeded = $true
+# One row per gold for the summary at the end of the run.
+$builtGolds = @()
+$goldNumber = 0
 
 foreach ($buildSpec in $buildSpecs) {
+    # Each gold opens after a blank line, so a run of several reads as one block each.
+    Write-LogBreak
+    $goldClock = [System.Diagnostics.Stopwatch]::StartNew()
     $imageIndex = $buildSpec.ImageIndex
     $editionUpgrade = [string]$buildSpec.EditionUpgrade
     $imageInfo = $availableImages | Where-Object { $_.ImageIndex -eq $imageIndex } | Select-Object -First 1
@@ -10099,14 +10461,17 @@ foreach ($buildSpec in $buildSpecs) {
 
     $imageLanguage = [string]$imageLanguages[$imageIndex]
     $resolvedUi = Resolve-UiLanguage -UiLanguage $UiLanguage -ImageLanguage $imageLanguage
-    $vhdxName = Get-VhdxFileName -ImageName $imageInfo.ImageName -ImageIndex $imageIndex -Target $Target `
-        -ImageLanguage $imageLanguage -EditionUpgrade $editionUpgrade
-    $vhdPath = Join-Path -Path $OutputDirectory -ChildPath $vhdxName
+    $goldImageId = Get-GoldImageId -ImageName $imageInfo.ImageName -ImageIndex $imageIndex -EditionUpgrade $editionUpgrade
+    $vhdPath = Join-Path -Path (Get-GoldTargetDirectory -OutputDirectory $OutputDirectory -Target $Target) -ChildPath (
+        Get-GoldWorkingName -Target $Target -BuildId (New-GoldBuildId))
 
     # Named for what the gold IS when it leaves, not the index it came from - a
     # virtual edition build applies the base edition but ships the upgraded SKU.
     $buildDisplayName = if ($editionUpgrade) { [string]$script:VirtualEditionCatalog[$editionUpgrade].DisplayName } else { $imageInfo.ImageName }
-    Write-Log "Building '$buildDisplayName' -> '$vhdPath'" -Tag "Info"
+    # Short on purpose: the full image name is in the "Building" block above, and the
+    # folder is on the Gold line at the end. The counter says where a long run is.
+    $goldNumber++
+    Write-Log ("Gold {0} of {1}: {2} (index {3}) -> '{4}'" -f $goldNumber, $buildSpecs.Count, $goldImageId, $imageIndex, (Split-Path -Leaf $vhdPath)) -Tag "Info"
 
     $ok = Invoke-ImageBuildPipeline -VhdPath $vhdPath -ImageIndex $imageIndex `
         -ImageName $imageInfo.ImageName -WimPath $wimPath -Target $Target `
@@ -10124,21 +10489,69 @@ foreach ($buildSpec in $buildSpecs) {
 
     if (-not $ok) {
         $allSucceeded = $false
+        Write-Log "Failed after $(Format-Duration -Seconds $goldClock.Elapsed.TotalSeconds): '$buildDisplayName'" -Tag "Error"
         continue
     }
 
-    $manifestOk = Write-GoldImageManifest -VhdPath $vhdPath -ImageName $imageInfo.ImageName `
-        -ImageIndex $imageIndex -Target $Target -Locale $Locale -KeyboardLayout $KeyboardLayout `
-        -TimeZone $TimeZone -ImageLanguage $imageLanguage -EditionUpgrade $editionUpgrade
-    if (-not $manifestOk) {
+    # Only the options that reach this kind of image: the client-only ones mean nothing
+    # on a Server gold and the Server one nothing on a client, so neither is recorded.
+    $bakeOptions = [ordered]@{ rdp = [bool]$EnableRdp; ping = [bool]$EnablePing; blockSignInInputMethods = [bool]$BlockSignInInputMethods; edgeBaseline = [bool]$ConfigureEdge }
+    if (Test-IsClientImage -ImageName $imageInfo.ImageName) {
+        $bakeOptions["suppressWelcomeExperience"] = [bool]$SuppressWelcomeExperience
+        $bakeOptions["suppressFirstSignInAnimation"] = [bool]$SuppressFirstSignInAnimation
+        $bakeOptions["preventDeviceEncryption"] = [bool]$PreventDeviceEncryption
+        $bakeOptions["vmPowerPlan"] = [bool]$SetVmPowerPlan
+    }
+    else {
+        $bakeOptions["suppressServerManagerAtLogon"] = [bool]$SuppressServerManagerAtLogon
+    }
+    $manifest = New-WindowsGoldManifest -ImageId $goldImageId -ImageName $imageInfo.ImageName `
+        -ImageIndex $imageIndex -Build ([string]$imageBuilds[$imageIndex].Version) -SourceMedia $sourceMedia `
+        -Locale $Locale -KeyboardLayout $KeyboardLayout -TimeZone $TimeZone `
+        -ImageLanguage $imageLanguage -EditionUpgrade $editionUpgrade `
+        -EditionId ([string]$imageBuilds[$imageIndex].EditionId) -SourceMediaSha256 $sourceMediaSha256 `
+        -Generalized $generalize -Activation $(if ($script:LastBakeAvma) { "avma" } else { "none" }) `
+        -BakeOptions $bakeOptions
+    if ($Target -eq "AzureLocal") {
+        # Not baked on this target: the SetupComplete payload applies the region at
+        # the deployed VM's first boot, so that is what the sidecar says.
+        $manifest["localeMode"] = "first-boot"
+    }
+    $goldPath = Complete-GoldImage -WorkingPath $vhdPath -Target $Target -Manifest $manifest
+    $goldTime = Format-Duration -Seconds $goldClock.Elapsed.TotalSeconds
+    if ([string]::IsNullOrWhiteSpace($goldPath)) {
         $allSucceeded = $false
+        Write-Log "Failed after ${goldTime}: '$buildDisplayName'" -Tag "Error"
+        continue
+    }
+    $goldName = [System.IO.Path]::GetFileNameWithoutExtension($goldPath)
+    Write-Log "Runtime ${goldName}: $goldTime" -Tag "Info"
+    $builtGolds += [pscustomobject]@{
+        Name    = $goldName
+        ImageId = $goldImageId
+        Build   = ([string]$imageBuilds[$imageIndex].Version -replace "^10\.0\.", "")
+        Lang    = $imageLanguage
+        Disk    = "$VhdSizeGB GB $VhdType"
+        Time    = $goldTime
+    }
+}
+
+# The run in one table: what was built, what it is, how long each took.
+Write-LogBreak
+if ($builtGolds.Count -gt 0) {
+    Write-Log "Built $(Format-Count -Count $builtGolds.Count -Noun 'gold'):" -Tag "Ok"
+    $widthImage = ($builtGolds | ForEach-Object { $_.ImageId.Length } | Measure-Object -Maximum).Maximum
+    $widthBuild = ($builtGolds | ForEach-Object { $_.Build.Length } | Measure-Object -Maximum).Maximum
+    foreach ($gold in $builtGolds) {
+        Write-Log ("  {0}  {1}  {2}  {3}  {4}  {5}" -f $gold.Name, $gold.ImageId.PadRight($widthImage), $gold.Build.PadRight($widthBuild),
+            $gold.Lang, $gold.Disk, $gold.Time) -Tag "Ok"
     }
 }
 
 if ($allSucceeded) {
-    Write-Log "$($buildSpecs.Count) gold(s) built" -Tag "Ok"
     Complete-Script -ExitCode 0
 }
 
-Write-Log "One or more images failed" -Tag "Error"
+$failed = $buildSpecs.Count - $builtGolds.Count
+Write-Log "$(Format-Count -Count $failed -Noun 'gold') failed - see above" -Tag "Error"
 Complete-Script -ExitCode 1

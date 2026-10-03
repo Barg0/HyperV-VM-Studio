@@ -198,8 +198,8 @@ function Format-LogPathsForConsole {
         matters is which file, and where it sits relative to the toolkit.
 
         A path under the script's own folder becomes the part below it - so
-        D:\Tools\HyperV-Scripts\vhdx\hv-enus-ubuntu2604.vhdx reads as
-        vhdx\hv-enus-ubuntu2604.vhdx. Anything else keeps its root and its last two
+        D:\Tools\HyperV-Scripts\golds\hv-3f9a2c1e.vhdx reads as
+        golds\hv-3f9a2c1e.vhdx. Anything else keeps its root and its last two
         segments with an ellipsis between - D:\...\Images\gold.vhdx - which is enough
         to recognise a path without spelling it out.
 
@@ -313,23 +313,31 @@ function Write-Log {
     $logMessage = "$timestamp [ $rawTag ] $Message"
 
     if ($enableLogFile) {
-        # -ErrorAction Stop is what makes the catch below a catch. Without it Add-Content
-        # reports a locked file as a NON-TERMINATING error, which walks straight past
-        # try/catch and prints the whole red block to the console - from nothing worse
-        # than somebody tailing the log in another window.
-        #
-        # A lock on a log file is transient by nature, so it is retried rather than simply
-        # swallowed: catching it alone would drop the line silently, which is a worse
-        # failure than the noise it replaced. Three attempts, briefly spaced; after that
-        # the line is lost and the run carries on, because logging must never block it.
-        for ($attempt = 1; $attempt -le 3; $attempt++) {
+        # Appended through a FileStream that shares read AND write, so a reader tailing the
+        # log never blocks it. Something else can still hold the file for a moment: on
+        # 2026-10-03 two New-Vhdx lines vanished in the second after a VHDX was dismounted,
+        # past three 120 ms retries of the Add-Content this replaced. So a line is never
+        # dropped any more - what cannot be written now waits in $script:LogPending and
+        # goes in, in order, ahead of the next line that can. Logging still never blocks
+        # the run: a few short retries, then on.
+        if ($null -eq $script:LogPending) { $script:LogPending = New-Object System.Collections.Generic.List[string] }
+        $script:LogPending.Add($logMessage)
+        for ($attempt = 1; $attempt -le 5; $attempt++) {
             try {
-                Add-Content -Path $logFile -Value $logMessage -Encoding UTF8 -ErrorAction Stop
+                $stream = [System.IO.File]::Open($logFile, [System.IO.FileMode]::Append, [System.IO.FileAccess]::Write,
+                    ([System.IO.FileShare]::ReadWrite -bor [System.IO.FileShare]::Delete))
+                try {
+                    $bytes = [System.Text.Encoding]::UTF8.GetBytes((($script:LogPending -join "`r`n") + "`r`n"))
+                    $stream.Write($bytes, 0, $bytes.Length)
+                }
+                finally {
+                    $stream.Dispose()
+                }
+                $script:LogPending.Clear()
                 break
             }
             catch {
-                if ($attempt -eq 3) { break }
-                Start-Sleep -Milliseconds 120
+                if ($attempt -lt 5) { Start-Sleep -Milliseconds 100 }
             }
         }
     }
