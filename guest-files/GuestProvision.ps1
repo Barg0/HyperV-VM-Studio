@@ -177,6 +177,42 @@ function Complete-Script {
     exit $ExitCode
 }
 
+function Remove-GuestProvisionFootprint {
+    # The payload has done its job once a run succeeds: the script, the manifest (the
+    # lab's plan for this machine) and the folder they came in go, so nothing is left
+    # under Setup\Scripts to run again if this VM is ever sysprepped and captured.
+    # SetupComplete.cmd deletes itself - see the host's Set-GuestProvisionPayload.
+    #
+    # A deferred domain join still needs this folder: DomainJoin.ps1 and the sealed
+    # credential live here until the join task runs, and DomainJoin.ps1 removes them,
+    # itself and the then-empty folder. So with a join pending only this script and the
+    # manifest go now.
+    param([switch]$KeepJoinFiles)
+
+    $folder = $PSScriptRoot
+    # Never a recursive delete of anything but the folder this payload was written to.
+    if ((Split-Path -Leaf $folder) -ne "GuestProvision") {
+        Write-Log "Not removing '$folder' - not the GuestProvision folder" -Tag "Warn"
+        return
+    }
+
+    if ($KeepJoinFiles) {
+        foreach ($name in "GuestProvision.ps1", "manifest.json") {
+            Remove-Item -LiteralPath (Join-Path -Path $folder -ChildPath $name) -Force -ErrorAction SilentlyContinue
+        }
+        Write-Log "Removed GuestProvision.ps1 and manifest.json - the join task removes the rest" -Tag "Run"
+        return
+    }
+
+    Remove-Item -LiteralPath $folder -Recurse -Force -ErrorAction SilentlyContinue
+    if (Test-Path -LiteralPath $folder) {
+        Write-Log "Could not remove '$folder' completely" -Tag "Warn"
+    }
+    else {
+        Write-Log "Removed '$folder'" -Tag "Run"
+    }
+}
+
 function Save-GuestProvisionState {
     param(
         [hashtable]$State
@@ -980,6 +1016,11 @@ try {
     if ($restartNeeded) {
         Write-Log "Restart required to finish the feature installation" -Tag "Warn"
     }
+
+    # Only after a success. A failed run keeps script and manifest, so it can be run
+    # again by hand once the cause is fixed; the log and state.json say what failed.
+    $joinPending = ($null -ne $state.domainJoin -and [bool]$state.domainJoin.taskRegistered)
+    Remove-GuestProvisionFootprint -KeepJoinFiles:$joinPending
 }
 catch {
     $exitCode = 1
@@ -987,6 +1028,7 @@ catch {
     $state.completedUtc = (Get-Date).ToUniversalTime().ToString("o")
     try { Save-GuestProvisionState -State $state } catch { }
     Write-Log "Guest provision failed: $($_.Exception.Message)" -Tag "Error"
+    Write-Log "Left '$PSScriptRoot' in place - run GuestProvision.ps1 again once the cause is fixed" -Tag "Info"
 }
 
 Complete-Script -ExitCode $exitCode

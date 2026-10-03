@@ -10543,7 +10543,7 @@ if ($builtGolds.Count -gt 0) {
     $widthImage = ($builtGolds | ForEach-Object { $_.ImageId.Length } | Measure-Object -Maximum).Maximum
     $widthBuild = ($builtGolds | ForEach-Object { $_.Build.Length } | Measure-Object -Maximum).Maximum
     foreach ($gold in $builtGolds) {
-        Write-Log ("  {0}  {1}  {2}  {3}  {4}  {5}" -f $gold.Name, $gold.ImageId.PadRight($widthImage), $gold.Build.PadRight($widthBuild),
+        Write-Log ("  {0}  {1}  {2}  {3}  {4}  ({5})" -f $gold.Name, $gold.ImageId.PadRight($widthImage), $gold.Build.PadRight($widthBuild),
             $gold.Lang, $gold.Disk, $gold.Time) -Tag "Ok"
     }
 }

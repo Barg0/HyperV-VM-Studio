@@ -204,7 +204,7 @@ first boot by a payload that deletes itself afterwards.
 [ info  ] Runtime hv-3f9a2c1e: 4:27
 
 [ o.k.  ] Built 1 gold:
-[ o.k.  ]   hv-3f9a2c1e  w11-enterprise-ms  26100.6584  en-US  64 GB Dynamic  4:27
+[ o.k.  ]   hv-3f9a2c1e  w11-enterprise-ms  26100.6584  en-US  64 GB Dynamic  (4:27)
 ```
 
 ### <picture><source media="(prefers-color-scheme: dark)" srcset=".github/assets/icons/language-dark.png"><img src=".github/assets/icons/language-light.png" width="20" alt=""></picture> Gold names, decoded
@@ -931,7 +931,7 @@ Same menu style as `Build-Vms.ps1`.
 ### <picture><source media="(prefers-color-scheme: dark)" srcset=".github/assets/icons/monitor-dark.png"><img src=".github/assets/icons/monitor-light.png" width="20" alt=""></picture> Logs
 
 Host: `logs\<script>\yyyyMMdd-HHmm.log`, tagged `[ info ] [ o.k. ] [ warn ] [ error ]`.
-Guest: `C:\ProgramData\VmDeployLogs\GuestProvision.log`, same format.
+Guest: `C:\ProgramData\VmDeployLogs\<yyyyMMdd-HHmm>.log` plus `state.json` (what was done, and whether it succeeded), same format. The payload itself (`C:\Windows\Setup\Scripts\GuestProvision\` and `SetupComplete.cmd`) deletes itself after a successful run; after a failed one it stays so it can be run again by hand.
 
 ### <picture><source media="(prefers-color-scheme: dark)" srcset=".github/assets/icons/security-dark.png"><img src=".github/assets/icons/security-light.png" width="20" alt=""></picture> Security
 

@@ -9912,7 +9912,9 @@ function ovConnectCommands(s) {
   const ps = ovInDomain(s)
     ? `Enter-PSSession -ComputerName ${host} -Credential ${ovDomainCredential(s)}`
     : `Set-Item WSMan:\\localhost\\Client\\TrustedHosts -Value ${host} -Concatenate -Force; Enter-PSSession -ComputerName ${host} -Credential ${ovCredential(s)}`;
-  cmds.push({ icon: "powershell.svg", label: "PowerShell", cmd: ps });
+  /* PowerShell first, RDP last: the primary action sits at the right edge, where the
+     eye ends the row - the same place a dialog keeps its main button. */
+  cmds.unshift({ icon: "powershell.svg", label: "PowerShell", cmd: ps });
   return cmds;
 }
 /* A domain account to sign in with: the join account's user when the studio knows one,

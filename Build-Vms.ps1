@@ -4027,10 +4027,15 @@ function Set-OfflineGuestProvisionPayload {
         Write-Log "Injected credential + DomainJoin.ps1 for deferred join" -Tag "Run"
     }
 
+    # The last line deletes this file. "(goto) 2>nul" ends the batch before del runs, so
+    # cmd never tries to read a line from a file that is gone - deleting it from
+    # GuestProvision.ps1 instead would do exactly that. GuestProvision removes its own
+    # folder after a successful run.
     $setupCmd = @"
 @echo off
 REM GuestProvision - runs after specialize; a deferred domain join is registered here, not done here
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%~dp0GuestProvision\GuestProvision.ps1" >nul 2>&1
+(goto) 2>nul & del "%~f0"
 "@
     [System.IO.File]::WriteAllText((Join-Path -Path $scriptsDir -ChildPath "SetupComplete.cmd"), $setupCmd, $utf8NoBom)
     if ($Refresh) {

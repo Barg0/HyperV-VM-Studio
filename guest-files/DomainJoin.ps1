@@ -204,6 +204,14 @@ function Remove-JoinFootprint {
     Remove-FileSecurely -Path $plainFilePath
     Unregister-ScheduledTask -TaskName $taskName -Confirm:$false -ErrorAction SilentlyContinue
     Remove-Item -LiteralPath $PSCommandPath -Force -ErrorAction SilentlyContinue
+
+    # GuestProvision left its folder for this script; with the credential and this
+    # script gone it is empty, and it goes too. Only that folder, and only when empty.
+    $folder = Split-Path -Parent $PSCommandPath
+    if ((Split-Path -Leaf $folder) -eq "GuestProvision" -and
+        @(Get-ChildItem -LiteralPath $folder -Force -ErrorAction SilentlyContinue).Count -eq 0) {
+        Remove-Item -LiteralPath $folder -Force -ErrorAction SilentlyContinue
+    }
 }
 
 Write-Log "==================== Start ====================" -Tag "Start"
@@ -225,7 +233,6 @@ try {
     $secret = Get-JoinSecret
     $domain = ([string]$secret.domain).Trim()
     $ouPath = ([string]$secret.ouPath).Trim()
-    $dcFqdn = ([string]$secret.dcFqdn).Trim()
     $user   = [string]$secret.joinUser
     if ([string]::IsNullOrWhiteSpace($domain) -or [string]::IsNullOrWhiteSpace($user)) {
         throw "Sealed credential is incomplete (domain or joinUser empty)"
@@ -247,8 +254,9 @@ try {
         ErrorAction = "Stop"
     }
     if (-not [string]::IsNullOrWhiteSpace($ouPath)) { $joinParams.OUPath = $ouPath }
-    # KB5020276: a domain controller handed to the join must be its FQDN.
-    if (-not [string]::IsNullOrWhiteSpace($dcFqdn)) { $joinParams.Server = $dcFqdn }
+    # No -Server: nothing in the config names a domain controller, and the DC locator
+    # finds one the same way Wait-DomainController just did. A dcFqdn read here was
+    # never written by Build-Vms.ps1 and has been removed.
 
     for ($attempt = 1; $attempt -le $joinAttempts -and -not $joined; $attempt++) {
         try {
