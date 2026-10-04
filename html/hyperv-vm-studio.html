@@ -7,7 +7,7 @@
 <link rel="icon" id="favicon" href="data:image/svg+xml,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20viewBox%3D%220%200%2018%2018%22%3E%3C%2Fsvg%3E">
 <style>
   :root {
-    /* radii — classic Azure Portal: small & flat. Do not enlarge. */
+    /* radii — small & flat. Do not enlarge. */
     /* Two radii, and that is the whole ladder: 2px for controls, 4px for surfaces and
        the labels that sit on them. Only shapes whose roundness carries meaning - the
        toggle track, status dots - are circular, and they say so locally. */
@@ -354,7 +354,7 @@
   .toggle.mini .toggle-track { order: 1; width: 28px; height: 15px; border-radius: 8px; }
   .toggle.mini .toggle-thumb { width: 9px; height: 9px; top: 2px; left: 2px; }
   .toggle.mini input:checked + .toggle-track .toggle-thumb { transform: translateX(13px); }
-  /* Fluent / Azure warning + info tips (MessageBar-style callout) */
+  /* warning + info tips (callout) */
   .tip-warn, .tip-info {
     position: relative; display: inline-flex; align-items: center; justify-content: center;
     width: 18px; height: 18px; flex-shrink: 0; cursor: help; vertical-align: middle;
@@ -411,7 +411,7 @@
   }
   .feature-presets { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 10px; }
 
-  /* Azure / Server Manager style role + feature list */
+  /* Server Manager style role + feature list */
   .role-tree {
     display: flex; flex-direction: column; gap: 0;
     border: 1px solid var(--border); border-radius: var(--radius-lg);
@@ -493,7 +493,7 @@
   .role-child .rc-label { font-size: 12.5px; color: var(--fg); min-width: 0; }
 
   /* Inventory of what the App Compatibility FOD puts on a Core VM — a read-only
-     Azure-portal style grid: column headers, hairline rows, status per row. */
+     Grid: column headers, hairline rows, status per row. */
   .fod-grid {
     border: 1px solid var(--border); border-radius: var(--radius-lg);
     background: var(--bg); overflow: hidden; margin-top: 12px;
@@ -526,7 +526,7 @@
     .fod-row { grid-template-columns: minmax(0, 1fr); gap: 4px; padding: 10px 12px; }
     .fod-row .fod-file, .fod-row .fod-type { margin-left: 26px; }
   }
-  /* Failover Cluster blade — same Azure-portal table shape as the FOD tools grid. */
+  /* Failover Cluster blade — same table shape as the FOD tools grid. */
   .cl-grid {
     border: 1px solid var(--border); border-radius: var(--radius-lg);
     background: var(--bg); overflow: hidden; margin-top: 10px;
@@ -1295,7 +1295,7 @@
   /* A field with a hint under it must not stretch its neighbour's box to match. */
   .card-body > .grid-2, .card-body > .grid-3, .nic-card > .grid-2, .nic-card > .grid-3 { align-items: start; }
 
-  /* Azure-style disks blade: command bar + single editable grid (OS + data) */
+  /* Disks blade: command bar + single editable grid (OS + data) */
   .disk-pane { margin-top: 12px; }
   .disk-cmdbar {
     display: flex; align-items: center; justify-content: space-between; gap: 12px;
@@ -1765,8 +1765,8 @@
 </div>
 
 <script>
-/* icons.js — Hyper-V VM Studio icon system.
-   Replaces the ICONS map of Microsoft Azure SVGs. Every glyph here is an original drawing.
+/* Icons — Hyper-V VM Studio icon system.
+   Every glyph here is an original drawing.
 
    HOW IT WORKS
    Each entry is a TEMPLATE, not a finished SVG. Two placeholders:
@@ -1774,7 +1774,7 @@
      @S  the seam colour, derived: mix(hue, ink, 45%)
    tintIcon(name, theme) substitutes both and returns a data URI. That is the whole reason
    six themes cost six cache keys instead of six icon sets; a seventh theme costs five hex
-   values in themes.js and no new artwork.
+   values in FAMILIES (Themes, below) and no new artwork.
 
    CONSTRUCTION RULES (do not break these when adding an icon)
    - 18x18 viewBox. Live area 1.4-16.6; pins and stems may enter the outer half-unit.
@@ -1785,17 +1785,16 @@
    - Every glyph must stay legible at 12px. Test before shipping.
 
    LEGAL CONSTRAINT — READ THIS
-   These replace Microsoft's Azure portal icons, which is the point of the exercise. Do not
-   reintroduce vendor artwork, and do not "tint" or otherwise modify a vendor logo to match
+   Do not add vendor artwork, and do not "tint" or otherwise modify a vendor logo to match
    the palette: a recoloured logo is a modified logo and is worse than using the original.
-   There are no logo slots left. Every OS glyph draws the machine - a rack of units for a
+   There are no logo slots. Every OS glyph draws the machine - a rack of units for a
    server, a monitor on its stand for a client - and nothing draws a vendor mark, including
    the four-pane grid that reads as one. Do not add one back.
 */
 
 const S = '<g fill="none" stroke="@S" stroke-width="1.2" stroke-linejoin="round" stroke-linecap="round">';
 
-/* ---- the fifty drop-in replacements. Same keys as the old ICONS map: [band, markup] ---- */
+/* ---- icon definitions, keyed by file name: [band, markup] ---- */
 const DEFS = {
   "overview.svg": ["studio", '<g fill="@H"><rect x="1.8" y="1.8" width="6.6" height="6.6" rx="1"/><rect x="9.6" y="1.8" width="6.6" height="6.6" rx="1"/><rect x="1.8" y="9.6" width="6.6" height="6.6" rx="1"/><rect x="9.6" y="9.6" width="6.6" height="6.6" rx="1"/></g>'],
   "help.svg": ["studio", '<g fill="@H"><circle cx="9" cy="9" r="7.2"/></g>' + S + '<path d="M6.9 7a2.2 2.2 0 1 1 2.1 2.8v.9"/><path d="M9 13.2h.01" stroke-width="1.7"/></g>'],
@@ -1847,21 +1846,21 @@ const DEFS = {
   "extensions.svg": ["deploy", '<g fill="@H"><rect x="1.8" y="1.8" width="9" height="9" rx="1.2"/><rect x="9" y="9" width="7.2" height="7.2" rx="1.2"/></g>' + S + '<rect x="9.3" y="9.3" width="6.6" height="6.6" rx="1"/></g>']
 };
 
-/* ---- new vocabulary the old set could not express: [band, note, markup] ---- */
-const FRESH = {
-  "cpu.svg": ["host", "vCPU count — was a generic tile", '<g fill="@H"><rect x="3.6" y="3.6" width="10.8" height="10.8" rx="1.4"/><rect x="5.4" y="1" width="1.3" height="2.2" rx=".65"/><rect x="8.35" y="1" width="1.3" height="2.2" rx=".65"/><rect x="11.3" y="1" width="1.3" height="2.2" rx=".65"/><rect x="5.4" y="14.8" width="1.3" height="2.2" rx=".65"/><rect x="8.35" y="14.8" width="1.3" height="2.2" rx=".65"/><rect x="11.3" y="14.8" width="1.3" height="2.2" rx=".65"/><rect x="1" y="5.4" width="2.2" height="1.3" rx=".65"/><rect x="1" y="8.35" width="2.2" height="1.3" rx=".65"/><rect x="1" y="11.3" width="2.2" height="1.3" rx=".65"/><rect x="14.8" y="5.4" width="2.2" height="1.3" rx=".65"/><rect x="14.8" y="8.35" width="2.2" height="1.3" rx=".65"/><rect x="14.8" y="11.3" width="2.2" height="1.3" rx=".65"/></g>' + S + '<rect x="6" y="6" width="2.6" height="2.6" rx=".5"/><rect x="9.4" y="6" width="2.6" height="2.6" rx=".5"/><rect x="6" y="9.4" width="2.6" height="2.6" rx=".5"/><rect x="9.4" y="9.4" width="2.6" height="2.6" rx=".5"/></g>'],
+/* ---- icon definitions with a design note: [band, note, markup] ---- */
+const NOTED = {
+  "cpu.svg": ["host", "vCPU count", '<g fill="@H"><rect x="3.6" y="3.6" width="10.8" height="10.8" rx="1.4"/><rect x="5.4" y="1" width="1.3" height="2.2" rx=".65"/><rect x="8.35" y="1" width="1.3" height="2.2" rx=".65"/><rect x="11.3" y="1" width="1.3" height="2.2" rx=".65"/><rect x="5.4" y="14.8" width="1.3" height="2.2" rx=".65"/><rect x="8.35" y="14.8" width="1.3" height="2.2" rx=".65"/><rect x="11.3" y="14.8" width="1.3" height="2.2" rx=".65"/><rect x="1" y="5.4" width="2.2" height="1.3" rx=".65"/><rect x="1" y="8.35" width="2.2" height="1.3" rx=".65"/><rect x="1" y="11.3" width="2.2" height="1.3" rx=".65"/><rect x="14.8" y="5.4" width="2.2" height="1.3" rx=".65"/><rect x="14.8" y="8.35" width="2.2" height="1.3" rx=".65"/><rect x="14.8" y="11.3" width="2.2" height="1.3" rx=".65"/></g>' + S + '<rect x="6" y="6" width="2.6" height="2.6" rx=".5"/><rect x="9.4" y="6" width="2.6" height="2.6" rx=".5"/><rect x="6" y="9.4" width="2.6" height="2.6" rx=".5"/><rect x="9.4" y="9.4" width="2.6" height="2.6" rx=".5"/></g>'],
   "ram.svg": ["host", "Memory in GB — a real DIMM", '<g fill="@H"><rect x="1.2" y="4.4" width="15.6" height="6.4" rx=".8"/><rect x="2.2" y="11.4" width="1.8" height="2.2" rx=".4"/><rect x="5.2" y="11.4" width="1.8" height="2.2" rx=".4"/><rect x="8.2" y="11.4" width="1.8" height="2.2" rx=".4"/><rect x="11.2" y="11.4" width="1.8" height="2.2" rx=".4"/><rect x="14.2" y="11.4" width="1.8" height="2.2" rx=".4"/></g>' + S + '<rect x="3.2" y="6.2" width="3.6" height="2.8" rx=".5"/><rect x="8" y="6.2" width="3.6" height="2.8" rx=".5"/><path d="M13.6 6.2v2.8"/></g>'],
-  "vtpm.svg": ["host", "Virtual TPM — was the padlock", '<g fill="@H"><rect x="2.6" y="2.6" width="12.8" height="12.8" rx="1.6"/></g>' + S + '<circle cx="9" cy="7.6" r="1.8"/><path d="M9 9.4v2.8M5.4 5.2h1.4M11.2 5.2h1.4M5.4 12.8h1.4M11.2 12.8h1.4"/></g>'],
-  "secure-boot.svg": ["host", "Secure Boot — was the same shield as security", '<g fill="@H"><path d="M9 1.4l6.4 2.4v5.4c0 3.6-2.8 6.2-6.4 7.4-3.6-1.2-6.4-3.8-6.4-7.4V3.8z"/></g>' + S + '<path d="M9 5.4v3.2M6.8 6.8a3.1 3.1 0 1 0 4.4 0"/></g>'],
+  "vtpm.svg": ["host", "Virtual TPM", '<g fill="@H"><rect x="2.6" y="2.6" width="12.8" height="12.8" rx="1.6"/></g>' + S + '<circle cx="9" cy="7.6" r="1.8"/><path d="M9 9.4v2.8M5.4 5.2h1.4M11.2 5.2h1.4M5.4 12.8h1.4M11.2 12.8h1.4"/></g>'],
+  "secure-boot.svg": ["host", "Secure Boot", '<g fill="@H"><path d="M9 1.4l6.4 2.4v5.4c0 3.6-2.8 6.2-6.4 7.4-3.6-1.2-6.4-3.8-6.4-7.4V3.8z"/></g>' + S + '<path d="M9 5.4v3.2M6.8 6.8a3.1 3.1 0 1 0 4.4 0"/></g>'],
   "nested-virt.svg": ["host", "Nested virtualization — a host inside a guest", '<g fill="@H"><polygon points="9,1.6 16.2,5.6 16.2,12.4 9,16.4 1.8,12.4 1.8,5.6"/></g>' + S + '<polygon points="9,5.4 13,7.6 13,11.4 9,13.6 5,11.4 5,7.6"/></g>'],
-  "vlan.svg": ["host", "VLAN tag — was borrowed from vnet", '<g fill="@H"><rect x="1.4" y="3" width="9.4" height="2.6" rx="1.3"/><rect x="1.4" y="7.7" width="9.4" height="2.6" rx="1.3"/><rect x="1.4" y="12.4" width="9.4" height="2.6" rx="1.3"/><path d="M11.8 6.2h4.8v5.6h-4.8L10 9z"/></g>' + S + '<path d="M13.2 9h2"/></g>'],
+  "vlan.svg": ["host", "VLAN tag", '<g fill="@H"><rect x="1.4" y="3" width="9.4" height="2.6" rx="1.3"/><rect x="1.4" y="7.7" width="9.4" height="2.6" rx="1.3"/><rect x="1.4" y="12.4" width="9.4" height="2.6" rx="1.3"/><path d="M11.8 6.2h4.8v5.6h-4.8L10 9z"/></g>' + S + '<path d="M13.2 9h2"/></g>'],
   "gateway.svg": ["host", "Default gateway — one route out", '<g fill="@H"><rect x="1.2" y="6.2" width="4" height="5.6" rx="1.2"/><rect x="12.8" y="6.2" width="4" height="5.6" rx="1.2"/><path d="M6 8.2h3.6V6.4l2.8 2.6-2.8 2.6V9.8H6z"/></g>'],
   "static-ip.svg": ["host", "A fixed address on a subnet", '<g fill="@H"><path d="M9 1.6a5.2 5.2 0 0 1 5.2 5.2c0 3.6-5.2 9.6-5.2 9.6S3.8 10.4 3.8 6.8A5.2 5.2 0 0 1 9 1.6z"/></g>' + S + '<circle cx="9" cy="6.8" r="1.9"/></g>'],
   "iso-media.svg": ["host", "The Windows ISO, not a vendor logo", '<g fill="@H"><circle cx="9" cy="9" r="6.4"/></g>' + S + '<circle cx="9" cy="9" r="2"/><path d="M1.4 4.6V1.6h3M16.6 13.4v3h-3"/></g>'],
   "gold-image.svg": ["host", "A generalized gold VHDX", '<g fill="@H"><path d="M3 5c0-1.5 2.7-2.7 6-2.7s6 1.2 6 2.7v8c0 1.5-2.7 2.7-6 2.7S3 14.5 3 13z"/></g>' + S + '<path d="M3.3 5c0 1.4 2.6 2.5 5.7 2.5S14.7 6.4 14.7 5"/><path d="M9 9.6l1.9 1.9L9 13.4l-1.9-1.9z"/></g>'],
   "differencing.svg": ["host", "A child disk on its parent", '<g fill="@H"><path d="M1.6 4.4c0-1.3 2.2-2.3 4.9-2.3s4.9 1 4.9 2.3v4c0 1.3-2.2 2.3-4.9 2.3S1.6 9.7 1.6 8.4z"/><path d="M7.6 11.2c0-1.2 2-2.1 4.4-2.1s4.4.9 4.4 2.1v3.6c0 1.2-2 2.1-4.4 2.1s-4.4-.9-4.4-2.1z"/></g>' + S + '<path d="M1.9 4.4c0 1.2 2.1 2.1 4.6 2.1M7.9 11.2c0 1.1 1.9 1.9 4.1 1.9s4.1-.8 4.1-1.9"/></g>'],
   "checkpoint.svg": ["host", "Checkpoints on or off", '<g fill="@H"><rect x="3" y="1.6" width="1.9" height="14.8" rx=".9"/><path d="M5.6 2.6h9.6l-2.2 3.4 2.2 3.4H5.6z"/></g>' + S + '<path d="M8.6 4.4h3.4"/></g>'],
-  "integration.svg": ["host", "Integration Services — was a gear", '<g fill="@H"><rect x="6" y="1.4" width="1.8" height="4" rx=".9"/><rect x="10.2" y="1.4" width="1.8" height="4" rx=".9"/><path d="M3.8 5.6h10.4v3.2a5.2 5.2 0 0 1-10.4 0z"/><rect x="8.1" y="13.6" width="1.8" height="2.8" rx=".9"/></g>' + S + '<path d="M6.4 8.2h5.2"/></g>'],
+  "integration.svg": ["host", "Integration Services", '<g fill="@H"><rect x="6" y="1.4" width="1.8" height="4" rx=".9"/><rect x="10.2" y="1.4" width="1.8" height="4" rx=".9"/><path d="M3.8 5.6h10.4v3.2a5.2 5.2 0 0 1-10.4 0z"/><rect x="8.1" y="13.6" width="1.8" height="2.8" rx=".9"/></g>' + S + '<path d="M6.4 8.2h5.2"/></g>'],
   "start-action.svg": ["host", "Automatic start action", '<g fill="@H"><rect x="1.8" y="1.8" width="14.4" height="14.4" rx="2.4"/></g>' + S + '<path d="M7.4 6.4l4.6 2.6-4.6 2.6z"/><path d="M6 13.6h6"/></g>'],
   "first-boot.svg": ["host", "What happens on first boot", '<g fill="@H"><circle cx="9" cy="9" r="7.2"/></g>' + S + '<path d="M9 4.8v4.4l3 1.9"/></g>'],
   "session-host.svg": ["work", "An RDS session host — screen plus its users", '<g fill="@H"><rect x="1.6" y="2.6" width="14.8" height="10.4" rx="1.4"/><rect x="6.4" y="14.8" width="5.2" height="1.6" rx=".8"/></g>' + S + '<circle cx="6.8" cy="7" r="1.5"/><path d="M4.3 11.2c0-1.5 1.1-2.4 2.5-2.4s2.5.9 2.5 2.4"/><circle cx="11.8" cy="7.6" r="1.1"/><path d="M10.4 11.2c0-1.2.7-1.9 1.6-1.9s1.6.7 1.6 1.9"/></g>'],
@@ -1876,8 +1875,8 @@ const FRESH = {
   "os-server-core.svg": ["work", "Server Core — one pane, a prompt, same rack unit", '<g fill="@H"><rect x="2.4" y="1.6" width="13.2" height="9.6" rx="1.2"/><rect x="1.4" y="12.6" width="15.2" height="3.8" rx="1.1"/></g>' + S + '<path d="M2.4 4.6h13.2M4.8 6.9l1.8 1.8-1.8 1.8M8.6 10.1h4.4M3.4 14.5h6"/><path d="M14.2 14.5h.01" stroke-width="1.7"/></g>'],
   "os-client.svg": ["host", "Windows client — one screen on a laptop base, in the blue band", '<g fill="@H"><rect x="2.2" y="1.8" width="13.6" height="9.2" rx="1.3"/><path d="M1 12.4h16l-1.2 3.2H2.2z"/></g>' + S + '<rect x="4.2" y="3.8" width="9.6" height="5.2" rx=".7"/><path d="M6.4 14h5.2"/></g>'],
   "os-window.svg": ["studio", "The OS itself, as a plain window", '<g fill="@H"><rect x="1.6" y="2.2" width="14.8" height="13.6" rx="1.4"/></g>' + S + '<path d="M1.6 5.8h14.8M9 5.8v10M12.6 4h1.4"/></g>'],
-  "trash.svg": ["studio", "Remove \u2014 was a stroked outline bin from the old icon set", '<g fill="@H"><rect x="6.4" y="1.2" width="5.2" height="2.8" rx="1.1"/><rect x="2.2" y="3.4" width="13.6" height="2.4" rx="1.2"/><path d="M4 6.8h10l-.7 8.2a1.6 1.6 0 0 1-1.6 1.4H6.3a1.6 1.6 0 0 1-1.6-1.4z"/></g>' + S + '<path d="M7.4 9.2v4.2M10.6 9.2v4.2"/></g>'],
-  "validate.svg": ["deploy", "Preflight — was the magnifier", '<g fill="@H"><rect x="2.6" y="2.2" width="12.8" height="14" rx="1.4"/><rect x="6.4" y="1" width="5.2" height="2.6" rx="1.1"/></g>' + S + '<path d="M5.8 8.4l1.8 1.8 3.6-3.8M5.8 12.8h6.4"/></g>']
+  "trash.svg": ["studio", "Remove", '<g fill="@H"><rect x="6.4" y="1.2" width="5.2" height="2.8" rx="1.1"/><rect x="2.2" y="3.4" width="13.6" height="2.4" rx="1.2"/><path d="M4 6.8h10l-.7 8.2a1.6 1.6 0 0 1-1.6 1.4H6.3a1.6 1.6 0 0 1-1.6-1.4z"/></g>' + S + '<path d="M7.4 9.2v4.2M10.6 9.2v4.2"/></g>'],
+  "validate.svg": ["deploy", "Preflight", '<g fill="@H"><rect x="2.6" y="2.2" width="12.8" height="14" rx="1.4"/><rect x="6.4" y="1" width="5.2" height="2.6" rx="1.1"/></g>' + S + '<path d="M5.8 8.4l1.8 1.8 3.6-3.8M5.8 12.8h6.4"/></g>']
 };
 
 /* ---- one glyph per Windows Server role: [band, label, note, markup] ----
@@ -1910,7 +1909,7 @@ const MARK = '<g fill="@H"><rect x="1.9" y="1.8" width="11" height="4.2" rx="1.2
 const ICON_TEMPLATES = (() => {
   const out = {};
   Object.keys(DEFS).forEach(n => { out[n] = { band: DEFS[n][0], markup: DEFS[n][1] }; });
-  Object.keys(FRESH).forEach(n => { out[n] = { band: FRESH[n][0], note: FRESH[n][1], markup: FRESH[n][2] }; });
+  Object.keys(NOTED).forEach(n => { out[n] = { band: NOTED[n][0], note: NOTED[n][1], markup: NOTED[n][2] }; });
   Object.keys(ROLES).forEach(n => { out[n] = { band: ROLES[n][0], label: ROLES[n][1], note: ROLES[n][2], markup: ROLES[n][3] }; });
   out["mark.svg"] = { band: "accent", markup: MARK };
   return out;
@@ -2157,11 +2156,11 @@ const BLADES = [
 ];
 
 const PREFIX_OPTIONS = [8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32];
-/* themes.js — Hyper-V VM Studio, six themes (three families x dark/light).
-   Replaces ALACRITTY_THEMES. Vitrine dark is the default.
+/* Themes — Hyper-V VM Studio, six themes (three families x dark/light).
+   Vitrine dark is the default.
 
    Every key here is consumed either as a CSS custom property (applyTheme) or as an icon
-   band hue (see icons.js). Nothing else in the studio may invent a colour. */
+   band hue (see Icons, above). Nothing else in the studio may invent a colour. */
 
 const FAMILIES = [
   {
@@ -2222,7 +2221,7 @@ const FAMILIES = [
 
 /* nav-group -> band id. The band an icon takes is decided by where it is reached from,
    with one documented exception: server-role icons take the band of what they ARE
-   (see icons.js ROLES) because they all live on one card and must stay scannable. */
+   (see ROLES in Icons) because they all live on one card and must stay scannable. */
 const BAND_LABEL = { studio: "Studio", host: "Host", work: "Workloads", ident: "Identity", deploy: "Deploy" };
 
 const THEME_DEFAULT = "kaido";
@@ -6570,8 +6569,7 @@ function showFloatingTip(anchor) {
   bubble.style.left = left + "px";
   bubble.style.top = top + "px";
 }
-/* Stroke-drawn like the pencil / eye / regen glyphs — the filled Fluent triangle stood
-   out as the one solid icon in an otherwise line-drawn set. */
+/* Stroke-drawn like the pencil / eye / regen glyphs, so the inline set stays line-drawn. */
 function warnIconSvg(cls) {
   return `<svg${cls ? ` class="${cls}"` : ""} viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M6.9 2.9 1.55 12.2a1.27 1.27 0 0 0 1.1 1.9h10.7a1.27 1.27 0 0 0 1.1-1.9L9.1 2.9a1.27 1.27 0 0 0-2.2 0z"/><path d="M8 6.2v3.3"/><path d="M8 11.7h.01"/></svg>`;
 }
