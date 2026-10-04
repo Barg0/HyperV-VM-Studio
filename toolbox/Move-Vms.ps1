@@ -46,9 +46,9 @@ param (
 $scriptStartTime = Get-Date
 
 # ---------------------------[ Script Name ]---------------------------
-$scriptName  = "Migrate-Vms"
+$scriptName  = "Move-Vms"
 $logFileName = (Get-Date -Format "yyyyMMdd-HHmm") + ".log"
-$applicationName = "Migrate-Vms"
+$applicationName = "Move-Vms"
 
 # ---------------------------[ Logging Setup ]---------------------------
 $log           = $true
@@ -84,7 +84,7 @@ $global:ProgressPreference = "SilentlyContinue"
 $projectRoot = Split-Path -Parent $PSScriptRoot
 if ([string]::IsNullOrWhiteSpace($projectRoot)) { $projectRoot = $PSScriptRoot }
 
-$logFileDirectory = Join-Path -Path $projectRoot -ChildPath "logs\migrate-vms"
+$logFileDirectory = Join-Path -Path $projectRoot -ChildPath "logs\move-vms"
 $logFile          = Join-Path -Path $logFileDirectory -ChildPath $logFileName
 
 if ($enableLogFile -and -not (Test-Path -Path $logFileDirectory)) {
@@ -443,7 +443,7 @@ public static extern IntPtr GetStdHandle(int nStdHandle);
 public static extern bool GetConsoleMode(IntPtr hConsoleHandle, out uint lpMode);
 [DllImport("kernel32.dll", SetLastError=true)]
 public static extern bool SetConsoleMode(IntPtr hConsoleHandle, uint dwMode);
-"@ -Name MigrateVmsVtConsole -Namespace MigrateVms -PassThru -ErrorAction Stop
+"@ -Name MoveVmsVtConsole -Namespace MoveVms -PassThru -ErrorAction Stop
         $handle = $vt::GetStdHandle(-11)
         $mode = [uint32]0
         if ($vt::GetConsoleMode($handle, [ref]$mode)) {
@@ -1642,7 +1642,7 @@ function New-MigratePackageRoot {
     param([string]$DestinationRoot)
     $stamp = Get-Date -Format "yyyy-MM-dd_HH-mm-ss"
     $folder = "{0}_{1}" -f $env:COMPUTERNAME, $stamp
-    $root = Join-Path -Path $DestinationRoot -ChildPath (Join-Path "Migrate-Vms" $folder)
+    $root = Join-Path -Path $DestinationRoot -ChildPath (Join-Path "Move-Vms" $folder)
     New-Item -ItemType Directory -Path (Join-Path $root "vms") -Force | Out-Null
     New-Item -ItemType Directory -Path (Join-Path $root "host") -Force | Out-Null
     return $root
@@ -1697,7 +1697,7 @@ function Get-LocalStagingPath {
     foreach ($d in $candidates) {
         $need = [int64]([math]::Ceiling($RequiredBytes * $script:freeSpaceMargin))
         if ($d.AvailableFreeSpace -ge $need) {
-            $path = Join-Path $d.RootDirectory.FullName "Migrate-Vms-Staging"
+            $path = Join-Path $d.RootDirectory.FullName "Move-Vms-Staging"
             if (-not (Test-Path -LiteralPath $path)) {
                 New-Item -ItemType Directory -Path $path -Force | Out-Null
             }
@@ -1880,7 +1880,7 @@ function Start-MigrateExport {
 
     $manifest = [pscustomobject]@{
         SchemaVersion   = 1
-        Tool            = "Migrate-Vms"
+        Tool            = "Move-Vms"
         HostName        = $env:COMPUTERNAME
         ExportedAt      = (Get-Date).ToString("o")
         DestinationType = $(if ($IsNetwork) { "Network" } else { "Local" })
@@ -2331,7 +2331,7 @@ function Show-YesNoMenu {
     return (Show-Menu -Title "Confirm" -Question $Title -Items $items -SelectedIndex $idx -StatusLines $StatusLines)
 }
 
-function Select-MigrateVmsInteractive {
+function Select-MoveVmsInteractive {
     param([object[]]$Inventories)
     $items = @()
     foreach ($inv in $Inventories) {
@@ -2369,7 +2369,7 @@ function Resolve-ExportDestinationInteractive {
         $drives += [pscustomobject]@{ Id = "back"; Label = "Back" }
         $letter = Show-Menu -Title "Destination drive" -Question "Select the destination drive letter" -Items $drives
         if ($null -eq $letter -or $letter -eq "back") { return $null }
-        $sub = Read-ConsolePath -PromptLabel "Subfolder under drive" -DefaultValue "Migrate-Vms-Backups"
+        $sub = Read-ConsolePath -PromptLabel "Subfolder under drive" -DefaultValue "Move-Vms-Backups"
         $result.Path = Join-Path $letter $sub
     }
     else {
@@ -2421,7 +2421,7 @@ function Invoke-ExportWizard {
         $selected = @($all | Where-Object { $NameFilter -contains $_.Name })
     }
     else {
-        $selected = @(Select-MigrateVmsInteractive -Inventories $all)
+        $selected = @(Select-MoveVmsInteractive -Inventories $all)
         if ($null -eq $selected) { return }
     }
     if ($selected.Count -eq 0) {
@@ -2502,7 +2502,7 @@ function Invoke-ExportHostInventoryOnly {
     }
     $manifest = [pscustomobject]@{
         SchemaVersion = 1
-        Tool          = "Migrate-Vms"
+        Tool          = "Move-Vms"
         HostName      = $env:COMPUTERNAME
         ExportedAt    = (Get-Date).ToString("o")
         HostInventoryOnly = $true
@@ -2515,10 +2515,10 @@ function Invoke-ExportHostInventoryOnly {
 
 function Resolve-ImportPackageInteractive {
     $path = Read-ConsolePath -PromptLabel "Package folder (contains manifest.json)" `
-        -ExampleHint "E:\Migrate-Vms-Backups\Migrate-Vms\HOST_2026-..."
+        -ExampleHint "E:\Move-Vms-Backups\Move-Vms\HOST_2026-..."
     if ([string]::IsNullOrWhiteSpace($path)) { return $null }
     if (-not (Test-Path -LiteralPath (Join-Path $path "manifest.json"))) {
-        # maybe user pointed at Migrate-Vms parent
+        # maybe user pointed at Move-Vms parent
         $children = @(Get-ChildItem -LiteralPath $path -Directory -ErrorAction SilentlyContinue | Sort-Object Name -Descending)
         if ($children.Count -gt 0) {
             $items = @()
@@ -2701,7 +2701,7 @@ Write-Log "$env:COMPUTERNAME | $env:USERNAME | $applicationName" -Tag "Info"
 
 try {
     if (-not (Test-IsAdministrator)) {
-        throw "Please run Migrate-Vms.ps1 elevated (Administrator)."
+        throw "Please run Move-Vms.ps1 elevated (Administrator)."
     }
     Confirm-HyperVAvailable
 

@@ -4,7 +4,7 @@
     Convert Fixed (thick) Hyper-V VHDX disks to Dynamic (thin) to reclaim host disk space.
 
 .DESCRIPTION
-    Interactive console menu (same look as Migrate-Vms.ps1 / Build-Vms.ps1):
+    Interactive console menu (same look as Move-Vms.ps1 / Build-Vms.ps1):
       Main: Check only / Convert selected / Convert all Fixed / Compact Dynamic / Exit
       Select VMs, then per-VM disk multi-select when a VM has more than one disk.
 
