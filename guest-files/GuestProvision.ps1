@@ -819,6 +819,151 @@ function Connect-GuestProvisionAzureArc {
     }
 }
 
+function Get-WingetPath {
+    # SYSTEM has no winget on its PATH: the App Installer package folder under WindowsApps
+    # holds winget.exe - the newest one (as in Intune-WinGet's Get-WingetPath).
+    $root = Join-Path -Path $env:ProgramW6432 -ChildPath "WindowsApps"
+    foreach ($arch in @("x64", "arm64")) {
+        $dirs = @(Get-ChildItem -Path $root -Directory -Filter "Microsoft.DesktopAppInstaller_*_${arch}__8wekyb3d8bbwe" -ErrorAction SilentlyContinue)
+        $pick = $dirs | Sort-Object -Property @{ Expression = { try { [version](($_.Name -split '_')[1]) } catch { [version]"0.0" } } } -Descending | Select-Object -First 1
+        if ($pick) {
+            $exe = Join-Path -Path $pick.FullName -ChildPath "winget.exe"
+            if (Test-Path -LiteralPath $exe) { return $exe }
+        }
+    }
+    return $null
+}
+
+function Add-WingetDependencyPath {
+    # winget.exe needs the VC++ UWP runtime and WinUI next to it; for SYSTEM those packages
+    # are not on the PATH, so their newest x64 folders go in front of it for this process.
+    $root = Join-Path -Path $env:ProgramW6432 -ChildPath "WindowsApps"
+    $env:PATH = (@($env:PATH -split ';') | Where-Object { $_ -and $_ -notlike "$root\*" }) -join ';'
+    foreach ($pattern in @("Microsoft.VCLibs.140.00.UWPDesktop_*_x64__8wekyb3d8bbwe", "Microsoft.UI.Xaml.2.*_x64__8wekyb3d8bbwe")) {
+        $pick = Get-ChildItem -Path $root -Directory -Filter $pattern -ErrorAction SilentlyContinue |
+            Sort-Object -Property @{ Expression = { try { [version](($_.Name -split '_')[1]) } catch { [version]"0.0" } } } -Descending | Select-Object -First 1
+        if ($pick) {
+            $env:PATH = "$($pick.FullName);$env:PATH"
+        }
+    }
+}
+
+function Invoke-Winget {
+    param(
+        [string]$Winget,
+        [string]$Arguments,
+        [string]$OutFile,
+        [int]$TimeoutSeconds = 900
+    )
+    Add-WingetDependencyPath
+    $p = Start-Process -FilePath $Winget -ArgumentList $Arguments -NoNewWindow -PassThru -RedirectStandardOutput $OutFile -RedirectStandardError "$OutFile.err"
+    # Without the handle taken right away, ExitCode stays empty once the process is gone.
+    $null = $p.Handle
+    if (-not $p.WaitForExit($TimeoutSeconds * 1000)) {
+        try { $p.Kill() } catch { }
+        return -1
+    }
+    $p.WaitForExit()
+    return $p.ExitCode
+}
+
+function Test-WingetInstalled {
+    # Intune-WinGet's detection: winget list -e --id exits 0 when the package is installed
+    # (-1978335212 when not). Returns the installed version, or $null.
+    param(
+        [string]$Winget,
+        [string]$Id
+    )
+    Add-WingetDependencyPath
+    $previous = [Console]::OutputEncoding
+    [Console]::OutputEncoding = [System.Text.UTF8Encoding]::new()
+    try {
+        $out = & $Winget list -e --id $Id --accept-source-agreements --disable-interactivity 2>&1
+        $code = $LASTEXITCODE
+    }
+    finally {
+        [Console]::OutputEncoding = $previous
+    }
+    if ($code -ne 0) { return $null }
+    $version = ""
+    # The token after the id is the version: winget pads its columns with as little as one
+    # space, so the id is found as a word of its own, not by column gaps.
+    foreach ($line in @($out | ForEach-Object { [string]$_ })) {
+        $words = @(($line -split '\r')[-1].Trim() -split '\s+')
+        for ($i = 0; $i -lt $words.Count - 1; $i++) {
+            if ($words[$i] -ieq $Id) { $version = $words[$i + 1]; break }
+        }
+        if ($version) { break }
+    }
+    return $version
+}
+
+function Install-WingetApplications {
+    # The VM card's Applications: machine-wide from the winget source, always the newest
+    # version. Never fatal - a failed app is reported and the VM still comes up. Exit codes
+    # as Intune-WinGet's Get-WingetExitCodeInfo sorts them.
+    param(
+        [object[]]$Apps
+    )
+    $results = @()
+    if (-not $Apps -or $Apps.Count -eq 0) { return , $results }
+
+    $winget = Get-WingetPath
+    if (-not $winget) {
+        Write-Log "WinGet is not on this VM - no application installed" -Tag "Warn"
+        foreach ($a in $Apps) { $results += @{ id = [string]$a.id; success = $false; exitCode = $null; version = ""; message = "WinGet is not on this VM" } }
+        return , $results
+    }
+    Add-WingetDependencyPath
+    Write-Log "WinGet: $winget" -Tag "Get"
+
+    $outDir = Join-Path -Path $logFileDirectory -ChildPath "winget"
+    New-Item -ItemType Directory -Path $outDir -Force | Out-Null
+    $code = Invoke-Winget -Winget $winget -Arguments "source update --name winget --disable-interactivity" -OutFile (Join-Path $outDir "source-update.log") -TimeoutSeconds 300
+    Write-Log "WinGet source updated (exit $code)" -Tag "Run"
+
+    $success   = @(0, -1978335135, -1978334963, -1978334962, -1978334965)
+    $retryScope = @(-1978335216, -1978335212, -1978335217)
+    $retryBusy = @(-1978334974, -1978335226, -1978335138)
+
+    foreach ($a in $Apps) {
+        $id = [string]$a.id
+        if (-not $id) { continue }
+        $over = [string]$a.override
+        $base = "install -e --id $id --source winget --silent --disable-interactivity --skip-dependencies --accept-package-agreements --accept-source-agreements --force"
+        if ($over) { $base += ' --override "' + ($over -replace '"', '\"') + '"' }
+        $file = Join-Path $outDir (($id -replace '[^A-Za-z0-9._-]', '_') + ".log")
+
+        Write-Log "Installing $id" -Tag "Run"
+        $code = Invoke-Winget -Winget $winget -Arguments "$base --scope machine" -OutFile $file
+        if ($retryScope -contains $code) {
+            Write-Log "$id has no machine-scope installer here (exit $code) - once more without a scope" -Tag "Warn"
+            $code = Invoke-Winget -Winget $winget -Arguments $base -OutFile $file
+        }
+        $tries = 0
+        while (($retryBusy -contains $code) -and $tries -lt 5) {
+            $tries++
+            Write-Log "$id waits for another installer (exit $code), try $tries of 5" -Tag "Warn"
+            Start-Sleep -Seconds 60
+            $code = Invoke-Winget -Winget $winget -Arguments "$base --scope machine" -OutFile $file
+        }
+
+        # The verdict is the detection, not the exit code: installed is what winget list finds.
+        $version = Test-WingetInstalled -Winget $winget -Id $id
+        $ok = $null -ne $version
+        if ($ok) {
+            Write-Log "$id installed $version (exit $code)" -Tag "Ok"
+        }
+        else {
+            Write-Log "$id was not installed (exit $code) - see $file" -Tag "Error"
+        }
+        $message = ""
+        if (-not $ok) { $message = if ($code -eq -1) { "timed out" } elseif ($success -contains $code) { "winget reported success, but does not list it" } else { "exit $code" } }
+        $results += @{ id = $id; success = $ok; exitCode = $code; version = $version; message = $message }
+    }
+    return , $results
+}
+
 function Register-DeferredDomainJoin {
     param(
         [object]$JoinConfig
@@ -920,6 +1065,8 @@ $state = @{
     networkAdapters    = @()
     arc                = @{ attempted = $false; authMode = $null }
     domainJoin         = $null
+    wingetApps         = @()
+    hotpatchReady      = $null
     completedUtc       = $null
     restartNeeded      = $false
     success            = $false
@@ -1001,6 +1148,28 @@ try {
         Connect-GuestProvisionAzureArc -ArcConfig $manifest.azureArc
     }
 
+    # Applications from WinGet before the join task is registered: the task restarts the
+    # VM five minutes after it is in place, and an installer must not be cut off by it.
+    if ($manifest.wingetApps) {
+        try { $state.wingetApps = Install-WingetApplications -Apps @($manifest.wingetApps) }
+        catch { Write-Log "WinGet applications: $($_.Exception.Message)" -Tag "Error" }
+    }
+
+    # Hotpatch ready (Windows Server 2025): VBS on, Secure Boot required - Microsoft's
+    # documented switch. VBS runs from the next restart.
+    if ([bool]$manifest.hotpatchReady) {
+        try {
+            $dg = "HKLM:\SYSTEM\CurrentControlSet\Control\DeviceGuard"
+            New-Item -Path $dg -Force | Out-Null
+            Set-ItemProperty -Path $dg -Name EnableVirtualizationBasedSecurity -Value 1 -Type DWord
+            Set-ItemProperty -Path $dg -Name RequirePlatformSecurityFeatures -Value 1 -Type DWord
+            $state.hotpatchReady = "configured"
+            $restartNeeded = $true
+            Write-Log "VBS turned on for Hotpatch - it runs after the restart" -Tag "Info"
+        }
+        catch { $state.hotpatchReady = "failed"; Write-Log "Hotpatch ready: $($_.Exception.Message)" -Tag "Error" }
+    }
+
     # Last: everything above must be finished before the join task can fire, because the
     # boot after the join is the one where domain policy lands on this machine.
     if ($manifest.domainJoin) {
@@ -1014,7 +1183,7 @@ try {
     Write-Log "Wrote state to '$stateFilePath'" -Tag "Ok"
 
     if ($restartNeeded) {
-        Write-Log "Restart required to finish the feature installation" -Tag "Warn"
+        Write-Log "Restart required to finish the feature installation or start VBS" -Tag "Warn"
     }
 
     # Only after a success. A failed run keeps script and manifest, so it can be run

@@ -3006,6 +3006,55 @@ function Get-ConfigAzureArcPrincipals {
     return @($raw)
 }
 
+function Get-ConfigWindowsLicenses {
+    param([object]$ConfigRoot)
+    if ($null -eq $ConfigRoot) { return @() }
+    $raw = $null
+    if ($ConfigRoot.PSObject.Properties.Name -contains "windowsLicenses") {
+        $raw = $ConfigRoot.windowsLicenses
+    }
+    if ($null -eq $raw) { return @() }
+    if ($raw -is [System.Collections.IEnumerable] -and -not ($raw -is [string])) {
+        $list = @(foreach ($item in $raw) { $item })
+        if ($list.Count -gt 0) { return $list }
+    }
+    return @($raw)
+}
+
+# The studio's Windows licenses blade: the product key of the licence this VM is attached
+# to, or "" when it has none (the gold's own key stays). A licence serves one edition - the
+# imageId without -core/-desktop - and the studio only exports a VM's licenceId when the
+# two match, so a mismatch here means a hand-edited config.json.
+function Resolve-WindowsLicenseForServer {
+    param(
+        [object]$Server,
+        [object]$ConfigRoot = $null
+    )
+
+    if ($null -eq $ConfigRoot) { $ConfigRoot = $script:ConfigRoot }
+    if ($null -eq $Server -or $null -eq $Server.windowsLicense) { return "" }
+    $licenseId = ([string]$Server.windowsLicense.licenseId).Trim()
+    if ([string]::IsNullOrWhiteSpace($licenseId)) { return "" }
+
+    $serverName = if ($Server.name) { [string]$Server.name } else { "?" }
+    $license = @(Get-ConfigWindowsLicenses -ConfigRoot $ConfigRoot) |
+        Where-Object { ([string]$_.id).Trim() -eq $licenseId } |
+        Select-Object -First 1
+    if ($null -eq $license) {
+        throw "Server '$serverName' windowsLicense.licenseId '$licenseId' was not found in windowsLicenses. Re-export config.json from html\hyperv-vm-studio.html."
+    }
+    $edition = ([string]$license.edition).Trim().ToLowerInvariant()
+    $serverEdition = ([string]$Server.imageId).Trim().ToLowerInvariant() -replace '-(core|desktop)$', ''
+    if (-not [string]::IsNullOrWhiteSpace([string]$Server.imageHint) -or $serverEdition -ne $edition) {
+        throw "Server '$serverName' builds from '$($Server.imageId)', not licence '$licenseId' edition '$edition'. Re-export config.json from html\hyperv-vm-studio.html."
+    }
+    $key = ([string]$license.productKey).Trim().ToUpperInvariant()
+    if ($key -notmatch '^[A-Z0-9]{5}(-[A-Z0-9]{5}){4}$') {
+        throw "Licence '$licenseId' has no valid product key (XXXXX-XXXXX-XXXXX-XXXXX-XXXXX)."
+    }
+    return $key
+}
+
 function Resolve-DomainJoinForServer {
     param(
         [object]$Server,
@@ -3979,6 +4028,12 @@ function Set-OfflineGuestProvisionPayload {
             })
         azureArc                = $null
         domainJoin              = $null
+        # The VM card's Extras and Applications (WinGet). GuestProvision turns VBS on for
+        # Hotpatch and installs each app machine-wide; neither is ever fatal there.
+        hotpatchReady           = [bool]$Server.hotpatchReady
+        wingetApps              = @(@($Server.wingetApps) | Where-Object { -not [string]::IsNullOrWhiteSpace([string]$_) } | ForEach-Object {
+                @{ id = ([string]$_).Trim() }
+            })
     }
     if ($null -ne $deferredJoin) {
         $manifest.domainJoin = @{
@@ -4003,6 +4058,14 @@ function Set-OfflineGuestProvisionPayload {
     $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
     $manifestJson = $manifest | ConvertTo-Json -Depth 6
     [System.IO.File]::WriteAllText((Join-Path -Path $guestProvisionDir -ChildPath "manifest.json"), $manifestJson, $utf8NoBom)
+    if (-not $Refresh) {
+        if ($manifest.hotpatchReady) {
+            Write-Log "Hotpatch ready: VBS is turned on at first boot and runs from the next restart" -Tag "Run"
+        }
+        if ($manifest.wingetApps.Count) {
+            Write-Log "WinGet at first boot: $(@($manifest.wingetApps | ForEach-Object { $_.id }) -join ', ')" -Tag "Run"
+        }
+    }
 
     if ($null -ne $arc -and $arc.authMode -eq "servicePrincipal") {
         $sp = Get-ArcServicePrincipalSecretMaterial -ArcConfig $arc
@@ -4027,13 +4090,33 @@ function Set-OfflineGuestProvisionPayload {
         Write-Log "Injected credential + DomainJoin.ps1 for deferred join" -Tag "Run"
     }
 
+    # The licence from the Windows licenses blade: installed over the gold's own key, then
+    # activated online - a failure is logged, the VM is not held up. /ipk's output is
+    # dropped because it echoes the whole key; /dli logs the last five characters and the
+    # licence status instead. The key lives only in this file, which deletes itself.
+    $productKey = Resolve-WindowsLicenseForServer -Server $Server
+    $licenseLines = ""
+    if (-not [string]::IsNullOrWhiteSpace($productKey)) {
+        $activationLog = '"%ProgramData%\VmDeployLogs\Activation.log"'
+        $licenseLines = @"
+if not exist "%ProgramData%\VmDeployLogs" mkdir "%ProgramData%\VmDeployLogs"
+cscript //nologo %windir%\system32\slmgr.vbs /ipk $productKey >nul 2>&1
+cscript //nologo %windir%\system32\slmgr.vbs /ato >> $activationLog 2>&1
+cscript //nologo %windir%\system32\slmgr.vbs /dli >> $activationLog 2>&1
+
+"@
+        if (-not $Refresh) {
+            Write-Log "Licence: product key ...$($productKey.Substring(24)) from windowsLicenses - installed and activated at first boot" -Tag "Run"
+        }
+    }
+
     # The last line deletes this file. "(goto) 2>nul" ends the batch before del runs, so
     # cmd never tries to read a line from a file that is gone - deleting it from
     # GuestProvision.ps1 instead would do exactly that. GuestProvision removes its own
     # folder after a successful run.
     $setupCmd = @"
 @echo off
-REM GuestProvision - runs after specialize; a deferred domain join is registered here, not done here
+$($licenseLines)REM GuestProvision - runs after specialize; a deferred domain join is registered here, not done here
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%~dp0GuestProvision\GuestProvision.ps1" >nul 2>&1
 (goto) 2>nul & del "%~f0"
 "@
@@ -8761,6 +8844,15 @@ function Invoke-BuildPreflight {
         $childVhd = Join-Path -Path (Join-Path -Path $serverVhdRoot -ChildPath $folderName) -ChildPath $osDiskName
         if (Test-Path -LiteralPath $childVhd) {
             $errors.Add("$label OS disk already exists: $childVhd")
+        }
+
+        try {
+            if (Resolve-WindowsLicenseForServer -Server $server) {
+                $ok.Add("$label gets its product key from windowsLicenses")
+            }
+        }
+        catch {
+            $errors.Add("$label $($_.Exception.Message)")
         }
 
         $dj = $null

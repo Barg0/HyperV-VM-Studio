@@ -168,6 +168,9 @@ param (
     [Parameter(HelpMessage = "Bake the BlockUserInputMethodsForSignIn policy (STIG WN12-CC-000048): pin the sign-in screen to the baked keyboard and stop per-user input methods (fr-FR etc.) from appearing there. Applies to client and server. Default off.")]
     [bool]$BlockSignInInputMethods = $false,
 
+    [Parameter(HelpMessage = "Bake DisabledComponents 0x20 under Tcpip6\Parameters: Windows prefers IPv4 over IPv6 in its prefix policies, and IPv6 stays on - Microsoft's recommendation instead of turning IPv6 off. Applies to client and server. Default off.")]
+    [bool]$PreferIPv4 = $false,
+
     [Parameter(HelpMessage = "On client editions, bake PreventDeviceEncryption so Windows does not turn BitLocker on by itself after OOBE. No effect on Server images. Default on: encryption is expected to be armed by policy after deployment, not by the image on its own.")]
     [bool]$PreventDeviceEncryption = $true,
 
@@ -3375,6 +3378,7 @@ function Start-InteractiveConfiguration {
         [bool]$CurrentSuppressWelcomeExperience = $false,
         [bool]$CurrentSuppressFirstSignInAnimation = $false,
         [bool]$CurrentBlockSignInInputMethods = $false,
+        [bool]$CurrentPreferIPv4 = $false,
         [bool]$CurrentPreventDeviceEncryption = $true,
         [bool]$CurrentSetVmPowerPlan = $true,
         [bool]$CurrentConfigureEdge = $false,
@@ -3691,6 +3695,8 @@ function Start-InteractiveConfiguration {
                 }
                 # Applies to both client and server: pin sign-in keyboard to the baked layout.
                 $featureItems += [PSCustomObject]@{ Id = "signin"; Label = "Block per-user input methods on sign-in screen (STIG)"; Selected = $CurrentBlockSignInInputMethods; Section = "Optional" }
+                # Applies to both: IPv4 ahead of IPv6 in the prefix policies, IPv6 left on.
+                $featureItems += [PSCustomObject]@{ Id = "preferipv4"; Label = "Prefer IPv4 over IPv6 (IPv6 stays on)"; Selected = $CurrentPreferIPv4; Section = "Optional" }
                 # Edge ships on both sides of the client/server line, but not on Server Core - that
                 # install has no browser to manage, so a build made only of Core images is never asked.
                 if ($buildHasEdge) {
@@ -3720,6 +3726,7 @@ function Start-InteractiveConfiguration {
                     $suppressWelcome = $featureChoice -contains "welcome"
                     $suppressSignInAnimation = $featureChoice -contains "signinanim"
                     $blockSignIn = $featureChoice -contains "signin"
+                    $preferIPv4 = $featureChoice -contains "preferipv4"
                     $configureEdge = $featureChoice -contains "edge"
                     $preventDeviceEncryption = $featureChoice -contains "autode"
                     $setVmPowerPlan = $featureChoice -contains "power"
@@ -3770,6 +3777,7 @@ function Start-InteractiveConfiguration {
                     Write-FastfetchInfoRow -Label "remote desktop (rdp)" -Value $(if ($enableRdp) { "Enabled" } else { "Disabled" }) -LabelWidth 24 -IndentWidth 2
                     Write-FastfetchInfoRow -Label "icmp echo (ping)"     -Value $(if ($enablePing) { "Enabled" } else { "Disabled" }) -LabelWidth 24 -IndentWidth 2
                     Write-FastfetchInfoRow -Label "block sign-in imes"   -Value $(if ($blockSignIn) { "Enabled" } else { "Disabled" }) -LabelWidth 24 -IndentWidth 2
+                    Write-FastfetchInfoRow -Label "prefer ipv4"          -Value $(if ($preferIPv4) { "Enabled" } else { "Disabled" }) -LabelWidth 24 -IndentWidth 2
                     if ($buildHasEdge) {
                         Write-FastfetchInfoRow -Label "edge config"          -Value $(if ($configureEdge) { "Baked (Google, no first run, clean new tab)" } else { "Not baked" }) -LabelWidth 24 -IndentWidth 2
                     }
@@ -3832,6 +3840,7 @@ function Start-InteractiveConfiguration {
         SuppressWelcomeExperience    = $suppressWelcome
         SuppressFirstSignInAnimation = $suppressSignInAnimation
         BlockSignInInputMethods      = $blockSignIn
+        PreferIPv4                   = $preferIPv4
         ConfigureEdge                = $configureEdge
         PreventDeviceEncryption      = $preventDeviceEncryption
         SetVmPowerPlan               = $setVmPowerPlan
@@ -9144,6 +9153,35 @@ function Set-OfflineSignInKeyboardPolicy {
     }
 }
 
+function Set-OfflinePreferIPv4Policy {
+    # Microsoft's "Configure IPv6 in Windows": DisabledComponents bit 0x20 moves
+    # ::ffff:0:0/96 above ::/0 in the prefix policy table, so Windows picks IPv4 when a name
+    # has both - IPv6 itself stays on, which is what Microsoft recommends over turning it
+    # off. Read at boot, so every VM's first boot already has it. Check on a VM with
+    # netsh interface ipv6 show prefixpolicies.
+    param([string]$MountRoot)
+
+    $systemHive = Join-Path -Path $MountRoot -ChildPath "Windows\System32\config\SYSTEM"
+    $hiveRoot = "HKLM\OfflineImageTcpip6"
+
+    Write-Log "Loading offline SYSTEM hive for the IPv4 preference" -Tag "Debug"
+    & reg.exe load $hiveRoot $systemHive | Out-Null
+    if ($LASTEXITCODE -ne 0) {
+        throw "Failed to load offline SYSTEM hive (exit $LASTEXITCODE)"
+    }
+
+    try {
+        Write-Log "Baking DisabledComponents=0x20 (prefer IPv4 over IPv6)" -Tag "Run"
+        & reg.exe add "$hiveRoot\ControlSet001\Services\Tcpip6\Parameters" /v DisabledComponents /t REG_DWORD /d 32 /f | Out-Null
+        if ($LASTEXITCODE -ne 0) {
+            throw "Failed to write DisabledComponents (exit $LASTEXITCODE)"
+        }
+    }
+    finally {
+        Dismount-ImageHive -HiveRoot $hiveRoot
+    }
+}
+
 function Get-MountedOsRoot {
     param([string]$VhdPath)
 
@@ -9367,6 +9405,7 @@ function Set-OfflineImageCustomization {
         [bool]$SuppressWelcomeExperience = $false,
         [bool]$SuppressFirstSignInAnimation = $false,
         [bool]$BlockSignInInputMethods = $false,
+        [bool]$PreferIPv4 = $false,
         [bool]$PreventDeviceEncryption = $false,
         [bool]$SetVmPowerPlan = $false,
         [bool]$ConfigureEdge = $false
@@ -9450,6 +9489,9 @@ function Set-OfflineImageCustomization {
 
         if ($BlockSignInInputMethods) {
             Set-OfflineSignInKeyboardPolicy -MountRoot $mountRoot
+        }
+        if ($PreferIPv4) {
+            Set-OfflinePreferIPv4Policy -MountRoot $mountRoot
         }
         if ($ConfigureEdge) {
             # Server Core has no Edge to manage. The policy key would be inert rather than
@@ -10047,6 +10089,7 @@ function Invoke-ImageBuildPipeline {
         [bool]$SuppressWelcomeExperience = $false,
         [bool]$SuppressFirstSignInAnimation = $false,
         [bool]$BlockSignInInputMethods = $false,
+        [bool]$PreferIPv4 = $false,
         [bool]$PreventDeviceEncryption = $false,
         [bool]$SetVmPowerPlan = $false,
         [bool]$ConfigureEdge = $false,
@@ -10150,6 +10193,7 @@ function Invoke-ImageBuildPipeline {
             -SuppressWelcomeExperience $SuppressWelcomeExperience `
             -SuppressFirstSignInAnimation $SuppressFirstSignInAnimation `
             -BlockSignInInputMethods $BlockSignInInputMethods `
+            -PreferIPv4 $PreferIPv4 `
             -PreventDeviceEncryption $PreventDeviceEncryption `
             -SetVmPowerPlan $SetVmPowerPlan `
             -ConfigureEdge $ConfigureEdge
@@ -10222,6 +10266,7 @@ if ($needsInteractive) {
         -CurrentSuppressWelcomeExperience $SuppressWelcomeExperience `
         -CurrentSuppressFirstSignInAnimation $SuppressFirstSignInAnimation `
         -CurrentBlockSignInInputMethods $BlockSignInInputMethods `
+        -CurrentPreferIPv4 $PreferIPv4 `
         -CurrentPreventDeviceEncryption $PreventDeviceEncryption `
         -CurrentSetVmPowerPlan $SetVmPowerPlan `
         -CurrentConfigureEdge $ConfigureEdge `
@@ -10261,6 +10306,7 @@ if ($needsInteractive) {
     $SuppressWelcomeExperience = $config.SuppressWelcomeExperience
     $SuppressFirstSignInAnimation = $config.SuppressFirstSignInAnimation
     $BlockSignInInputMethods = $config.BlockSignInInputMethods
+    $PreferIPv4 = $config.PreferIPv4
     $PreventDeviceEncryption = $config.PreventDeviceEncryption
     $SetVmPowerPlan = $config.SetVmPowerPlan
     $ConfigureEdge = $config.ConfigureEdge
@@ -10388,6 +10434,7 @@ $bakeOptionLines = @(
     @{ Applies = $runHasClient; On = $SuppressWelcomeExperience;    Text = "Welcome experience: suppressed";         Off = "Welcome experience: not suppressed" }
     @{ Applies = $runHasClient; On = $SuppressFirstSignInAnimation; Text = "First sign-in animation: suppressed";    Off = "First sign-in animation: not suppressed" }
     @{ Applies = $true;         On = $BlockSignInInputMethods;      Text = "Sign-in input methods: blocked";         Off = "Sign-in input methods: not blocked" }
+    @{ Applies = $true;         On = $PreferIPv4;                   Text = "IPv4 preferred over IPv6 (IPv6 stays on)"; Off = "IPv4/IPv6 preference: Windows default" }
     @{ Applies = $runHasEdge;   On = $ConfigureEdge;                Text = "Edge policy baseline: baked (Google search, no first run, clean new tab, required-only diagnostics)"; Off = "Edge policy baseline: not baked" }
     @{ Applies = $runHasClient; On = $PreventDeviceEncryption;      Text = "BitLocker device encryption: prevented"; Off = "BitLocker device encryption: left to Windows" }
     @{ Applies = $runHasClient; On = $SetVmPowerPlan;               Text = "Power plan: High performance, display and sleep never, hibernation off"; Off = "Power plan: Windows default" }
@@ -10482,6 +10529,7 @@ foreach ($buildSpec in $buildSpecs) {
         -SuppressWelcomeExperience $SuppressWelcomeExperience `
         -SuppressFirstSignInAnimation $SuppressFirstSignInAnimation `
         -BlockSignInInputMethods $BlockSignInInputMethods `
+        -PreferIPv4 $PreferIPv4 `
         -PreventDeviceEncryption $PreventDeviceEncryption `
         -SetVmPowerPlan $SetVmPowerPlan `
         -ConfigureEdge $ConfigureEdge `
@@ -10495,7 +10543,7 @@ foreach ($buildSpec in $buildSpecs) {
 
     # Only the options that reach this kind of image: the client-only ones mean nothing
     # on a Server gold and the Server one nothing on a client, so neither is recorded.
-    $bakeOptions = [ordered]@{ rdp = [bool]$EnableRdp; ping = [bool]$EnablePing; blockSignInInputMethods = [bool]$BlockSignInInputMethods; edgeBaseline = [bool]$ConfigureEdge }
+    $bakeOptions = [ordered]@{ rdp = [bool]$EnableRdp; ping = [bool]$EnablePing; blockSignInInputMethods = [bool]$BlockSignInInputMethods; preferIPv4 = [bool]$PreferIPv4; edgeBaseline = [bool]$ConfigureEdge }
     if (Test-IsClientImage -ImageName $imageInfo.ImageName) {
         $bakeOptions["suppressWelcomeExperience"] = [bool]$SuppressWelcomeExperience
         $bakeOptions["suppressFirstSignInAnimation"] = [bool]$SuppressFirstSignInAnimation

@@ -128,6 +128,7 @@ The UI language stays whatever the ISO shipped.
 | Prevent automatic BitLocker device encryption | on | client |
 | VM power plan — High performance, display and sleep never, no hibernation | on | client |
 | Block per-user input methods on the sign-in screen | off | all |
+| Prefer IPv4 over IPv6 — IPv6 stays on (`DisabledComponents` 0x20) | off | all |
 | Microsoft Edge Config | off | client + Server Desktop Experience |
 | Suppress Server Manager at logon | off | server |
 | Suppress Welcome Experience / first sign-in animation | off | client |
@@ -509,6 +510,11 @@ Get-VMSwitch | Format-Table Name, SwitchType, NetAdapterInterfaceDescription
 A subnet defined once: <picture><source media="(prefers-color-scheme: dark)" srcset=".github/assets/icons/vnet-dark.svg"><img src=".github/assets/icons/vnet-light.svg" width="16" alt=""></picture> vSwitch, VLAN, network ID, gateway, DNS. Bind a VM to it
 and its IP is checked against that subnet, not against "looks like an IP".
 
+Above the networks sits the list of **vSwitches**, named exactly as in Hyper-V Manager. Each
+row shows the networks and VMs that use it. The first switch is the default, where new VMs and
+networks start, and *Make default* moves another one to the top. A switch still in use
+can't be removed: move its VMs and networks to another switch first.
+
 <img src=".github/assets/blades/networks-tour.webp" width="860" alt="Adding a network">
 
 ### <picture><source media="(prefers-color-scheme: dark)" srcset=".github/assets/blades/servers-dark.png"><img src=".github/assets/blades/servers-light.png" width="20" alt=""></picture> Virtual machines
@@ -525,6 +531,8 @@ summary line, so twelve machines still fit on a screen.
 │  └─ <picture><source media="(prefers-color-scheme: dark)" srcset=".github/assets/icons/nested-virt-dark.svg"><img src=".github/assets/icons/nested-virt-light.svg" width="16" alt=""></picture> Additional processor options
 ├─ <picture><source media="(prefers-color-scheme: dark)" srcset=".github/assets/icons/vnet-dark.svg"><img src=".github/assets/icons/vnet-light.svg" width="16" alt=""></picture> Network                        adapters, networks, VLANs
 ├─ <picture><source media="(prefers-color-scheme: dark)" srcset=".github/assets/icons/disk-dark.svg"><img src=".github/assets/icons/disk-light.svg" width="16" alt=""></picture> Disks                          data disks, formatted at first boot
+├─ <picture><source media="(prefers-color-scheme: dark)" srcset=".github/assets/icons/winget-dark.svg"><img src=".github/assets/icons/winget-light.svg" width="16" alt=""></picture> Applications (WinGet)          installed at first boot
+├─ <picture><source media="(prefers-color-scheme: dark)" srcset=".github/assets/icons/extras-dark.svg"><img src=".github/assets/icons/extras-light.svg" width="16" alt=""></picture> Extras           <i>(2025)</i>     Hotpatch ready
 ├─ <picture><source media="(prefers-color-scheme: dark)" srcset=".github/assets/icons/extensions-dark.svg"><img src=".github/assets/icons/extensions-light.svg" width="16" alt=""></picture> Roles &amp; Features   <i>(Server)</i>   what the Add Roles wizard would install
 ├─ <picture><source media="(prefers-color-scheme: dark)" srcset=".github/assets/icons/client-apps-dark.svg"><img src=".github/assets/icons/client-apps-light.svg" width="16" alt=""></picture> Built-in apps    <i>(client)</i>   strip the provisioned Store apps
 ├─ <picture><source media="(prefers-color-scheme: dark)" srcset=".github/assets/icons/storage-dark.svg"><img src=".github/assets/icons/storage-light.svg" width="16" alt=""></picture> Storage paths                  per-VM overrides
@@ -551,6 +559,8 @@ summary line, so twelve machines still fit on a screen.
 - <picture><source media="(prefers-color-scheme: dark)" srcset=".github/assets/icons/disk-dark.svg"><img src=".github/assets/icons/disk-light.svg" width="16" alt=""></picture> **Disks** — the OS disk sits fixed at C:, its size and format decided when the gold was built. *Create and attach* adds data disks at D:, E:, … in order; each gets a size, Fixed or Dynamic, a filesystem and a volume label. At first boot the guest initializes the disk GPT, partitions it, formats it and mounts it on its letter with that label — *Leave raw* skips all of that and hands you a blank offline disk. File names follow the VM name (`disk-<server>-d.vhdx`) until the pencil pins one by hand. ReFS needs an Enterprise-class client image or a Server.
 
   <img src=".github/assets/blades/servers-disks.webp" width="640" alt="Adding a data disk: size, type, filesystem, volume label">
+- <picture><source media="(prefers-color-scheme: dark)" srcset=".github/assets/icons/winget-dark.svg"><img src=".github/assets/icons/winget-light.svg" width="16" alt=""></picture> **Applications (WinGet)** *(Windows 11, Server 2025 Desktop Experience)* — one WinGet ID per row, exactly as WinGet writes it (`7zip.7zip`, `Microsoft.PowerShell`). The studio has no server to search the catalog, so `winget search <name>` on any Windows PC gives you the ID. At first boot GuestProvision installs each one as SYSTEM, machine-wide, newest version; an app that fails is logged and the VM still comes up. The VM needs a way out to the internet.
+- <picture><source media="(prefers-color-scheme: dark)" srcset=".github/assets/icons/extras-dark.svg"><img src=".github/assets/icons/extras-light.svg" width="16" alt=""></picture> **Extras** *(Server 2025)* — **Hotpatch ready** turns on Virtualization-based security at first boot (Microsoft's documented registry switch) and keeps Secure Boot on, which Hotpatch needs. VBS starts after the next restart. Standard and Datacenter then get Hotpatch switched on in Azure Arc; Datacenter: Azure Edition has it on by default.
 - <picture><source media="(prefers-color-scheme: dark)" srcset=".github/assets/icons/extensions-dark.svg"><img src=".github/assets/icons/extensions-light.svg" width="16" alt=""></picture> **Roles &amp; Features** *(Server)* — tick a role, get what the Add Roles wizard would install: role services nested, management tools alongside, sixteen roles from AD DS to WSUS. Windows features (Failover Clustering, MPIO, .NET 3.5…) sit beside them.
 - <picture><source media="(prefers-color-scheme: dark)" srcset=".github/assets/icons/fod-dark.svg"><img src=".github/assets/icons/fod-light.svg" width="16" alt=""></picture> **RSAT tools** *(client)* — the management consoles a workstation administers the lab from. **Hyper-V Management Tools** heads the list (Hyper-V Manager, `vmconnect`, the Hyper-V module — the platform stays off); it is an in-box optional feature rather than a Features on Demand capability, so it installs offline out of the image with no ISO. Everything under it is RSAT and wants the ISO described further down. *PAW essentials* ticks the privileged-workstation set, Hyper-V included.
 - <picture><source media="(prefers-color-scheme: dark)" srcset=".github/assets/icons/client-apps-dark.svg"><img src=".github/assets/icons/client-apps-light.svg" width="16" alt=""></picture> **Built-in apps** *(client)* — strips the provisioned Store apps offline, before first boot. Every app is individually tickable — all 43 by default, an "All apps" master row for the whole set — and a protected list (Store, Terminal, Notepad, Photos…) is never offered. All ticked exports the compact `removeBuiltInApps: true`; a custom pick exports `removeApps` with just those package ids.
@@ -688,6 +698,17 @@ az provider register --namespace Microsoft.Compute
 
 </details>
 
+### <picture><source media="(prefers-color-scheme: dark)" srcset=".github/assets/blades/passwords-dark.png"><img src=".github/assets/blades/passwords-light.png" width="20" alt=""></picture> Windows licenses
+
+Optional. One product key per Windows edition — Windows Server 2025 Datacenter, Windows 11 Enterprise —
+attached to VMs with the same picker as everywhere else. The key covers Core and Desktop
+alike and keeps applying after a rebake. At first boot `SetupComplete.cmd` installs it over
+the gold's own key and activates online (`slmgr /ipk`, then `/ato`); the result lands in
+`C:\ProgramData\VmDeployLogs\Activation.log` and a failed activation does not hold the VM up.
+VMs built from another edition, or from a custom gold, cannot be attached. Without a
+licence, server VMs keep the AVMA key `New-Vhdx.ps1` bakes into the gold, so Setup never
+stops at the product key screen.
+
 ### <picture><source media="(prefers-color-scheme: dark)" srcset=".github/assets/blades/review-dark.png"><img src=".github/assets/blades/review-light.png" width="20" alt=""></picture> Review and validate
 
 Everything you configured, summarized, plus every offline consistency check — duplicate names,
@@ -696,6 +717,8 @@ IPs outside their subnet, missing passwords, missing golds. Fix it here, not on 
 ### <picture><source media="(prefers-color-scheme: dark)" srcset=".github/assets/blades/passwords-dark.png"><img src=".github/assets/blades/passwords-light.png" width="20" alt=""></picture> Passwords
 
 Every generated local account password in one place — reveal, copy, regenerate.
+**Export CSV** downloads `vm-passwords.csv`: one row per VM with its address, user
+(`<vm>\<user>` on Windows), password and, for Linux, the `ssh` command.
 
 > <picture><source media="(prefers-color-scheme: dark)" srcset=".github/assets/icons/security-dark.svg"><img src=".github/assets/icons/security-light.svg" width="16" alt=""></picture> They're written into `config.json` in plain text. Keep the file with the
 > rest of the lab and delete it once `Build-Vms.ps1` has run.

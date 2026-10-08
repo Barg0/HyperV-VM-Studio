@@ -157,10 +157,12 @@
      tabular-nums on top of that, so the octets line up digit for digit down the list
      rather than drifting with proportional glyph widths. */
   .card-actions .card-ip {
-    /* Sized to the longest address actually in the list, not to 255.255.255.255 -
-       see ipColumnWidth(). The fallback only applies if that ever fails to run. */
-    min-width: var(--ip-col, 15ch);
-    text-align: right;
+    /* One slot for 255.255.255.255 on every card, the address centered in it: the gaps to the
+       pills on either side stay equal, whatever the address's length. */
+    box-sizing: content-box;
+    width: 15ch;
+    min-width: 15ch;
+    text-align: center;
     font-variant-numeric: tabular-nums;
     font-size: 12px;
     font-weight: 600;
@@ -168,39 +170,6 @@
   }
   /* No static address is not a value, so it does not get the weight of one. */
   .card-actions .card-ip.is-none { font-weight: 400; color: var(--fg-muted); }
-  /* Equal-size header badges: Domain / Arc / Desktop|Core|Client */
-  .card-actions .pill.role,
-  .card-actions .pill.status {
-    box-sizing: border-box;
-    width: 6.25rem;
-    min-width: 6.25rem;
-    height: 1.5rem;
-    justify-content: center;
-    gap: 5px;
-    padding: 0 8px;
-    font-size: 10px;
-    font-weight: 700;
-    letter-spacing: .4px;
-    text-transform: uppercase;
-    line-height: 1;
-  }
-  .card-actions .pill.status img {
-    width: 12px; height: 12px; flex-shrink: 0;
-  }
-  /* Domain / Arc badges are always "on" — the green dot belongs to that state only. */
-  .card-actions .pill.status.on::before {
-    background: var(--success);
-    box-shadow: 0 0 0 2px color-mix(in srgb, var(--success) 35%, transparent);
-  }
-  .card-actions .pill.status.on {
-    color: #fff;
-    background: color-mix(in srgb, var(--success) 28%, transparent);
-    border-color: color-mix(in srgb, var(--success) 50%, var(--border));
-  }
-  .card-actions .pill.role.core,
-  .card-actions .pill.role.desktop,
-  .card-actions .pill.role.client,
-  .card-actions .pill.role.linux { color: #fff; }
   .card-actions .btn.icon.danger-text {
     width: 32px; height: 32px; color: var(--danger);
     border-color: transparent; background: transparent;
@@ -211,10 +180,21 @@
   }
   .card-actions .btn.icon.danger-text svg,
   .card-actions .btn.icon.danger-text .glyph { width: 16px; height: 16px; }
+  /* Every trash-can button has a frame - in card heads, disk rows, tables - like every other
+     button; the red is the icon's. Specific enough to win over the frameless icon rules. */
+  .btn.icon.btn:has(img.glyph-trash) {
+    border: 1px solid color-mix(in srgb, var(--danger) 40%, var(--border-strong));
+    background: transparent; opacity: 1;
+  }
+  .btn.icon.btn:has(img.glyph-trash):hover { background: color-mix(in srgb, var(--danger) 12%, transparent); }
+  .btn.icon.btn:has(img.glyph-trash):disabled { opacity: .45; }
 
   .card.collapsible.collapsed .card-body { display: none; }
   .card.collapsible .card-body { padding: 14px 16px 16px; }
-  .card-stack { display: flex; flex-direction: column; gap: 12px; }
+  /* A stack's cards keep the one card spacing (14 px) - its gap, not their margin as well,
+     which made a list's cards 26 px apart and the card above it 14. */
+  .card-stack { display: flex; flex-direction: column; gap: 14px; margin-bottom: 14px; }
+  .card-stack > .card { margin-bottom: 0; }
 
   /* Consolidated section: a labeled group of fields inside a card. Static by default
      (always visible — primary, frequently-edited fields shouldn't hide behind a click);
@@ -564,6 +544,41 @@
   .cl-vm:hover .sam { color: var(--accent-hover); text-decoration: underline; }
   .cl-vm img { width: 18px; height: 18px; flex-shrink: 0; }
   .cl-vm .sam { font-family: var(--mono); font-size: 13px; color: var(--accent); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  /* Available vSwitches: the attach table's shape, with the add field as its footer. */
+  .sw-grid { border: 1px solid var(--border); border-radius: var(--radius-lg); background: var(--bg); overflow: hidden; }
+  .sw-head, .sw-row { display: grid; grid-template-columns: minmax(0, 260px) minmax(0, 1fr) auto; align-items: center; gap: 12px; padding: 8px 12px; }
+  .sw-head {
+    background: var(--bg-subtle); border-bottom: 1px solid var(--border);
+    font-size: 11px; font-weight: 600; color: var(--fg-muted); text-transform: uppercase; letter-spacing: .3px;
+  }
+  .sw-row { min-height: 44px; border-bottom: 1px solid var(--divider); }
+  .sw-row:hover { background: var(--bg-hover); }
+  /* A meta pill shares the row's hover colour - lift it so it does not vanish. */
+  .sw-row:hover .pill:not(.status) { background: var(--bg-elevated); }
+  .sw-name { display: flex; align-items: center; gap: 8px; min-width: 0; }
+  .sw-name img { width: 18px; height: 18px; flex-shrink: 0; }
+  .sw-name .sam { font-family: var(--mono); font-size: 13px; color: var(--accent); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .sw-use { display: flex; flex-wrap: wrap; gap: 6px; min-width: 0; }
+  /* One span with the name, so the two share a baseline; mono runs large, so a touch smaller. */
+  .sw-use .cidr { font-family: var(--mono); font-weight: 400; font-size: 10.5px; color: var(--fg-muted); }
+  .sw-act { display: flex; align-items: center; gap: 6px; justify-self: end; }
+  .sw-act .btn.icon { width: 28px; height: 28px; }
+  .sw-mk { visibility: hidden; }
+  .sw-row:hover .sw-mk, .sw-mk:focus-visible { visibility: visible; }
+  .sw-add { display: flex; gap: 8px; padding: 8px 12px; background: var(--bg-subtle); }
+  .sw-add input {
+    flex: 1; min-width: 0; height: 28px; padding-left: 32px;
+    background-repeat: no-repeat; background-position: left 9px center; background-size: 15px 15px;
+  }
+  .sw-add .btn.add { color: var(--accent); border-color: color-mix(in srgb, var(--accent) 60%, var(--border)); background: color-mix(in srgb, var(--accent) 7%, var(--bg-subtle)); font-weight: 600; }
+  .sw-err { padding: 0 12px 8px; background: var(--bg-subtle); font-size: 11.5px; color: var(--danger-text); }
+  .sw-err .sam { font-family: var(--mono); }
+  @media (max-width: 700px) {
+    .sw-head { display: none; }
+    .sw-row { grid-template-columns: minmax(0, 1fr) auto; }
+    .sw-use { grid-column: 1 / -1; grid-row: 2; }
+    .sw-mk { visibility: visible; }
+  }
   .cl-note { font-size: 12px; color: var(--fg-muted); display: flex; align-items: center; gap: 6px; }
   .cl-note code { font-size: 11.5px; }
   /* Nothing in this table can block clustering — the studio never touches the host. Only a
@@ -632,12 +647,16 @@
   .btn:disabled { opacity: .45; cursor: not-allowed; }
   /* Hover must not light a disabled button back up, whatever variant it is. */
   .btn:disabled:hover { background: var(--bg-subtle); box-shadow: none; }
-  .btn.primary:disabled:hover { background: var(--accent); }
+  .btn.primary:disabled:hover { background: color-mix(in srgb, var(--accent) 7%, var(--bg-subtle)); }
+  .btn.danger:disabled:hover { background: color-mix(in srgb, var(--danger) 7%, var(--bg-subtle)); }
   .btn.ghost:disabled:hover, .btn.danger-text:disabled:hover { background: transparent; }
-  .btn.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-fg); }
-  .btn.primary:hover { background: var(--accent-hover); box-shadow: var(--shadow-2); }
-  .btn.danger { border-color: var(--danger); color: var(--danger-fg); background: var(--danger); }
-  .btn.danger:hover { box-shadow: var(--shadow-2); }
+  /* No solid buttons: the main action is the accent as border and text on a faint accent
+     wash - the same box and height as every button beside it, still the one found first.
+     A destructive confirm does the same in the danger red. */
+  .btn.primary { background: color-mix(in srgb, var(--accent) 7%, var(--bg-subtle)); border-color: color-mix(in srgb, var(--accent) 60%, var(--border)); color: var(--accent); font-weight: 600; }
+  .btn.primary:hover { background: color-mix(in srgb, var(--accent) 14%, var(--bg-subtle)); border-color: var(--accent); }
+  .btn.danger { background: color-mix(in srgb, var(--danger) 7%, var(--bg-subtle)); border-color: color-mix(in srgb, var(--danger) 60%, var(--border)); color: var(--danger-text); font-weight: 600; }
+  .btn.danger:hover { background: color-mix(in srgb, var(--danger) 14%, var(--bg-subtle)); border-color: var(--danger); }
   .btn.danger-text { background: transparent; border-color: transparent; color: var(--danger); }
   .btn.danger-text:hover { background: color-mix(in srgb, var(--danger) 14%, transparent); }
   .btn img { width: 14px; height: 14px; display: block; flex-shrink: 0; }
@@ -653,9 +672,9 @@
     padding: 0 12px 0 6px; gap: 8px; margin-right: 8px;
   }
   .topbar #themeBtn:hover { background: var(--bg-hover); border-color: var(--border-strong); }
-  .topbar .btn.primary { height: 32px; font-weight: 700; margin-left: 6px; }
+  .topbar .btn.primary { height: 32px; margin-left: 6px; }
   
-  .btn.icon { width: 28px; height: 28px; min-height: 0; padding: 0; justify-content: center; border-radius: 6px; }
+  .btn.icon { width: 28px; height: 28px; min-height: 0; padding: 0; justify-content: center; border-radius: var(--radius); }
   .btn.sm { height: 28px; padding: 0 10px; font-size: 12px; }
   .btn.icon.sm { width: 28px; height: 28px; padding: 0; }
   .btn.icon.ghost { opacity: .75; }
@@ -683,45 +702,58 @@
   .btn.tab.active { background: var(--bg-hover); color: var(--fg); border-color: var(--border-strong); }
   .chips { display: flex; gap: 8px; flex-wrap: wrap; margin: 12px 0 18px; }
 
-  /* Consolidated pill: stat readouts, role/status badges, and removable chips all share one base. */
+  /* One badge for the whole studio, three kinds, two sizes - and nothing bigger.
+     sm (18 px) everywhere by default; md (22 px) where a badge sits in a head: card and
+     blade heads, the chips row, the overview title. Width is always the text's.
+       .pill         meta  - counts and plain facts: neutral fill, numbers in tabular figures
+       .pill.status  state - lifecycle and power: a dot and the word, tinted in its colour
+       .pill.role    kind  - what a machine is: capitals in a hairline of its band */
   .pill {
-    display: inline-flex; align-items: center; gap: 6px;
-    font-size: 12px; padding: 3px 10px; border-radius: var(--radius-lg);
-    border: 1px solid var(--border); background: var(--bg-subtle); color: var(--fg-muted); white-space: nowrap;
+    display: inline-flex; align-items: center; gap: 6px; box-sizing: border-box;
+    height: 18px; padding: 0 6px; border: 0; border-radius: var(--radius-lg);
+    font-size: 11px; font-weight: 600; line-height: 1; white-space: nowrap; vertical-align: middle;
+    font-variant-numeric: tabular-nums; color: var(--fg-muted); background: var(--bg-hover);
   }
+  .pill b { color: var(--fg); font-weight: 700; }
+  :is(.card-head, .card-actions, .gs-head, .blade-toolbar, .chips, .ov-title) .pill { height: 22px; padding: 0 8px; font-size: 12px; }
+  /* Badges beside a card's title (they shared the head with buttons - splitHeadBadges). */
+  .title-badges { display: inline-flex; align-items: center; gap: 6px; margin-left: 6px; vertical-align: middle; flex-wrap: wrap; }
+  /* In a card title (a flex row with its own 8 px gap) the gap does the spacing: 6 px, as
+     between two badges, and no margin on top of it. */
+  .card-title:has(> .title-badges) { gap: 6px; }
+  .card-title > .title-badges { margin-left: 0; }
   .pill.role {
-    font-size: 10px; font-weight: 700; letter-spacing: .4px; text-transform: uppercase;
-    padding: 2px 8px; background: var(--bg); border-color: var(--border);
+    --c: var(--fg-muted); color: var(--c); background: transparent;
+    font-size: 10px; font-weight: 700; letter-spacing: .5px; text-transform: uppercase;
+    box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--c) 45%, transparent);
   }
-  .pill.role.core { color: var(--warn); border-color: color-mix(in srgb, var(--warn) 45%, var(--border)); background: var(--warn-soft); }
-  .pill.role.desktop { color: var(--accent); border-color: color-mix(in srgb, var(--accent) 45%, var(--border)); background: color-mix(in srgb, var(--accent) 12%, var(--bg)); }
-  .pill.role.client { color: var(--role-client); border-color: color-mix(in srgb, var(--role-client) 45%, var(--border)); background: color-mix(in srgb, var(--role-client) 14%, var(--bg)); }
-  .pill.role.linux { color: var(--role-linux); border-color: color-mix(in srgb, var(--role-linux) 45%, var(--border)); background: color-mix(in srgb, var(--role-linux) 14%, var(--bg)); }
+  :is(.card-head, .card-actions, .gs-head, .ov-title) .pill.role { font-size: 10.5px; }
+  /* The VM cards alone: their head's badges at the small size, so
+     the name line is the name's height and the line below has room. Every other head keeps
+     the 22 px badges. */
+  .vm-card > .card-head .title-badges .pill { height: 18px; padding: 0 6px; font-size: 11px; }
+  .vm-card > .card-head .title-badges .pill.role { font-size: 10px; }
+  .vm-card > .card-head .card-meta { margin-top: 4px; }
+  .pill.role.core { --c: var(--warn); }
+  .pill.role.desktop { --c: var(--role-server); }
+  .pill.role.client { --c: var(--role-client); }
+  .pill.role.linux { --c: var(--role-linux); }
 
   .pill.status {
-    font-weight: 700; letter-spacing: .3px; text-transform: uppercase; line-height: 1.2;
-    padding: 3px 10px 3px 8px; border-color: transparent;
+    --c: var(--fg-muted);
+    color: color-mix(in srgb, var(--c) 82%, var(--fg)); background: color-mix(in srgb, var(--c) 14%, transparent);
   }
-  .pill.status::before {
-    content: ""; width: 7px; height: 7px; border-radius: 50%; background: currentColor; flex-shrink: 0;
-    box-shadow: 0 0 0 2px color-mix(in srgb, currentColor 28%, transparent);
-  }
-  .pill.status.on { color: var(--success-text); background: color-mix(in srgb, var(--success) 18%, transparent); border-color: color-mix(in srgb, var(--success) 45%, var(--border)); }
-  .pill.status.off { color: var(--danger-text); background: color-mix(in srgb, var(--danger) 16%, transparent); border-color: color-mix(in srgb, var(--danger) 42%, var(--border)); }
-  .pill.status.warn { color: var(--warn); background: var(--warn-soft); border-color: color-mix(in srgb, var(--warn) 45%, var(--border)); }
+  .pill.status::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: var(--c); flex-shrink: 0; }
+  /* A badge with its own glyph (Domain, Arc, HA) needs no dot. */
+  .pill.status:has(> img)::before { display: none; }
+  .pill.status.on, .pill.status.ok { --c: var(--success); }
+  .pill.status.off, .pill.status.bad { --c: var(--danger); }
+  .pill.status.warn { --c: var(--warn); }
+  .pill.status.info { --c: var(--accent); }
+  .pill.status.none::before { background: transparent; box-shadow: inset 0 0 0 1.5px var(--c); }
+  a.pill { text-decoration: none; }
 
-  .pill.removable {
-    padding: 8px 10px; border-radius: var(--radius-lg); background: var(--bg);
-    margin: 0 8px 8px 0; gap: 8px;
-  }
-  .pill.removable.input input { width: 160px; }
-  .pill.removable.input input[readonly] {
-    color: var(--accent); font-family: var(--mono);
-    background: transparent; border-color: transparent; cursor: default;
-  }
-  .pill > img { width: 14px; height: 14px; flex-shrink: 0; }
-  .pill.removable img { width: 18px; height: 18px; }
-  .pill.removable .sam { font-family: var(--mono); color: var(--accent); }
+  .pill > img { width: 12px; height: 12px; flex-shrink: 0; }
   /* The glyph lives inside the input, not beside it: an icon in the flex row shifts the
      field right and breaks its left edge against every other field in the card. */
   .dns-row { display: flex; align-items: center; gap: 8px; }
@@ -739,6 +771,8 @@
     background-repeat: no-repeat; background-position: left 9px center; background-size: 15px 15px;
   }
   .list-row .btn.icon, .list-row .btn.danger-text { flex-shrink: 0; }
+  /* A button beside an input takes the input's height, square - as in .edit-field. */
+  .dns-row > .btn.icon, .list-row > .btn.icon { width: 32px; height: 32px; }
   /* Group chips. One chip is one group, because an AD group name carries spaces as a
      matter of course - "Domain Admins" - and a comma-separated box cannot tell a
      separator from a character somebody typed inside a name. */
@@ -767,10 +801,6 @@
      neutral like every other boxed icon. */
   .chip-add > .btn.icon { width: 32px; height: 32px; flex-shrink: 0; color: var(--secret-glyph); }
 
-  .pill.tag {
-    font-size: 10px; font-weight: 700; letter-spacing: .3px; text-transform: uppercase;
-    background: var(--bg-hover); color: var(--fg-muted); border-radius: var(--radius-lg); padding: 2px 6px; border: none;
-  }
 
   .hint { font-size: 11px; color: var(--fg-muted); }
 
@@ -891,26 +921,26 @@
     .ssh-howto > div { display: block; grid-row: auto; }
   }
   .tip-box {
-    display: flex; gap: 10px; align-items: flex-start; font-size: 12px; line-height: 1.6;
+    display: flex; gap: 10px; align-items: center; font-size: 12px; line-height: 1.6;
     background: var(--accent-soft); border: 1px solid color-mix(in srgb, var(--accent) 35%, var(--border));
     padding: 10px 12px; border-radius: var(--radius-lg); margin-top: 12px;
   }
-  .tip-box img { width: 16px; height: 16px; flex-shrink: 0; margin-top: 1px; }
+  .tip-box img { width: 16px; height: 16px; flex-shrink: 0; }
 
   /* Mandatory-field callout, e.g. no vSwitch defined yet */
   .req-box {
-    display: flex; gap: 10px; align-items: flex-start; font-size: 12px; line-height: 1.55;
+    display: flex; gap: 10px; align-items: center; font-size: 12px; line-height: 1.55;
     background: color-mix(in srgb, var(--danger) 12%, transparent);
     border: 1px solid color-mix(in srgb, var(--danger) 45%, var(--border));
     border-left-width: 3px; border-left-color: var(--danger);
     padding: 10px 12px; border-radius: var(--radius-lg); margin-bottom: 12px; color: var(--fg-muted);
   }
-  .req-box svg { width: 16px; height: 16px; flex-shrink: 0; margin-top: 1px; color: var(--danger); }
+  .req-box svg { width: 16px; height: 16px; flex-shrink: 0; color: var(--danger); }
   .req-box strong { color: var(--danger-text); font-weight: 600; }
 
   /* "Keep the ISO in media\" recommendation above the FoD toggles */
   .fod-banner {
-    display: flex; gap: 10px; align-items: flex-start; font-size: 12px; line-height: 1.55;
+    display: flex; gap: 10px; align-items: center; font-size: 12px; line-height: 1.55;
     background: var(--accent-soft); border: 1px solid color-mix(in srgb, var(--accent) 32%, var(--border));
     border-left-width: 3px; border-left-color: var(--accent);
     padding: 10px 12px; border-radius: var(--radius-lg); margin-top: 10px; color: var(--fg-muted);
@@ -1022,17 +1052,6 @@
   .ov-badge img { width: 28px; height: 28px; }
   .ov-id { min-width: 0; }
   .ov-title { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
-  /* Role, status and workgroup pills sit in one row, so they share one box: same
-     height, same type, whatever class they come from. */
-  .ov-title .pill {
-    height: 24px; padding: 0 10px; font-size: 11px; font-weight: 700; letter-spacing: .4px;
-    text-transform: uppercase; line-height: 1;
-  }
-  .ov-title .pill img { width: 13px; height: 13px; }
-  /* The plain pill (Workgroup) has no hue of its own; a stronger edge keeps its box as
-     visible as the tinted ones beside it. */
-  .ov-title .pill:not(.role):not(.status) { border-color: var(--border-strong); }
-  .ov-title .pill.status.info { color: var(--accent); background: color-mix(in srgb, var(--accent) 14%, transparent); }
   .ov-name { font-size: 20px; font-weight: 600; margin-right: 2px; }
   .ov-os { display: flex; align-items: center; gap: 7px; color: var(--fg-muted); margin-top: 5px; font-size: 12.5px;
     white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -1126,11 +1145,11 @@
 
   .issue-list { display: flex; flex-direction: column; gap: 8px; }
   .issue {
-    display: flex; gap: 10px; align-items: flex-start; font-size: 12px;
+    display: flex; gap: 10px; align-items: center; font-size: 12px;
     padding: 9px 11px; border: 1px solid var(--border); border-radius: var(--radius-lg);
     background: var(--bg-subtle);
   }
-  .issue svg { width: 15px; height: 15px; flex-shrink: 0; margin-top: 1px; }
+  .issue svg { width: 15px; height: 15px; flex-shrink: 0; }
   .issue.error { border-color: color-mix(in srgb, var(--danger) 45%, var(--border)); }
   .issue.error svg { color: var(--danger); }
   .issue.warn { border-color: color-mix(in srgb, var(--warn) 45%, var(--border)); }
@@ -1142,7 +1161,9 @@
   .warn-box {
     background: color-mix(in srgb, var(--warn) 15%, transparent); border: 1px solid var(--warn);
     padding: 10px 12px; border-radius: var(--radius); margin-bottom: 12px;
+    display: flex; align-items: center; gap: 10px;
   }
+  .warn-box > svg { width: 16px; height: 16px; flex-shrink: 0; color: var(--warn); }
   /* Floats clear of the page scrollbar, with a status stripe on the left: success green,
      or danger red for an error. --tone carries the one colour both the stripe and the
      glyph take. */
@@ -1406,6 +1427,7 @@
   .edit-field > input[readonly]:hover { border-color: var(--border); }
   /* Account boxes keep their border while locked - a borderless credential reads as empty space. */
   .edit-field > input.keep-border[readonly] { border-color: var(--border); }
+  input.key-input { font-size: 13px; letter-spacing: .04em; padding: 8px 9px 6px; }
   .disk-badge {
     /* Fixed width so OS and DATA end at the same x - otherwise the file-name inputs
        above and below each other stop at different points. */
@@ -1533,11 +1555,8 @@
   .btn.row.selected .op-check { background: var(--accent); border-color: var(--accent); color: var(--accent-fg); }
   .btn.row .op-name { font-weight: 600; }
   .btn.row .op-meta { margin-left: auto; font-size: 11px; color: var(--fg-muted); }
-  .btn.row .op-pill {
-    margin-left: auto; color: var(--pill-hue);
-    border-color: color-mix(in srgb, var(--pill-hue) 45%, var(--border));
-    background: color-mix(in srgb, var(--pill-hue) 14%, var(--bg));
-  }
+  /* A role pill in the VM's own band - its outline and text take the hue. */
+  .btn.row .op-pill { margin-left: auto; --c: var(--pill-hue); }
   .btn.row.vetoed { opacity: .45; cursor: not-allowed; }
   .btn.row.vetoed:hover { background: transparent; }
   .picker { position: relative; width: 100%; }
@@ -1548,7 +1567,7 @@
     text-align: left; cursor: pointer;
     background: var(--bg); color: var(--fg);
     border: 1px solid var(--input-border); border-radius: var(--radius);
-    padding: 7px 10px; min-height: 34px;
+    padding: 0 10px; height: 32px; /* the inputs' height - side by side they line up */
   }
   .picker-btn:hover { background: var(--bg-hover); }
   .picker.open .picker-btn {
@@ -1672,7 +1691,7 @@
     </div>
     <button class="btn ghost" type="button" onclick="openStateModal('save')"><img data-icon="save.svg" src="" alt=""> Save state</button>
     <button class="btn ghost" type="button" onclick="openStateModal('load')"><img data-icon="download.svg" src="" alt=""> Resume state</button>
-    <button class="btn primary" type="button" onclick="downloadConfig()"><img data-icon="export.svg" data-icon-on-accent="1" src="" alt=""> Download config.json</button>
+    <button class="btn primary" type="button" onclick="downloadConfig()"><img data-icon="export.svg" src="" alt=""> Download config.json</button>
   </div>
 </header>
 
@@ -1726,7 +1745,7 @@
     <div id="exportGateList" class="issue-list" style="max-height:280px;overflow:auto"></div>
     <div class="actions">
       <button class="btn" type="button" id="exportGateCancel">Close</button>
-      <button class="btn primary" type="button" id="exportGateConfirm"><img data-icon="export.svg" data-icon-on-accent="1" src="" alt=""> Download anyway</button>
+      <button class="btn primary" type="button" id="exportGateConfirm"><img data-icon="export.svg" src="" alt=""> Download anyway</button>
     </div>
   </div>
 </div>
@@ -1796,6 +1815,7 @@ const S = '<g fill="none" stroke="@S" stroke-width="1.2" stroke-linejoin="round"
 
 /* ---- icon definitions, keyed by file name: [band, markup] ---- */
 const DEFS = {
+  "extras.svg": ["deploy", '<g fill="none" stroke="@H" stroke-width="1.5" stroke-linejoin="round" stroke-linecap="round"><rect x="2" y="2" width="6" height="6" rx="1"/><rect x="10" y="2" width="6" height="6" rx="1"/><rect x="2" y="10" width="6" height="6" rx="1"/><path d="M13 10v6M10 13h6"/></g>'],
   "overview.svg": ["studio", '<g fill="@H"><rect x="1.8" y="1.8" width="6.6" height="6.6" rx="1"/><rect x="9.6" y="1.8" width="6.6" height="6.6" rx="1"/><rect x="1.8" y="9.6" width="6.6" height="6.6" rx="1"/><rect x="9.6" y="9.6" width="6.6" height="6.6" rx="1"/></g>'],
   "help.svg": ["studio", '<g fill="@H"><circle cx="9" cy="9" r="7.2"/></g>' + S + '<path d="M6.9 7a2.2 2.2 0 1 1 2.1 2.8v.9"/><path d="M9 13.2h.01" stroke-width="1.7"/></g>'],
   "language.svg": ["studio", '<g fill="@H"><circle cx="9" cy="9" r="7.2"/></g>' + S + '<path d="M1.9 9h14.2M9 1.9c3.4 3.8 3.4 10.4 0 14.2M9 1.9c-3.4 3.8-3.4 10.4 0 14.2"/></g>'],
@@ -1921,14 +1941,16 @@ const ICON_TEMPLATES = (() => {
    a host-blue server rack and only Export - the actual hand-off - keeps Deploy orange. */
 ICON_TEMPLATES["search.svg"].band = "studio";
 /* SSH: a bare terminal, full-bleed, nothing but the prompt - no title bar, so it is not
-   PowerShell's window at a glance. Big seams, because it mostly lives on an accent
-   button, knocked out (see tintIconKnockout). */
+   PowerShell's window at a glance. Big seams, so the prompt still reads at 14px on a
+   button. */
 ICON_TEMPLATES["ssh.svg"] = { band: "host", markup:
   '<g fill="@H"><rect x="1.6" y="2.2" width="14.8" height="13.6" rx="2"/></g>' +
   S.replace('stroke-width="1.2"', 'stroke-width="1.7"') + '<path d="M5 6.4l2.8 2.6L5 11.6M9.6 12.2h3.6"/></g>' };
 /* RDP: a screen with a second, smaller desktop inside it - the remote one. The general
    monitor glyph puts its screen high over a thin stand and sits visibly above a
    button's text; this one centres its weight on the 18-unit box, stand included. */
+ICON_TEMPLATES["app-stack.svg"] = { band: "host", markup:
+  '<g fill="@H"><rect x="6" y="1.4" width="10.4" height="10.4" rx="2.4" opacity=".55"/><rect x="3.8" y="3.6" width="10.4" height="10.4" rx="2.4" opacity=".8"/><rect x="1.6" y="5.8" width="10.4" height="10.4" rx="2.4"/></g>' };
 ICON_TEMPLATES["rdp.svg"] = { band: "host", markup:
   '<g fill="@H"><rect x="1.6" y="2.8" width="14.8" height="10.2" rx="1.4"/><rect x="5.4" y="13.8" width="7.2" height="1.8" rx=".9"/></g>' +
   S.replace('stroke-width="1.2"', 'stroke-width="1.5"') + '<rect x="4.6" y="5.6" width="8.8" height="4.6" rx=".6"/></g>' };
@@ -2029,32 +2051,6 @@ function tintIcon(name, theme) {
   return (_iconCache[key] = "data:image/svg+xml," + encodeURIComponent(svg));
 }
 
-/* For a glyph sitting ON the accent (e.g. the primary button): flatten it to the
-   accent's foreground so it reads as a single-colour mark. */
-function tintIconOnAccent(name, theme) {
-  const def = ICON_TEMPLATES[name] || ICON_TEMPLATES["vm.svg"];
-  const key = theme.id + "|onaccent|" + name;
-  if (_iconCache[key]) return _iconCache[key];
-  const svg = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 18 18">' +
-    def.markup.split("@H").join(theme.accentFg).split("@S").join(theme.accentFg)
-      .replace(/@B:[a-zA-Z]+/g, theme.accentFg) + "</svg>";
-  return (_iconCache[key] = "data:image/svg+xml," + encodeURIComponent(svg));
-}
-
-/* On an accent button, but with the seams cut back out in the accent itself. The plain
-   on-accent tint paints seams the same colour as the silhouette, which is right for a
-   solid mark like export and turns a glyph whose meaning IS its seams - a prompt, a
-   screen - into a blank tile. */
-function tintIconKnockout(name, theme) {
-  const def = ICON_TEMPLATES[name] || ICON_TEMPLATES["vm.svg"];
-  const key = theme.id + "|knockout|" + name;
-  if (_iconCache[key]) return _iconCache[key];
-  const svg = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 18 18">' +
-    def.markup.split("@H").join(theme.accentFg).split("@S").join(theme.accent)
-      .replace(/@B:[a-zA-Z]+/g, theme.accentFg) + "</svg>";
-  return (_iconCache[key] = "data:image/svg+xml," + encodeURIComponent(svg));
-}
-
 /* For a destructive control: the glyph carries the theme's danger hue instead of its
    band, seams still pulled toward the background so it reads as one mark at 16px. */
 function tintIconDanger(name, theme) {
@@ -2091,11 +2087,13 @@ function iconCacheSize() { return Object.keys(_iconCache).length; }
 function iconSrc(name) {
   return tintIcon(name, currentTheme());
 }
+/* The main buttons are no longer solid: their glyphs are the normal coloured ones. Kept as
+   names so the call sites read as "the glyph of a main button". */
 function iconSrcOnAccent(name) {
-  return tintIconOnAccent(name, currentTheme());
+  return iconSrc(name);
 }
 function iconSrcKnockout(name) {
-  return tintIconKnockout(name, currentTheme());
+  return iconSrc(name);
 }
 function iconSrcDanger(name) {
   return tintIconDanger(name, currentTheme());
@@ -2149,6 +2147,7 @@ const BLADES = [
   { id: "cluster",    group: "Clustering", label: "Failover Cluster",    icon: "virtual-clusters.svg", desc: "The host failover cluster — name it once, spread the VMs across your CSVs, pick which ones get added." },
   { id: "domainjoin", group: "Identity",   label: "Domain Join",         icon: "identity.svg", desc: "Join accounts defined once, then attached to VMs — one per tier or OU, with a target OU per machine." },
   { id: "azurearc",   group: "Identity",   label: "Azure Arc",           icon: "arc.svg",      desc: "Arc landing zones — subscription, tenant, resource group, region, credentials." },
+  { id: "licenses",   group: "Identity",   label: "Windows licenses",    icon: "key.svg",      desc: "Optional: a product key per Windows edition, installed and activated on the VMs attached to it." },
   { id: "review",     group: "Deploy",     label: "Review and validate", icon: "search.svg",   desc: "Every offline consistency check, plus the lab-wide summary: files, networks, identity, cluster." },
   { id: "vmoverview", group: "Deploy",     label: "VM overview",         icon: "vm-overview.svg", desc: "Every VM's FQDN, address, sign-in and connect commands, with the rest of its settings underneath." },
   { id: "passwords",  group: "Deploy",     label: "Passwords",           icon: "key.svg",     desc: "The local account passwords this studio generates, in one place — reveal, copy, regenerate." },
@@ -2952,6 +2951,7 @@ function imageRefusesSecureBoot(img) {
 /** Secure Boot as it will actually be built: the image gets a veto, the VM gets a say. */
 function effectiveSecureBoot(s) {
   if (imageRefusesSecureBoot(findImage(s && s.imageId))) return false;
+  if (hotpatchActive(s)) return true;
   return !!(s && s.enableSecureBoot);
 }
 
@@ -4840,6 +4840,7 @@ const state = {
   },
   domainJoinAccounts: [],
   azureArcPrincipals: [],
+  windowsLicenses: [],
   networks: [],
   servers: [],
   vhdSets: [],
@@ -5181,24 +5182,6 @@ function sanitizeDiskNamePart(name) {
    disk and the rest are just the second and third disk, so they are numbered. A
    Linux VM with a file called disk-web01-d.vhdx names a thing that does not exist
    anywhere inside it. */
-/* How wide the address column needs to be, in characters.
-
-   Fixed at 15ch it fits 255.255.255.255, which no lab ever uses - so every row carried
-   four or five columns of dead space between the badges and the address. Measuring the
-   list instead keeps the column exactly as wide as its widest member: the badges still
-   line up, the addresses still line up, and the gap is gone.
-
-   A floor of 9 stops a list of short addresses from squeezing the column narrower than
-   the "no IP" placeholder and the header need. */
-function ipColumnWidth(servers) {
-  let longest = 5;                                   // "no IP"
-  for (const s of (servers || [])) {
-    const ip = String((s && s.ipAddress) || "").trim();
-    if (ip.length > longest) longest = ip.length;
-  }
-  return Math.min(15, Math.max(9, longest));
-}
-
 function osDiskFileName(serverName, forLinux) {
   const n = sanitizeDiskNamePart(serverName) || "vm";
   return forLinux ? `disk-${n}-system.vhdx` : `disk-${n}-c.vhdx`;
@@ -5434,9 +5417,7 @@ function applyThemedChrome(theme) {
   const favicon = document.getElementById("favicon");
   if (favicon) favicon.href = tintIcon("mark.svg", theme);
   document.querySelectorAll("[data-icon]").forEach(el => {
-    el.src = el.hasAttribute("data-icon-on-accent")
-      ? tintIconOnAccent(el.getAttribute("data-icon"), theme)
-      : tintIcon(el.getAttribute("data-icon"), theme);
+    el.src = tintIcon(el.getAttribute("data-icon"), theme);
   });
 }
 
@@ -5456,7 +5437,7 @@ function renderThemeList() {
   document.getElementById("themeList").innerHTML = ordered.map(f => {
     const t = THEMES[f.id + "_" + themeModeTab];
     const selected = t.id === state.themeId;
-    const badge = f.id === THEME_DEFAULT ? '<span class="pill tag">Default</span>' : "";
+    const badge = f.id === THEME_DEFAULT ? '<span class="pill">Default</span>' : "";
     return `<button type="button" class="btn row ${selected ? "selected" : ""}" data-theme-id="${esc(t.id)}">
       <span class="radio"></span>
       ${themeSwatchHtml(t)}
@@ -5676,6 +5657,13 @@ function buildConfig() {
       // An empty custom pick exports nothing - removal that removes no apps is off.
     }
     if (supportsAppCompatFod(s) && s.appCompatFod) row.appCompatFod = true;
+    if (hotpatchActive(s)) row.hotpatchReady = true;
+    const wingetApps = wingetCapable(s) && s.wingetEnabled ? wingetList(s).filter(wingetIdOk) : [];
+    if (wingetApps.length) row.wingetApps = wingetApps;
+    // A licence travels only when it fits: right edition, a key that parses. Anything else
+    // would install a key the edition refuses, so the gold's own key stays.
+    const license = effectiveLicense(s);
+    if (license) row.windowsLicense = { licenseId: license.id };
     /* Linux. osFamily is the field Build-Vms.ps1 branches on - it is what tells the
        builder to render a cloud-init seed ISO instead of writing an unattend.xml into
        the disk, and to pick the third-party UEFI CA Secure Boot template. */
@@ -5774,8 +5762,18 @@ function buildConfig() {
     return row;
   });
 
+  // Only licences some VM actually uses - Build-Vms.ps1 resolves windowsLicense.licenseId
+  // against this list, the way it resolves domainJoin.accountId.
+  const usedLicenseIds = new Set(servers.map(r => r.windowsLicense && r.windowsLicense.licenseId).filter(Boolean));
+  const windowsLicenses = (state.windowsLicenses || []).filter(w => usedLicenseIds.has(w.id)).map(w => ({
+    id: w.id,
+    edition: w.edition,
+    productKey: String(w.productKey || "").trim().toUpperCase()
+  }));
+
   const cfg = { defaults, servers };
   if (domainJoinAccounts.length) cfg.domainJoinAccounts = domainJoinAccounts;
+  if (windowsLicenses.length) cfg.windowsLicenses = windowsLicenses;
   if (azureArcPrincipals.length) cfg.azureArcPrincipals = azureArcPrincipals;
   if (networks.length) cfg.networks = networks;
   if (vhdSets.length) cfg.vhdSets = vhdSets;
@@ -5900,6 +5898,11 @@ function applyConfigDocument(parsed, opts) {
       if (!state.azureArcPrincipals.some(x => x.id === a.id)) state.azureArcPrincipals.push(a);
     });
   }
+  const incomingLicenses = (Array.isArray(parsed && parsed.windowsLicenses) ? parsed.windowsLicenses : []).map(w => createWindowsLicense(w));
+  if (replace || !state.windowsLicenses.length) state.windowsLicenses = incomingLicenses;
+  else incomingLicenses.forEach(w => {
+    if (!state.windowsLicenses.some(x => x.id === w.id)) state.windowsLicenses.push(w);
+  });
   // Keep catalogs object linked to live arrays for normalizeServerIdentityRefs mutations
   catalogs.accounts = state.domainJoinAccounts;
   catalogs.principals = state.azureArcPrincipals;
@@ -6002,6 +6005,7 @@ function encodeState() {
     defaults: state.defaults,
     domainJoinAccounts: state.domainJoinAccounts.map(({ _id, ...rest }) => rest),
     azureArcPrincipals: state.azureArcPrincipals.map(({ _id, ...rest }) => rest),
+    windowsLicenses: state.windowsLicenses.map(({ _id, ...rest }) => rest),
     networks: (state.networks || []).map(({ _id, ...rest }) => rest),
     servers: state.servers.map(({ _id, ...rest }) => rest),
     vhdSets: state.vhdSets.map(({ _id, ...rest }) => rest)
@@ -6041,6 +6045,7 @@ function decodeState(text) {
   state.azureArcPrincipals = catalogs.principals;
   catalogs.accounts = state.domainJoinAccounts;
   catalogs.principals = state.azureArcPrincipals;
+  state.windowsLicenses = (parsed.windowsLicenses || []).map(w => createWindowsLicense(w));
   state.networks = (parsed.networks || []).map(net => ensureCatalogStableId(Object.assign(createNetwork(), net, { _id: uid("net") }), "net"));
   state.servers = (parsed.servers || []).map(s => {
     const n = createServer(s.name);
@@ -6407,7 +6412,7 @@ function addGroupChip(key, text) {
 }
 
 function trashIcon() {
-  return `<img class="glyph" src="${iconSrcDanger("trash.svg")}" width="16" height="16" alt="" aria-hidden="true">`;
+  return `<img class="glyph glyph-trash" src="${iconSrcDanger("trash.svg")}" width="16" height="16" alt="" aria-hidden="true">`;
 }
 function pencilIcon() {
   return `<svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M11.3 2.3l2.4 2.4M12.1 1.5a1.2 1.2 0 011.7 0l.7.7a1.2 1.2 0 010 1.7L5.6 12.8 2.5 13.5l.7-3.1z"/></svg>`;
@@ -6635,7 +6640,11 @@ function reviewErrorCount() {
 }
 
 function navBadge(id) {
-  if (id === "networks" && state.networks.length) return `<span class="nav-badge">${state.networks.length}</span>`;
+  if (id === "networks") {
+    // No vSwitch, no VM can be built - red even before any network exists.
+    if (!(state.defaults.availableSwitches || []).length) return `<span class="nav-badge err" title="No vSwitch defined - every VM needs one">${state.networks.length}</span>`;
+    if (state.networks.length) return `<span class="nav-badge">${state.networks.length}</span>`;
+  }
   if (id === "cluster") {
     const c = state.defaults.cluster || {};
     if (!c.enabled) return "";
@@ -6646,6 +6655,13 @@ function navBadge(id) {
   if (id === "azurearc" && state.azureArcPrincipals.length) return `<span class="nav-badge">${state.azureArcPrincipals.length}</span>`;
   if (id === "servers") return `<span class="nav-badge ${state.servers.length ? "ok" : ""}">${state.servers.length}</span>`;
   if (id === "vhdsets" && state.vhdSets.length) return `<span class="nav-badge">${state.vhdSets.length}</span>`;
+  if (id === "licenses" && state.windowsLicenses.length) {
+    // Licences are optional, so an unfinished one is no error - until VMs are attached to
+    // it and would silently keep the gold's key.
+    const bad = state.windowsLicenses.filter(w => serversForLicense(w).length && !productKeyOk(w.productKey)).length;
+    return bad ? `<span class="nav-badge err" title="${bad} licence(s) with VMs attached but no valid key">${state.windowsLicenses.length}</span>`
+      : `<span class="nav-badge">${state.windowsLicenses.length}</span>`;
+  }
   if (id === "review") {
     const errors = reviewErrorCount();
     return errors ? `<span class="nav-badge err">${errors}</span>` : `<span class="nav-badge ok">OK</span>`;
@@ -6689,7 +6705,7 @@ function overviewStep(num, icon, title, badge, bodyHtml) {
     <div class="step">
       <div class="step-rail"><div class="step-num">${num}</div></div>
       <div class="step-body">
-        <div class="step-title"><img src="${iconSrc(icon)}" alt="">${title}${badge ? ` <span class="pill tag">${badge}</span>` : ""}</div>
+        <div class="step-title"><img src="${iconSrc(icon)}" alt="">${title}${badge ? ` <span class="pill">${badge}</span>` : ""}</div>
         ${bodyHtml}
       </div>
     </div>`;
@@ -6716,15 +6732,15 @@ function renderOverview() {
     </div>
 
     <div class="chips">
-      <span class="pill">Virtual machines: ${state.servers.length}</span>
-      <span class="pill">Desktop: ${desktop}</span>
-      <span class="pill">Core: ${core}</span>
-      <span class="pill">Client: ${client}</span>
-      <span class="pill">Data disks: ${state.servers.reduce((n, s) => n + (s.additionalDisks || []).length, 0)}</span>
-      <span class="pill">VHD Sets: ${state.vhdSets.length}</span>
-      <span class="pill">Cluster: ${state.defaults.cluster.enabled ? (state.defaults.cluster.name || "on") : "off"}</span>
-      <span class="pill">Domain Join: ${state.domainJoinAccounts.length}</span>
-      <span class="pill">Azure Arc: ${state.azureArcPrincipals.length}</span>
+      <span class="pill">Virtual machines <b>${state.servers.length}</b></span>
+      <span class="pill">Desktop <b>${desktop}</b></span>
+      <span class="pill">Core <b>${core}</b></span>
+      <span class="pill">Client <b>${client}</b></span>
+      <span class="pill">Data disks <b>${state.servers.reduce((n, s) => n + (s.additionalDisks || []).length, 0)}</b></span>
+      <span class="pill">VHD Sets <b>${state.vhdSets.length}</b></span>
+      <span class="pill">Cluster <b>${state.defaults.cluster.enabled ? (state.defaults.cluster.name || "on") : "off"}</b></span>
+      <span class="pill">Domain Join <b>${state.domainJoinAccounts.length}</b></span>
+      <span class="pill">Azure Arc <b>${state.azureArcPrincipals.length}</b></span>
       <span class="pill status ${errors ? "off" : "on"}">${errors ? errors + " error(s)" : "No errors"}</span>
     </div>
 
@@ -6939,8 +6955,8 @@ function renderOverview() {
         <li><strong style="color:var(--fg)">Save state</strong> — copies the whole design out as a token you can paste anywhere.</li>
         <li><strong style="color:var(--fg)">Resume state</strong> — pastes that token back in and restores everything exactly.</li>
       </ul>
-      <div class="warn-box" style="margin:12px 0 0">Passwords, domain join credentials and Arc secrets sit in plain text inside
-      the state token and inside <code>config.json</code>. Protect or delete both once you are done.</div>
+      <div class="warn-box" style="margin:12px 0 0">${warnIconSvg()}<span>Passwords, domain join credentials and Arc secrets sit in plain text inside
+      the state token and inside <code>config.json</code>. Protect or delete both once you are done.</span></div>
     `, "", false)}`;
 }
 
@@ -7031,7 +7047,23 @@ function highlightShell(code) {
 function gs(key, defaultOpen) { return (state.expanded[key] === undefined ? !!defaultOpen : !!state.expanded[key]); }
 /* `badge` is trusted markup pinned to the right of the head — status pills belong there,
    never stacked under the title where they read as part of the description. */
+/* A head that holds buttons as well as badges gives the badges to the title: the right
+   side keeps the actions, so they line up card to card. A head with badges alone keeps
+   them where they are. */
+function splitHeadBadges(html) {
+  if (!html || !/class="[^"]*\bbtn\b/.test(html) || !/class="[^"]*\bpill\b/.test(html)) return ["", html || ""];
+  const t = document.createElement("template");
+  t.innerHTML = html;
+  const pills = [...t.content.querySelectorAll(".pill")].filter(p => !p.parentElement || !p.parentElement.closest(".btn, .pill"));
+  const moved = pills.map(p => p.outerHTML).join("");
+  pills.forEach(p => p.remove());
+  return [moved, t.innerHTML];
+}
+function titleBadges(html) { return html ? `<span class="title-badges">${html}</span>` : ""; }
+
 function gsCard(key, icon, title, meta, bodyHtml, iconAttrs, defaultOpen, badge) {
+  const [moved, rest] = splitHeadBadges(badge);
+  badge = rest.trim();
   return `
     <div class="card collapsible ${gs(key, defaultOpen) ? "" : "collapsed"}">
       <div class="card-head" data-toggle="${esc(key)}">
@@ -7039,7 +7071,7 @@ function gsCard(key, icon, title, meta, bodyHtml, iconAttrs, defaultOpen, badge)
           <span class="card-chevron">${chevron()}</span>
           <div class="card-icon"><img src="${String(icon).startsWith("data:") ? icon : iconSrc(icon)}" ${iconAttrs || ""}></div>
           <div>
-            <div class="card-title">${title}</div>
+            <div class="card-title">${title}${titleBadges(moved)}</div>
             ${meta ? `<div class="card-meta">${meta}</div>` : ""}
           </div>
         </div>
@@ -7181,6 +7213,56 @@ function renderGeneral() {
       }).join("")}`)}`;
 }
 
+/* What uses a switch: the networks on it and the VMs with any adapter on it. The first
+   switch in the list is the default - new VMs and networks start there. A switch in use
+   cannot be removed; its VMs are moved to another switch first, so nothing is left
+   pointing at a switch that no longer exists. */
+function switchUsage(sw) {
+  const key = String(sw || "").toLowerCase();
+  const on = name => String(name || "").toLowerCase() === key;
+  return {
+    networks: (state.networks || []).filter(n => on(n.switchName)),
+    vms: state.servers.filter(s => on(s.switchName) || (s.nics || []).some(nic => on(nic.switchName)))
+  };
+}
+function switchUsageText(u) {
+  const parts = [];
+  if (u.networks.length) parts.push(`${u.networks.length} network${u.networks.length === 1 ? "" : "s"}`);
+  if (u.vms.length) parts.push(`${u.vms.length} VM${u.vms.length === 1 ? "" : "s"}`);
+  return parts.join(" and ");
+}
+function switchCardMeta(switches) {
+  if (!switches.length) return "none added yet";
+  const vms = state.servers.filter(s => switches.some(sw => switchUsage(sw).vms.includes(s))).length;
+  const nets = (state.networks || []).filter(n => String(n.switchName || "").trim()).length;
+  const used = [vms ? `${vms} VM${vms === 1 ? "" : "s"}` : "", nets ? `${nets} network${nets === 1 ? "" : "s"}` : ""].filter(Boolean).join(", ");
+  return `${switches.length} switch${switches.length === 1 ? "" : "es"}${used ? " · " + used : ""}`;
+}
+function renderSwitchRow(sw, i) {
+  const u = switchUsage(sw);
+  const inUse = u.networks.length || u.vms.length;
+  const usage = inUse
+    ? u.networks.map(n => `<span class="pill" title="Network ${esc(networkName(n))}"><img src="${iconSrc("vnet.svg")}" alt=""><span>${esc(networkName(n))} <span class="cidr">${esc(networkCidr(n))}</span></span></span>`).join("") +
+      (u.vms.length ? `<span class="pill" title="${esc(u.vms.map(serverDisplayName).join(", "))}"><img src="${iconSrcBand("vm.svg", "work")}" alt=""><span><b>${u.vms.length}</b> VM${u.vms.length === 1 ? "" : "s"}</span></span>` : "")
+    : `<span class="pill status none">Unused</span>`;
+  const why = inUse ? `In use by ${switchUsageText(u)} - move them to another switch first` : `Remove vSwitch ${sw}`;
+  return `
+    <div class="sw-row">
+      <div class="sw-name"><img src="${iconSrc("vlan.svg")}" alt=""><span class="sam">${esc(sw)}</span>${i === 0
+        ? `<span class="pill status info" title="New VMs and networks start on this switch">Default</span>` : ""}</div>
+      <div class="sw-use">${usage}</div>
+      <div class="sw-act">
+        ${i === 0 ? "" : `<button class="btn sm ghost sw-mk" type="button" data-sw-default="${i}">Make default</button>`}
+        <button class="btn icon danger-text" type="button" title="${esc(why)}" aria-label="${esc(why)}" data-sw-del="${i}"${inUse ? " disabled" : ""}>${trashIcon()}</button>
+      </div>
+    </div>`;
+}
+/* Hyper-V switch names ignore case, so "vswitch-VMS" is a switch already in the list. */
+function existingSwitchName(name) {
+  const key = String(name || "").trim().toLowerCase();
+  return key ? (state.defaults.availableSwitches || []).find(sw => String(sw).toLowerCase() === key) || "" : "";
+}
+
 function renderNetworksBlade() {
   const switches = state.defaults.availableSwitches || [];
   return `
@@ -7191,26 +7273,22 @@ function renderNetworksBlade() {
       </div>` : ""}
     </div>
 
-    ${gsCard("gs-switches", "vlan.svg", "Available vSwitches",
-      switches.length ? `${switches.length} switch${switches.length === 1 ? "" : "es"}` : "none added yet", `
-      <p class="hint" style="margin-bottom:10px">Names are fixed once added (match Hyper-V Manager exactly). Add or remove switches — networks and VMs pick from this list.</p>
+    ${gsCard("gs-switches", "vlan.svg", "Available vSwitches", switchCardMeta(switches), `
+      <p class="hint" style="margin-bottom:10px">Exactly as Hyper-V Manager names them. New VMs and networks start on the default switch.</p>
       ${switches.length ? "" : `<div class="req-box">
         ${SVG_ALERT}
-        <div><strong>Add at least one vSwitch.</strong> Nothing can be provisioned without one — every VM has to attach to a
-        switch that already exists in Hyper-V Manager. Type the name exactly as it appears there.</div>
+        <div><strong>Add at least one vSwitch.</strong> Every VM attaches to a switch that already exists in Hyper-V Manager -
+        type its name exactly as it appears there. The first one becomes the default.</div>
       </div>`}
-      <div id="switchList">
-        ${switches.map((sw, i) => `
-          <div class="pill removable input">
-            <img src="${iconSrc("vlan.svg")}" alt="">
-            <input value="${esc(sw)}" readonly tabindex="-1" aria-label="vSwitch ${esc(sw)}">
-            <button class="btn icon danger-text" type="button" title="Remove vSwitch ${esc(sw)}" aria-label="Remove vSwitch ${esc(sw)}" data-sw-del="${i}">${trashIcon()}</button>
-          </div>`).join("")}
-        <div class="pill removable input">
-          <img src="${iconSrc("vlan.svg")}" alt="">
-          <input id="newSwitchName" value="" placeholder="vExternal" autocomplete="off" aria-label="New vSwitch name" class="${switches.length ? "" : "is-invalid"}">
-          <button class="btn" type="button" id="addSwitch">Add</button>
+      <div class="sw-grid">
+        ${switches.length ? `<div class="sw-head"><div>vSwitch</div><div>Used by</div><div></div></div>` : ""}
+        ${switches.map((sw, i) => renderSwitchRow(sw, i)).join("")}
+        <div class="sw-add">
+          <input id="newSwitchName" value="" placeholder="${switches.length ? "Name of another vSwitch, e.g. vExternal" : "vExternal"}" autocomplete="off" spellcheck="false"
+            aria-label="New vSwitch name" class="${switches.length ? "" : "is-invalid"}" style="background-image:url('${iconSrc("vlan.svg")}')">
+          <button class="btn sm add" type="button" id="addSwitch">${plusIcon()} Add vSwitch</button>
         </div>
+        <div class="sw-err" id="switchDupe" hidden></div>
       </div>`, "", true,
       switches.length ? "" : `<span class="pill status off">Required</span>`)}
 
@@ -7635,6 +7713,89 @@ function renderServerRolesSection(s) {
 
 function renderServerArcSection(s) { return ""; }
 
+/* Extras: what a VM can be made ready for at first boot. Hotpatch - Windows Server 2025
+   only - needs VBS running and Secure Boot on (Microsoft's prerequisites for a Hyper-V
+   VM: Gen 2, UEFI, Secure Boot). GuestProvision turns VBS on; it runs from the next
+   restart. Hotpatch itself is switched on for the VM in Azure Arc. */
+function hotpatchCapable(s) {
+  return !isLinuxServer(s) && s.imageSource !== "custom" && String(s.imageId || "").startsWith("ws2025-");
+}
+function hotpatchActive(s) { return !!s && hotpatchCapable(s) && !!s.hotpatchReady; }
+function renderServerOptionalSection(s) {
+  if (!hotpatchCapable(s)) return "";
+  const open = isNestedOpen(s._id + "-optional", false);
+  const on = !!s.hotpatchReady;
+  const azureEdition = /^ws2025-datacenter-az-/.test(String(s.imageId || ""));
+  const arcNote = !on ? "" : azureEdition
+    ? "Datacenter: Azure Edition has Hotpatch on by default - no Arc needed."
+    : effectiveAzureArcPrincipal(s) ? "" : "Standard and Datacenter get Hotpatch through Azure Arc, and this VM is not onboarded - attach it on the Azure Arc blade, or switch Hotpatch on after onboarding it some other way.";
+  return `<div class="section collapsible ${open ? "" : "collapsed"}">
+    <div class="section-head" data-nested="${esc(s._id)}-optional">
+      <span class="section-chevron">${chevron()}</span><img src="${iconSrc("extras.svg")}" alt=""> Extras
+      <span class="section-meta">${on ? "Hotpatch ready" : "none"}</span>
+    </div>
+    <div class="section-body">
+      <div class="toggle-grid" style="margin-top:12px">
+        ${toggle(`data-s="${esc(s._id)}" data-k="hotpatchReady"`, `Hotpatch ready${infoTip("Hotpatch ready", "Windows Server 2025: VBS is turned on at first boot and runs from the next restart - restart the VM once (a deferred domain join does that for you). Secure Boot is required, so it stays on. Hotpatch itself is switched on for the VM in Azure Arc.")}`, on)}
+      </div>
+      ${arcNote ? `<p class="hint" style="margin-top:8px">${arcNote}</p>` : ""}
+    </div>
+  </div>`;
+}
+
+/* Applications from WinGet, installed at first boot by GuestProvision as SYSTEM,
+   machine-wide, the newest version. The studio has no server to ask WinGet's catalog, so
+   an app is its exact WinGet ID, typed in. Windows 11 and Server 2025 with Desktop
+   Experience ship WinGet; Core and older servers do not. */
+function wingetCapable(s) {
+  if (isLinuxServer(s) || s.imageSource === "custom") return false;
+  const img = findImage(s.imageId);
+  return img.kind === "client" || (String(img.id).startsWith("ws2025-") && img.kind === "desktop");
+}
+function wingetRows(s) { return Array.isArray(s.wingetApps) ? s.wingetApps.map(x => String(x || "")) : []; }
+/* Publisher.Package, as WinGet writes it: 7zip.7zip, Microsoft.PowerShell, Notepad++.Notepad++. */
+function wingetIdOk(id) { return /^[A-Za-z0-9][A-Za-z0-9_+-]*(\.[A-Za-z0-9_+-]+)+$/.test(String(id || "").trim()); }
+function wingetList(s) {
+  const seen = new Set();
+  return wingetRows(s).map(x => x.trim()).filter(x => {
+    const key = x.toLowerCase();
+    if (!x || seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+function renderServerWingetSection(s) {
+  // Like Extras: an image without WinGet gets no section at all.
+  if (!wingetCapable(s)) return "";
+  const open = isNestedOpen(s._id + "-winget", false);
+  const head = meta => `<div class="section-head" data-nested="${esc(s._id)}-winget">
+      <span class="section-chevron">${chevron()}</span><img src="${iconSrcBand("app-stack.svg", "deploy")}" alt=""> Applications (WinGet)
+      <span class="section-meta">${meta}</span></div>`;
+  const on = !!s.wingetEnabled;
+  const rows = wingetRows(s);
+  const count = wingetList(s).filter(wingetIdOk).length;
+  return `<div class="section collapsible ${open ? "" : "collapsed"}">
+    ${head(on ? `${count} at first boot` : "off")}
+    <div class="section-body">
+      <div class="warn-box" style="margin-top:12px">${warnIconSvg()}<span>Installed at first boot from the internet: the VM needs a way out to Microsoft's WinGet catalog and the vendors' download servers. An app that only installs per user, or whose installer asks questions, can fail - the VM still comes up, the failure is in its log.</span></div>
+      <div class="toggle-grid" style="grid-template-columns:1fr">${toggle(`data-s="${esc(s._id)}" data-k="wingetEnabled"`, "Install applications from WinGet", on)}</div>
+      ${on ? `
+      <p class="hint" style="margin-top:12px">One WinGet ID per row, exactly as WinGet writes it - <code>7zip.7zip</code>, <code>Microsoft.PowerShell</code>. <code>winget search &lt;name&gt;</code> on any Windows PC shows it in the Id column. Always the newest version, machine-wide.</p>
+      <div class="dns-list" style="display:flex; flex-direction:column; gap:6px; margin-top:12px">
+        ${(rows.length ? rows : [""]).map((id, i) => {
+          const bad = !!id.trim() && !wingetIdOk(id);
+          return `
+        <div class="list-row">
+          <input class="mono${bad ? " is-invalid" : ""}" data-s="${esc(s._id)}" data-wg-i="${i}" value="${esc(id)}" placeholder="7zip.7zip" spellcheck="false" autocomplete="off" aria-label="WinGet ID" style="background-image:url('${iconSrc("app-stack.svg")}')">
+          ${rows.length > 1 ? `<button class="btn icon danger-text" type="button" title="Remove application" aria-label="Remove application" data-wg-del="${esc(s._id)}" data-wg-del-i="${i}">${trashIcon()}</button>` : ""}
+        </div>`;
+        }).join("")}
+        <button class="btn" type="button" data-wg-add="${esc(s._id)}" style="align-self:flex-start;margin-top:4px"><img src="${iconSrc("app-stack.svg")}" alt=""> Add application</button>
+      </div>` : ""}
+    </div>
+  </div>`;
+}
+
 function renderServerAppsSection(s) {
   if (isLinuxServer(s)) return "";
   if (!supportsAppRemoval(s.imageId)) return "";
@@ -7980,25 +8141,25 @@ function renderServerCard(s) {
   const adminOnlyLocked = !supportsBuiltInAdminOnly(s);
   const djBadge = djAccount ? `<span class="pill status on" title="Domain Join · ${esc(domainJoinAccountTitle(djAccount))}"><img src="${iconSrc("identity.svg")}" alt="">Domain</span>` : "";
   const arcBadge = arcPrincipal ? `<span class="pill status on" title="Azure Arc · ${esc(azureArcPrincipalTitle(arcPrincipal))}"><img src="${iconSrc("arc.svg")}" alt="">Arc</span>` : "";
+  const lic = effectiveLicense(s);
+  const licBadge = lic ? `<span class="pill status on" title="Windows license · ${esc(licenseTitle(lic.edition))} - installed and activated at first boot"><img src="${iconSrc("key.svg")}" alt="">Licensed</span>` : "";
   const clusterOn = clusterIncludesServer(s);
   /* "HA", not "Clustered": it is what the VM gains, it is Microsoft's own wording for a
      clustered role, and it fits the fixed badge width that "Clustered" was straining. */
   const clusterBadge = clusterOn ? `<span class="pill status on" title="Highly available — clustered role on ${esc(state.defaults.cluster.name || "the host's own cluster")}"><img src="${iconSrc("virtual-clusters.svg")}" alt="">HA</span>` : "";
   return `
-  <article class="card collapsible ${open ? "" : "collapsed"}" data-sid="${esc(s._id)}">
+  <article class="card collapsible vm-card ${open ? "" : "collapsed"}" data-sid="${esc(s._id)}">
     <div class="card-head" data-toggle="${esc(s._id)}">
       <div class="card-lead">
         <span class="card-chevron">${chevron()}</span>
         <div class="card-icon"><img src="${iconSrcBand("vm.svg", serverGlyphBand(s))}"></div>
         <div>
-          <div class="card-title" data-name-title="${esc(s._id)}">${esc(hyperVName)}</div>
+          <div class="card-title"><span data-name-title="${esc(s._id)}">${esc(hyperVName)}</span>${titleBadges(`${djBadge}${arcBadge}${licBadge}${clusterBadge}<span class="pill role ${pillClass}">${esc(img.kind)}</span>`)}</div>
           <div class="card-meta"><span data-name-guest="${esc(s._id)}">${hyperVName !== shortName ? "guest " + esc(shortName) + " · " : ""}</span>${esc(displayImageLabel)} · ${esc(s.memoryGB)} GB / ${esc(s.cpuCount)} CPU · ${esc(s.switchName || "no switch")}${s.vlanId != null ? " · VLAN " + esc(s.vlanId) : ""}${disks.length ? " · " + disks.length + " data disk(s)" : ""}<span data-name-folder="${esc(s._id)}">${folderName !== hyperVName ? " · folder " + esc(folderName) + "\\" : ""}</span></div>
         </div>
       </div>
       <div class="card-actions">
-        ${djBadge}${arcBadge}${clusterBadge}
-        <span class="pill role ${pillClass}">${esc(img.kind)}</span>
-        <span class="card-ip${String(s.ipAddress || "").trim() ? "" : " is-none"}" style="--ip-col:${ipColumnWidth(state.servers)}ch">${esc(s.ipAddress || "no IP")}</span>
+        <span class="card-ip${String(s.ipAddress || "").trim() ? "" : " is-none"}">${esc(s.ipAddress || "no IP")}</span>
         ${psObjectButton("vm", s._id)}
         <button class="btn icon danger-text" type="button" title="Remove VM" aria-label="Remove VM" data-del="${esc(s._id)}">${trashIcon()}</button>
       </div>
@@ -8364,6 +8525,8 @@ function renderServerCard(s) {
         </div>
       </div>`}
 
+      ${renderServerWingetSection(s)}
+      ${renderServerOptionalSection(s)}
       ${renderServerRolesSection(s)}
       ${renderServerAppsSection(s)}
 
@@ -8408,6 +8571,8 @@ function renderServerCard(s) {
             ${toggleWithWarn(`data-s="${esc(s._id)}" data-k="useDifferencingDisk"`, "Differencing disk", s.useDifferencingDisk, DIFF_DISK_TIP)}
             ${imageRefusesSecureBoot(img)
               ? toggle(`data-s="${esc(s._id)}" data-k="enableSecureBoot"`, "Secure Boot", false, true, "not possible on this image")
+              : hotpatchActive(s)
+              ? toggle(`data-s="${esc(s._id)}" data-k="enableSecureBoot"`, "Secure Boot", true, true, "required by Hotpatch ready")
               : toggle(`data-s="${esc(s._id)}" data-k="enableSecureBoot"`, "Secure Boot", s.enableSecureBoot)}
             ${isLinux ? "" : toggle(`data-s="${esc(s._id)}" data-k="enableVtpm"`, "vTPM (Win11)", s.enableVtpm)}
             ${toggle(`data-s="${esc(s._id)}" data-k="startAfterCreate"`, "Start after create", s.startAfterCreate)}
@@ -8487,6 +8652,154 @@ function renderServers() {
     </div>`;
 }
 
+
+/* Windows licenses, optional: one product key per edition. Every VM attached to it that
+   builds from one of that edition's images - Core and Desktop alike - gets it at first boot
+   (SetupComplete.cmd: slmgr /ipk, then /ato) instead of the gold's own key - the AVMA key
+   New-Vhdx bakes into a server gold so Setup never stops at the product key screen. Bound to the
+   edition, not a gold - a rebake keeps the key. */
+function createWindowsLicense(partial) {
+  const w = Object.assign({ id: "", edition: "", productKey: "" }, partial || {}, { _id: uid("wl") });
+  return ensureCatalogStableId(w, "wl");
+}
+/* The edition an image belongs to: its id without Core or Desktop - ws2025-datacenter,
+   ws2025-datacenter-az, w11-enterprise. */
+function licenseEditionOf(imageId) { return normalizeImageId(imageId).replace(/-(core|desktop)$/, ""); }
+/* Windows images a key can activate. Azure Local is licensed through its Azure
+   registration, multi-session through Azure Virtual Desktop and Datacenter: Azure Edition
+   is an Azure SKU (AVMA on the host) - none takes a product key - and Linux has nothing
+   to activate. */
+function imageTakesLicense(img) {
+  return !isLinuxImage(img) && !img.noServerRoles && img.id !== "w11-enterprise-ms" && !/^ws\d{4}-datacenter-az-/.test(img.id);
+}
+function licenseImages(edition) { return IMAGE_CATALOG.filter(img => imageTakesLicense(img) && licenseEditionOf(img.id) === edition); }
+function licenseTitle(edition) {
+  const img = licenseImages(edition)[0];
+  return img ? img.label.replace(/\s+(Desktop|Core)(?=:|$)/, "") : edition;
+}
+/* A custom gold has no edition the studio knows, so no licence fits it. */
+function licenseFits(w, server) {
+  return !!w.edition && !!server && server.imageSource !== "custom" && licenseEditionOf(server.imageId || "") === w.edition;
+}
+/* The VMs a licence is attached to - picked like Domain Join's, one licence per VM. */
+function serversForLicense(w) {
+  return state.servers.filter(s => s.windowsLicense && s.windowsLicense.licenseId === w.id);
+}
+function detachLicense(s) { s.windowsLicense = { licenseId: "" }; }
+/* The licence a VM really gets: attached, of its edition, with a key that parses - what
+   the card's Licensed badge shows and what the export writes. */
+function effectiveLicense(s) {
+  const lid = s && s.windowsLicense && s.windowsLicense.licenseId;
+  if (!lid) return null;
+  const w = (state.windowsLicenses || []).find(x => x.id === lid);
+  return w && licenseFits(w, s) && productKeyOk(w.productKey) ? w : null;
+}
+function productKeyOk(k) { return /^[A-Za-z0-9]{5}(-[A-Za-z0-9]{5}){4}$/.test(String(k || "").trim()); }
+/* One row per Windows edition in the catalog, grouped like the VM card's image picker:
+   servers first, newest release on top. The meta line counts the VMs designed on it. */
+function licenseEditionGroups() {
+  const editions = [...new Set(IMAGE_CATALOG.filter(imageTakesLicense).map(img => licenseEditionOf(img.id)))];
+  const groups = [];
+  editions.map(ed => {
+    const imgs = licenseImages(ed);
+    return { edition: ed, img: imgs[0], vms: state.servers.filter(s => s.imageSource !== "custom" && licenseEditionOf(s.imageId || "") === ed).length,
+      kinds: [...new Set(imgs.map(i => i.kind))].sort((a, b) => ["core", "desktop", "client"].indexOf(a) - ["core", "desktop", "client"].indexOf(b)) };
+  }).sort((a, b) => (a.img.kind === "client") - (b.img.kind === "client") || String(imageReleaseLabel(b.img)).localeCompare(String(imageReleaseLabel(a.img))) || licenseTitle(a.edition).localeCompare(licenseTitle(b.edition))).forEach(row => {
+    const rel = imageReleaseLabel(row.img), label = /^\d{4}$/.test(rel) ? "Windows Server " + rel : rel;
+    let grp = groups.find(x => x.label === label);
+    if (!grp) groups.push(grp = { label, rows: [] });
+    grp.rows.push(row);
+  });
+  return groups;
+}
+const KIND_PILL = { core: "Core", desktop: "Desktop", client: "Client" };
+function kindPills(kinds) { return kinds.map(k => `<span class="pill role ${k}">${KIND_PILL[k] || esc(k)}</span>`).join(""); }
+function renderLicensesBlade() {
+  const list = state.windowsLicenses || [];
+  const addBtn = `<button class="btn primary" type="button" id="addWindowsLicense"><img src="${iconSrcOnAccent("key.svg")}"> Add licence</button>`;
+  return `
+    <div class="blade-toolbar">
+      <div class="page-title"><img src="${iconSrc("key.svg")}"> Windows licenses</div>
+      ${list.length ? `<div class="row">${addBtn}</div>` : ""}
+    </div>
+    <div class="card-stack">
+      ${list.map(w => {
+        const open = state.expanded[w._id] !== false;
+        const img = w.edition ? (licenseImages(w.edition)[0] || null) : null;
+        const vms = serversForLicense(w);
+        const keyUnlocked = !!state.nameEdit[`wlkey:${w._id}`];
+        // Hidden like a password; editing shows it - nobody types into a row of dots.
+        const keyShown = keyUnlocked || !!passwordsVisible["wlkey:" + w._id];
+        const keyBad = !!w.productKey && !productKeyOk(w.productKey);
+        return `
+        <article class="card collapsible ${open ? "" : "collapsed"}" data-wl-card="${esc(w._id)}">
+          <div class="card-head" data-toggle="${esc(w._id)}">
+            <div class="card-lead">
+              <span class="card-chevron">${chevron()}</span>
+              <div class="card-icon"><img src="${img ? imageIconSrc(img) : iconSrc("key.svg")}"></div>
+              <div>
+                <div class="card-title">${w.edition ? esc(licenseTitle(w.edition)) : "Pick an edition"}</div>
+                <div class="card-meta">${w.productKey ? (productKeyOk(w.productKey) ? "key set" : "key not valid") : "no key"} · ${vms.length} VM(s) attached</div>
+              </div>
+            </div>
+            <div class="card-actions">
+              <button class="btn icon danger-text" type="button" title="Remove licence" aria-label="Remove licence" data-del-wl="${esc(w._id)}">${trashIcon()}</button>
+            </div>
+          </div>
+          <div class="card-body">
+            <div class="grid-2">
+              ${field(`<span class="field-label">Edition ${infoTip("Edition", "A key activates one edition, so it goes to every image of it - Core and Desktop - and keeps going after a rebake: a newer build, another language.")}</span>`, (() => {
+                const groups = licenseEditionGroups(), open = state.imagePickerOpen === "wl:" + w._id;
+                const cur = groups.flatMap(g => g.rows).find(r => r.edition === w.edition);
+                return `<div class="picker ${open ? "open" : ""}">
+                <button type="button" class="picker-btn" data-image-picker-toggle="wl:${esc(w._id)}" aria-expanded="${open ? "true" : "false"}">
+                  <img src="${cur ? imageIconSrc(cur.img) : iconSrc("key.svg")}" alt="">
+                  <span class="picker-label">${w.edition ? esc(licenseTitle(w.edition)) : "Pick an edition"}</span>
+                  ${cur ? kindPills(cur.kinds) : ""}
+                  <span class="picker-chevron">${chevron()}</span>
+                </button>
+                ${open ? `<div class="picker-list" role="listbox">${groups.map(g => `
+                  <div class="opt-group" role="presentation">${esc(g.label)}</div>
+                  ${g.rows.map(row => `<button type="button" role="option" aria-selected="${row.edition === w.edition}" class="${row.edition === w.edition ? "selected" : ""}" data-wl-edition="${esc(w._id)}" data-edition="${esc(row.edition)}">
+                    <img src="${imageIconSrc(row.img)}" alt="">
+                    <span class="opt-body"><span class="opt-label">${esc(licenseTitle(row.edition))}</span>
+                      <span class="opt-meta">${row.vms ? `${row.vms} VM(s) designed on it` : "no VM designed on it yet"}</span></span>
+                    ${kindPills(row.kinds)}
+                  </button>`).join("")}`).join("")}
+                </div>` : ""}
+              </div>`;
+              })())}
+              ${field(`<span class="field-label">Product key ${infoTip("Product key", "Installed over the gold's own key on every attached VM, then activated online at first boot (slmgr /ipk, then /ato). A failed activation is logged in C:\\ProgramData\\VmDeployLogs\\Activation.log and does not hold the VM up. MAK, retail or a KMS host key - the key must match the image's edition.")}</span>`,
+                `<div class="edit-field">
+                <input type="${keyShown ? "text" : "password"}" class="mono keep-border key-input${keyBad ? " is-invalid" : ""}" data-wl="${esc(w._id)}" data-wk="productKey" data-name-input="wlkey:${esc(w._id)}" value="${esc(w.productKey || "")}" placeholder="XXXXX-XXXXX-XXXXX-XXXXX-XXXXX" spellcheck="false" autocomplete="off" maxlength="29"${keyUnlocked ? "" : " readonly"}>
+                <button class="btn icon" type="button" data-pw-toggle="wlkey:${esc(w._id)}"${keyUnlocked || !w.productKey ? " disabled" : ""}
+                  title="${keyUnlocked ? "Visible while editing" : keyShown ? "Hide" : "Reveal"}" aria-label="${keyShown ? "Hide" : "Reveal"} product key">${keyShown ? eyeOffIcon() : eyeIcon()}</button>
+                <button class="btn icon" type="button" data-name-edit="wlkey:${esc(w._id)}"
+                  title="${keyUnlocked ? "Done" : "Edit the key"}" aria-label="${keyUnlocked ? "Done" : "Edit the key"}">${keyUnlocked ? checkIcon() : pencilIcon()}</button>
+              </div>`)}
+            </div>
+            <div class="section-head" style="margin:14px 0 6px">Attach virtual machines</div>
+            <button type="button" class="btn field" data-open-wl-picker="${esc(w._id)}"${w.edition ? "" : " disabled title=\"Pick the edition first\""}>
+              <img src="${iconSrc("vm.svg")}"> Choose virtual machines…
+            </button>
+            ${vms.length ? `
+            <div class="cl-grid attach" style="margin-top:10px">
+              <div class="cl-grid-head"><div>Virtual machine</div><div>Image</div><div></div><div></div></div>
+              ${vms.map(s => {
+                const fits = licenseFits(w, s);
+                const label = s.imageSource === "custom" ? "custom gold" : findImage(s.imageId).label;
+                return `<div class="cl-row">${vmGridCell(s)}
+                <div>${fits ? `<span class="hint">${esc(label)}</span>` : `<span class="pill status warn" title="Builds from ${esc(label)} - this key is not used">Other image</span>`}</div><div></div>
+                <div class="cl-detach"><button class="btn icon danger-text" type="button" title="Detach ${esc(serverDisplayName(s))}" aria-label="Detach ${esc(serverDisplayName(s))}" data-wl-detach="${esc(s._id)}">${trashIcon()}</button></div>
+              </div>`;
+              }).join("")}
+            </div>` : `<p class="hint" style="margin:10px 0 0">No VMs attached - this key goes nowhere.</p>`}
+          </div>
+        </article>`;
+      }).join("") || `<div class="empty-state"><div class="ue-icon"><img src="${iconSrc("key.svg")}"></div><h3>No Windows licences</h3><p>Optional. Without one, server VMs keep the AVMA key baked into their gold and clients keep the generic one. Add a product key for an edition and the VMs you attach get it at first boot.</p>
+        <div class="ue-actions">${addBtn}</div></div>`}
+    </div>`;
+}
 
 function renderDomainJoinBlade() {
   const allOn = !!state.defaults.domainJoinAllVms;
@@ -9332,6 +9645,11 @@ function validate() {
     const label = serverDisplayName(s);
     const img = findImage(s.imageId);
 
+    if (wingetCapable(s) && s.wingetEnabled) {
+      wingetList(s).filter(id => !wingetIdOk(id)).forEach(id =>
+        err(`"${id}" is not a WinGet ID - it is Publisher.Package, like 7zip.7zip.`, `Virtual machines › ${label} › Applications (WinGet)`));
+    }
+
     if (!name) {
       err("A VM has no name.", "Virtual machines", `s:${s._id}:name`);
     } else {
@@ -9623,11 +9941,11 @@ function renderReview() {
       <span class="pill status ${errors.length ? "off" : "on"}">${errors.length} error(s)</span>
       <span class="pill status ${warnings.length ? "warn" : "on"}">${warnings.length} warning(s)</span>
       ${notes.length ? `<span class="pill">${notes.length} note(s)</span>` : ""}
-      <span class="pill">Virtual machines: ${state.servers.length}</span>
-      <span class="pill">Total vCPU: ${totalCpu}</span>
-      <span class="pill">Total memory: ${totalMem} GB</span>
-      <span class="pill">Data disks: ${dataGb} GB</span>
-      <span class="pill">VHD Sets: ${setGb} GB</span>
+      <span class="pill">Virtual machines <b>${state.servers.length}</b></span>
+      <span class="pill">Total vCPU <b>${totalCpu}</b></span>
+      <span class="pill">Total memory <b>${totalMem} GB</b></span>
+      <span class="pill">Data disks <b>${dataGb} GB</b></span>
+      <span class="pill">VHD Sets <b>${setGb} GB</b></span>
     </div>
 
     ${gsCard("rev-issues", "search.svg", "Validation", issues.length ? `${issues.length} finding(s)` : "No findings", `
@@ -9716,6 +10034,37 @@ function renderReview() {
 /* Per-row reveal state, keyed by VM id. Deliberately not persisted or exported —
    a reload, or a restored state token, comes back fully masked. */
 const passwordsVisible = Object.create(null);
+
+/* The password export: one row per VM - what you need to sign in to it, in the order you
+   type it. Windows takes the account as <vm>\<user>, Linux an ssh command. The address is
+   the static one; a DHCP VM leaves it blank and its ssh command falls back to the name.
+   UTF-8 with a BOM so Excel reads umlauts; RFC 4180 quoting, so a comma or quote in a
+   password survives. */
+function passwordExportRows() {
+  return state.servers.map(s => {
+    const linux = isLinuxServer(s);
+    const name = serverDisplayName(s);
+    const user = isBuiltInAdminOnly(s) ? "Administrator" : (String(s.localUserName || "").trim());
+    const ip = String(s.ipAddress || "").trim();
+    return {
+      VM: name,
+      OS: linux ? "Linux" : "Windows",
+      Address: ip,
+      User: linux ? user : (user ? `${name}\\${user}` : ""),
+      Password: s.localUserPassword || "",
+      SSH: linux && user ? `ssh ${user}@${ip || name}` : "",
+    };
+  });
+}
+function exportPasswordsCsv() {
+  const rows = passwordExportRows();
+  if (!rows.length) return 0;
+  const cols = ["VM", "OS", "Address", "User", "Password", "SSH"];
+  const cell = v => /[",\r\n]/.test(String(v)) ? `"${String(v).replace(/"/g, '""')}"` : String(v);
+  const csv = "\ufeff" + [cols.join(","), ...rows.map(r => cols.map(c => cell(r[c])).join(","))].join("\r\n") + "\r\n";
+  downloadTextFile("vm-passwords.csv", csv, "text/csv;charset=utf-8");
+  return rows.length;
+}
 
 function credentialRows() {
   return state.servers.map(s => {
@@ -9817,6 +10166,7 @@ function renderPasswords() {
     <div class="blade-toolbar">
       <div class="page-title"><img src="${iconSrc("key.svg")}"> Passwords</div>
       <div class="row">
+        <button class="btn" type="button" id="pwExport"${rows.length ? "" : " disabled"} title="Every VM's address, user, password and SSH command in one CSV">${downloadIcon()} Export CSV</button>
         <button class="btn" type="button" id="sshDownloadAll"${sshRows.some(r => r.priv) ? "" : " disabled"}
           title="${sshRows.some(r => r.priv) ? "Every private key this tab holds, in one ssh-keys.zip" : "No private key in this tab - generate a pair first"}">${downloadIcon()} Download SSH keys</button>
         <button class="btn" type="button" id="pwToggleAll"${rows.length ? "" : " disabled"}>${anyHidden ? eyeIcon() + " Reveal all" : eyeOffIcon() + " Hide all"}</button>
@@ -9829,9 +10179,9 @@ function renderPasswords() {
       ${sshRows.length ? `<span class="pill">${sshRows.filter(r => r.pub).length} of ${sshRows.length} Linux VM(s) with an SSH key</span>` : ""}
     </div>
 
-    <div class="warn-box">These are the real passwords. They are written into <code>config.json</code> in plain text, so keep it
+    <div class="warn-box">${warnIconSvg()}<span>These are the real passwords. They are written into <code>config.json</code> in plain text, so keep it
     with the rest of the configuration and delete it once <code>Build-Vms.ps1</code> has run. Copy works while a row is masked —
-    a secret never has to be on screen to reach the clipboard.</div>
+    a secret never has to be on screen to reach the clipboard.</span></div>
 
     ${rows.length
       ? `<div class="card"><div class="pw-list">${rows.map(renderPasswordRow).join("")}</div></div>
@@ -9842,8 +10192,8 @@ function renderPasswords() {
 
     ${sshRows.length ? `
       <div class="pw-section"><img src="${iconSrc("keys.svg")}" alt=""> SSH keys</div>
-      ${sshPending ? `<div class="warn-box">${sshPending} private key(s) not downloaded yet. They are held in this tab and nowhere else — not in
-      <code>config.json</code>, not in a save token — so after a reload only the public halves remain.</div>` : ""}
+      ${sshPending ? `<div class="warn-box">${warnIconSvg()}<span>${sshPending} private key(s) not downloaded yet. They are held in this tab and nowhere else — not in
+      <code>config.json</code>, not in a save token — so after a reload only the public halves remain.</span></div>` : ""}
       <div class="card"><div class="pw-list">${sshRows.map(renderSshKeyRow).join("")}</div></div>
       <p class="hint" style="margin-top:14px">Ed25519, one pair per VM. Only the public key goes into <code>config.json</code>.
       Generating a new pair replaces the VM's key; the downloaded file is <code>&lt;vm&gt;_id_ed25519</code> — <code>chmod 600</code> it.</p>` : ""}`;
@@ -10173,7 +10523,7 @@ function renderExport() {
         <button class="btn primary" type="button" onclick="downloadConfig()"><img src="${iconSrcOnAccent("export.svg")}"> Download config.json</button>
       </div>
     </div>
-    <div class="warn-box">Passwords sit in this file as plain JSON. Protect it, and delete it once the build has run.</div>
+    <div class="warn-box">${warnIconSvg()}<span>Passwords sit in this file as plain JSON. Protect it, and delete it once the build has run.</span></div>
     <div class="card json-card"><pre id="jsonPreview" tabindex="0">${highlightJson(json)}</pre></div>`;
 }
 
@@ -10246,6 +10596,7 @@ function renderBlade() {
   else if (state.blade === "azurearc") main.innerHTML = renderAzureArcBlade();
   else if (state.blade === "servers") main.innerHTML = renderServers();
   else if (state.blade === "vhdsets") main.innerHTML = renderVhdSets();
+  else if (state.blade === "licenses") main.innerHTML = renderLicensesBlade();
   else if (state.blade === "review") main.innerHTML = renderReview();
   else if (state.blade === "passwords") main.innerHTML = renderPasswords();
   else if (state.blade === "vmoverview") main.innerHTML = renderVmOverview();
@@ -10261,8 +10612,8 @@ function addAvailableSwitchFromInput() {
     return false;
   }
   const list = state.defaults.availableSwitches || (state.defaults.availableSwitches = []);
-  if (list.some(s => String(s).toLowerCase() === name.toLowerCase())) {
-    toast("vSwitch already in the list", true);
+  if (existingSwitchName(name)) {
+    toast(`Already in the list as ${existingSwitchName(name)}`, true);
     if (input) { input.focus(); input.select(); }
     return false;
   }
@@ -10417,6 +10768,30 @@ document.getElementById("main").addEventListener("click", e => {
     }
     return;
   }
+  const wgAdd = e.target.closest("[data-wg-add]");
+  if (wgAdd) {
+    e.stopPropagation();
+    const s = state.servers.find(x => x._id === wgAdd.getAttribute("data-wg-add"));
+    if (s) {
+      s.wingetApps = wingetRows(s);
+      s.wingetApps.push("");
+      render();
+      const inputs = document.querySelectorAll(`[data-s="${CSS.escape(s._id)}"][data-wg-i]`);
+      if (inputs.length) inputs[inputs.length - 1].focus();
+    }
+    return;
+  }
+  const wgDel = e.target.closest("[data-wg-del]");
+  if (wgDel) {
+    e.stopPropagation();
+    const s = state.servers.find(x => x._id === wgDel.getAttribute("data-wg-del"));
+    if (s) {
+      const idx = Number(wgDel.getAttribute("data-wg-del-i"));
+      s.wingetApps = wingetRows(s).filter((_, i) => i !== idx);
+      render();
+    }
+    return;
+  }
   const pkgAdd = e.target.closest("[data-pkg-add]");
   if (pkgAdd) {
     e.stopPropagation();
@@ -10516,6 +10891,18 @@ document.getElementById("main").addEventListener("click", e => {
     openMemberPicker("azureArc", openArcPicker.getAttribute("data-open-arc-picker"));
     return;
   }
+  const openWl = e.target.closest("[data-open-wl-picker]");
+  if (openWl) {
+    e.stopPropagation();
+    openMemberPicker("license", openWl.getAttribute("data-open-wl-picker"));
+    return;
+  }
+  const wlDetach = e.target.closest("[data-wl-detach]");
+  if (wlDetach) {
+    const s = state.servers.find(x => x._id === wlDetach.getAttribute("data-wl-detach"));
+    if (s) { detachLicense(s); render(); toast(`${serverDisplayName(s)} detached`); }
+    return;
+  }
   const openNetPicker = e.target.closest("[data-open-net-picker]");
   if (openNetPicker) {
     e.stopPropagation();
@@ -10598,6 +10985,17 @@ document.getElementById("main").addEventListener("click", e => {
       const el = document.querySelector(`[data-sid="${sid}"]`);
       if (el) el.scrollIntoView({ behavior: "smooth", block: "start" });
     }, 30);
+    return;
+  }
+  const wlEdition = e.target.closest("[data-wl-edition]");
+  if (wlEdition) {
+    const w = (state.windowsLicenses || []).find(x => x._id === wlEdition.getAttribute("data-wl-edition"));
+    if (w) {
+      w.edition = wlEdition.getAttribute("data-edition");
+      serversForLicense(w).filter(s => !licenseFits(w, s)).forEach(detachLicense);
+    }
+    state.imagePickerOpen = null;
+    render();
     return;
   }
   const imagePickerToggle = e.target.closest("[data-image-picker-toggle]");
@@ -10700,6 +11098,24 @@ document.getElementById("main").addEventListener("click", e => {
     render();
     return;
   }
+  if (e.target.id === "addWindowsLicense" || e.target.closest("#addWindowsLicense")) {
+    const w = createWindowsLicense({});
+    state.windowsLicenses.push(w);
+    state.expanded[w._id] = true;
+    state.nameEdit[`wlkey:${w._id}`] = true;
+    render();
+    return;
+  }
+  const delWl = e.target.closest("[data-del-wl]");
+  if (delWl) {
+    e.stopPropagation();
+    const id = delWl.getAttribute("data-del-wl");
+    const gone = state.windowsLicenses.find(w => w._id === id);
+    if (gone) serversForLicense(gone).forEach(detachLicense);
+    state.windowsLicenses = state.windowsLicenses.filter(w => w._id !== id);
+    render();
+    return;
+  }
   if (e.target.id === "addAzureArcPrincipal" || e.target.closest("#addAzureArcPrincipal")) {
     const a = createAzureArcPrincipal({});
     ensureCatalogStableId(a, "arc");
@@ -10716,6 +11132,16 @@ document.getElementById("main").addEventListener("click", e => {
     render();
     return;
   }
+  const swDefault = e.target.closest("[data-sw-default]");
+  if (swDefault) {
+    e.stopPropagation();
+    const list = state.defaults.availableSwitches || [];
+    const [moved] = list.splice(Number(swDefault.getAttribute("data-sw-default")), 1);
+    list.unshift(moved);
+    render();
+    toast(`${moved} is the default vSwitch`);
+    return;
+  }
   const swDel = e.target.closest("[data-sw-del]");
   if (swDel) {
     e.preventDefault();
@@ -10723,17 +11149,12 @@ document.getElementById("main").addEventListener("click", e => {
     const i = Number(swDel.getAttribute("data-sw-del"));
     const list = state.defaults.availableSwitches || [];
     const removed = list[i];
+    const u = switchUsage(removed);
+    if (u.networks.length || u.vms.length) {
+      toast(`${removed} is in use by ${switchUsageText(u)} - move them to another switch first`, true);
+      return;
+    }
     list.splice(i, 1);
-    const fallback = list[0] || "";
-    state.servers.forEach(s => {
-      if (s.switchName === removed) s.switchName = fallback;
-    });
-    state.networks.forEach(n => {
-      if (n.switchName === removed) {
-        n.switchName = fallback;
-        syncNetworkToAttachedServers(n);
-      }
-    });
     render();
     toast(removed ? ("vSwitch removed · " + removed) : "vSwitch removed");
     return;
@@ -11165,6 +11586,11 @@ document.getElementById("main").addEventListener("click", e => {
     render();
     return;
   }
+  if (e.target.closest("#pwExport")) {
+    const n = exportPasswordsCsv();
+    toast(n ? `vm-passwords.csv downloaded - ${n} VM(s)` : "No VM to export", !n);
+    return;
+  }
   if (e.target.closest("#sshDownloadAll")) {
     const held = state.servers.filter(s => sshPrivateKeys[s._id]);
     if (!held.length) { toast("Generate a key pair first", true); return; }
@@ -11183,6 +11609,19 @@ document.getElementById("main").addEventListener("click", e => {
   }
   if (e.target.id === "copyJson") {
     navigator.clipboard.writeText(JSON.stringify(buildConfig(), null, 2)).then(() => toast("JSON copied"));
+  }
+});
+
+document.getElementById("main").addEventListener("input", e => {
+  if (!e.target || e.target.id !== "newSwitchName") return;
+  const dupe = existingSwitchName(e.target.value);
+  const err = document.getElementById("switchDupe");
+  const add = document.getElementById("addSwitch");
+  e.target.classList.toggle("is-invalid", !!dupe || !(state.defaults.availableSwitches || []).length);
+  if (add) add.disabled = !!dupe;
+  if (err) {
+    err.hidden = !dupe;
+    err.innerHTML = dupe ? `Already in the list as <span class="sam">${esc(dupe)}</span> - Hyper-V switch names ignore case.` : "";
   }
 });
 
@@ -11250,6 +11689,18 @@ document.getElementById("main").addEventListener("input", e => {
     return;
   }
 
+  const wlId = e.target.getAttribute("data-wl");
+  if (wlId) {
+    const w = state.windowsLicenses.find(x => x._id === wlId);
+    if (w && e.target.getAttribute("data-wk") === "productKey") {
+      const v = e.target.value.toUpperCase();
+      w.productKey = v;
+      if (e.target.value !== v) e.target.value = v;
+      e.target.classList.toggle("is-invalid", !!v && !productKeyOk(v));
+      renderNav();
+    }
+    return;
+  }
   const djaId = e.target.getAttribute("data-dja");
   if (djaId) {
     const a = state.domainJoinAccounts.find(x => x._id === djaId);
@@ -11437,6 +11888,17 @@ document.getElementById("main").addEventListener("input", e => {
     }
     return;
   }
+  const wgIdxAttr = e.target.getAttribute("data-wg-i");
+  if (sid && wgIdxAttr !== null) {
+    const sWg = state.servers.find(x => x._id === sid);
+    if (sWg) {
+      sWg.wingetApps = wingetRows(sWg);
+      sWg.wingetApps[Number(wgIdxAttr)] = e.target.value.trim();
+      e.target.classList.toggle("is-invalid", !!e.target.value.trim() && !wingetIdOk(e.target.value));
+      renderNav();
+    }
+    return;
+  }
   const pkgIdxAttr = e.target.getAttribute("data-pkg-i");
   if (sid && pkgIdxAttr !== null) {
     const sPkg = state.servers.find(x => x._id === sid);
@@ -11462,6 +11924,7 @@ document.getElementById("main").addEventListener("input", e => {
   }
   // Both re-render (warning banner / delay fields appear) — the change handler owns them.
   if (k === "nestedVirtualization" || k === "automaticStartEnabled" || k === "automaticStartAction") return;
+  if (k === "hotpatchReady" || k === "wingetEnabled") return;
   if (k === "automaticStartDelay") {
     s.automaticStartDelay = Math.max(0, Math.floor(Number(e.target.value) || 0));
     return;
@@ -11756,6 +12219,8 @@ document.getElementById("main").addEventListener("change", e => {
         return;
       }
       if (k === "nestedVirtualization") { s.nestedVirtualization = nestedVirtRequired(s) || e.target.checked; scheduleRender(); return; }
+      // Both re-render: Hotpatch locks Secure Boot on, WinGet shows its list.
+      if (k === "hotpatchReady" || k === "wingetEnabled") { s[k] = e.target.checked; scheduleRender(); return; }
       if (k === "djDeferred") {
         s.domainJoin = s.domainJoin || { enabled: false, accountId: "", ouPath: "", mode: null };
         s.domainJoin.mode = e.target.checked ? "deferred" : "specialize";
@@ -11889,7 +12354,10 @@ document.addEventListener("click", e => {
 });
 
 
-function psObjectButton(kind, ref) {
+/* The per-object PowerShell button is hidden: every call site gets nothing. The button and
+   its viewer stay - psObjectButtonShown brings it back. */
+function psObjectButton(kind, ref) { return ""; }
+function psObjectButtonShown(kind, ref) {
   return `<button type="button" class="btn icon ghost sm" title="PowerShell for this object" data-ps-kind="${esc(kind)}" data-ps-ref="${esc(ref)}"><img src="${iconSrc("powershell.svg")}" alt="PS"></button>`;
 }
 
@@ -12188,6 +12656,11 @@ function openMemberPicker(mode, targetId) {
     ensureCatalogStableId(a, "arc");
     selected = serversForArcPrincipal(a.id).map(s => s.name);
     title = "Azure Arc · " + azureArcPrincipalTitle(a);
+  } else if (mode === "license") {
+    const w = state.windowsLicenses.find(x => x._id === targetId);
+    if (!w) return;
+    selected = serversForLicense(w).map(s => s.name);
+    title = "Windows licence · " + (w.edition ? licenseTitle(w.edition) : "no edition");
   } else if (mode === "cluster") {
     const c = clusterSettings();
     selected = serversForCluster().map(s => s.name);
@@ -12209,6 +12682,8 @@ function openMemberPicker(mode, targetId) {
     ? "Select virtual machines to attach. A VM can belong to only one network."
     : mode === "cluster"
     ? "Select the virtual machines to add to the host failover cluster."
+    : mode === "license"
+    ? "Select the VMs that get this key. A VM has one licence; VMs built from another image are greyed out."
     : "Select virtual machines to attach. A VM can belong to only one account/principal.";
   document.getElementById("memberPickerFilter").value = "";
   renderMemberPickerList();
@@ -12259,6 +12734,12 @@ function memberPickerVeto(ctx, server) {
   if (ctx.mode === "domainJoin") {
     return imageRefusesDomainJoin(img) ? "realmd and adcli are not packaged for " + (img.label || "this distribution") : "";
   }
+  if (ctx.mode === "license") {
+    const w = state.windowsLicenses.find(x => x._id === ctx.targetId);
+    if (!w || !w.edition) return "Pick the licence's edition first";
+    if (server && server.imageSource === "custom") return "Builds from a custom gold - its edition is unknown";
+    return licenseFits(w, server) ? "" : "Builds from " + (img.label || "another image") + " - not this licence's edition";
+  }
   if (ctx.mode !== "azureArc") return "";
   if (imageRefusesAzureArc(img)) return img.noAzureArcReason || ("Azure Arc has no agent for " + (img.label || "this distribution"));
   const a = state.azureArcPrincipals.find(x => x._id === ctx.targetId);
@@ -12304,6 +12785,16 @@ function applyMemberPicker() {
         } else if (s.azureArc && s.azureArc.principalId === a.id) {
           s.azureArc = { enabled: false, principalId: "" };
         }
+      });
+    }
+  } else if (ctx.mode === "license") {
+    const w = state.windowsLicenses.find(x => x._id === ctx.targetId);
+    if (w) {
+      const selected = new Set(ctx.selected);
+      state.servers.forEach(s => {
+        if (!s.name) return;
+        if (selected.has(s.name)) s.windowsLicense = { licenseId: w.id };
+        else if (s.windowsLicense && s.windowsLicense.licenseId === w.id) detachLicense(s);
       });
     }
   } else if (ctx.mode === "cluster") {
