@@ -698,7 +698,7 @@ az provider register --namespace Microsoft.Compute
 
 </details>
 
-### <picture><source media="(prefers-color-scheme: dark)" srcset=".github/assets/blades/passwords-dark.png"><img src=".github/assets/blades/passwords-light.png" width="20" alt=""></picture> Windows licenses
+### <picture><source media="(prefers-color-scheme: dark)" srcset=".github/assets/blades/licenses-dark.png"><img src=".github/assets/blades/licenses-light.png" width="20" alt=""></picture> Windows licenses
 
 Optional. One product key per Windows edition — Windows Server 2025 Datacenter, Windows 11 Enterprise —
 attached to VMs with the same picker as everywhere else. The key covers Core and Desktop

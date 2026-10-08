@@ -1846,6 +1846,9 @@ const DEFS = {
   "identity.svg": ["ident", '<g fill="@H"><circle cx="9" cy="5.6" r="3.4"/><path d="M2.6 16.4c0-3.6 2.9-5.7 6.4-5.7s6.4 2.1 6.4 5.7z"/></g>'],
   "users.svg": ["ident", '<g fill="@H"><circle cx="6.6" cy="5.8" r="3.2"/><path d="M1 16.4c0-3.4 2.5-5.3 5.6-5.3s5.6 1.9 5.6 5.3z"/><circle cx="13.4" cy="6.4" r="2.3"/><path d="M12 11.6c2.9-.5 5 1.3 5 4.8h-3.6z"/></g>'],
   "key.svg": ["ident", '<g fill="@H"><circle cx="6.2" cy="6.2" r="4.2"/><path d="M8.8 8.8l6.2 6.2-1.6 1.6-1.2-1.2-1.1 1.1-1.3-1.3 1.1-1.1-2-2z"/></g>' + S + '<circle cx="6.2" cy="6.2" r="1.5"/></g>'],
+  /* Passwords: a padlock whose body carries the three masking dots - the key stays with
+     Windows licenses, the pair of keys with SSH. */
+  "password.svg": ["ident", '<g fill="@H"><rect x="2.6" y="7.6" width="12.8" height="8.8" rx="1.6"/></g><g fill="none" stroke="@H" stroke-width="1.8" stroke-linecap="round"><path d="M5.6 7.6V5.4a3.4 3.4 0 0 1 6.8 0v2.2"/></g><g fill="@S"><circle cx="6" cy="12" r="1.05"/><circle cx="9" cy="12" r="1.05"/><circle cx="12" cy="12" r="1.05"/></g>'],
   "keys.svg": ["ident", '<g fill="@H"><circle cx="5.6" cy="6.4" r="3.7"/><path d="M7.9 8.7l5.9 5.9-1.5 1.5-1.1-1.1-1 1-1.2-1.2 1-1-1.9-1.9z"/><circle cx="12.4" cy="4" r="2.4"/></g>' + S + '<circle cx="5.6" cy="6.4" r="1.4"/><circle cx="12.4" cy="4" r=".9"/></g>'],
   "security.svg": ["ident", '<g fill="@H"><path d="M9 1.4l6.4 2.4v5.4c0 3.6-2.8 6.2-6.4 7.4-3.6-1.2-6.4-3.8-6.4-7.4V3.8z"/></g>' + S + '<path d="M6 8.8l2.3 2.3 4-4.3"/></g>'],
   "certificate.svg": ["ident", '<g fill="@H"><rect x="2.4" y="1.4" width="13.2" height="9.6" rx="1.2"/><circle cx="6.2" cy="12.6" r="3.2"/></g>' + S + '<path d="M5 4.4h8M5 7h5.6"/><circle cx="6.2" cy="12.6" r="1.2"/></g>'],
@@ -2150,7 +2153,7 @@ const BLADES = [
   { id: "licenses",   group: "Identity",   label: "Windows licenses",    icon: "key.svg",      desc: "Optional: a product key per Windows edition, installed and activated on the VMs attached to it." },
   { id: "review",     group: "Deploy",     label: "Review and validate", icon: "search.svg",   desc: "Every offline consistency check, plus the lab-wide summary: files, networks, identity, cluster." },
   { id: "vmoverview", group: "Deploy",     label: "VM overview",         icon: "vm-overview.svg", desc: "Every VM's FQDN, address, sign-in and connect commands, with the rest of its settings underneath." },
-  { id: "passwords",  group: "Deploy",     label: "Passwords",           icon: "key.svg",     desc: "The local account passwords this studio generates, in one place — reveal, copy, regenerate." },
+  { id: "passwords",  group: "Deploy",     label: "Passwords",           icon: "password.svg", desc: "The local account passwords this studio generates, in one place — reveal, copy, regenerate." },
   { id: "export",     group: "Deploy",     label: "Export",              icon: "export.svg",   desc: "Download config.json and drop it next to Build-Vms.ps1." }
 ];
 
@@ -6884,7 +6887,7 @@ function renderOverview() {
           <div class="row">
             <button class="btn" type="button" data-goto="review"><img src="${iconSrc("search.svg")}" alt=""> Open Review and validate</button>
             <button class="btn" type="button" data-goto="vmoverview"><img src="${iconSrc("vm-overview.svg")}" alt=""> Open VM overview</button>
-            <button class="btn" type="button" data-goto="passwords"><img src="${iconSrc("key.svg")}" alt=""> Open Passwords</button>
+            <button class="btn" type="button" data-goto="passwords"><img src="${iconSrc("password.svg")}" alt=""> Open Passwords</button>
           </div>
         `)}
 
@@ -10164,7 +10167,7 @@ function renderPasswords() {
 
   return `
     <div class="blade-toolbar">
-      <div class="page-title"><img src="${iconSrc("key.svg")}"> Passwords</div>
+      <div class="page-title"><img src="${iconSrc("password.svg")}"> Passwords</div>
       <div class="row">
         <button class="btn" type="button" id="pwExport"${rows.length ? "" : " disabled"} title="Every VM's address, user, password and SSH command in one CSV">${downloadIcon()} Export CSV</button>
         <button class="btn" type="button" id="sshDownloadAll"${sshRows.some(r => r.priv) ? "" : " disabled"}
